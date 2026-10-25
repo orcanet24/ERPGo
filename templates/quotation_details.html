@@ -1,0 +1,80 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <h3 class="panel-title">{{.Title}}</h3>
+        <div class="btn-group pull-right">
+            <a href="/quotation/print/{{.QuotationID}}" target="_blank" class="btn btn-default btn-sm"><i class="fa fa-print"></i> Imprimir</a>
+            <a href="/quotation/list" class="btn btn-default btn-sm"><i class="fa fa-arrow-left"></i> Volver</a>
+        </div>
+    </div>
+    <div class="panel-body">
+        <div class="row">
+            <div class="col-md-6">
+                <h4>Información General</h4>
+                <table class="table table-bordered">
+                    <tr><th>No.</th><td>{{.QNo}}</td></tr>
+                    <tr><th>Fecha</th><td>{{.Date}}</td></tr>
+                    <tr><th>Vencimiento</th><td>{{.Expire}}</td></tr>
+                    <tr><th>Cliente</th><td>{{.Customer}}</td></tr>
+                    <tr><th>Notas</th><td>{{.Description}}</td></tr>
+                </table>
+            </div>
+            <div class="col-md-6">
+                <h4>Totales</h4>
+                <table class="table table-bordered">
+                    <tr><th>Total Productos</th><td>{{.Currency}} {{money .ItemTotal}}</td></tr>
+                    <tr><th>Total Servicios</th><td>{{.Currency}} {{money .ServTotal}}</td></tr>
+                    <tr><th>Total General</th><td>{{.Currency}} {{money (add .ItemTotal .ServTotal)}}</td></tr>
+                    <tr><th>VAT Items</th><td>{{.Currency}} {{money .ItemVat}}</td></tr>
+                    <tr><th>Estado</th><td>{{if eq .Status 1}}<span class="label label-success">Activa</span>{{else}}<span class="label label-warning">Vencida</span>{{end}}</td></tr>
+                </table>
+            </div>
+        </div>
+
+        {{if .ProductsUsed}}
+        <h4>Productos Cotizados</h4>
+        <table class="table table-bordered table-striped">
+            <thead>
+                <tr><th>Producto</th><th>Modelo</th><th>Cantidad</th><th>Precio</th><th>Total</th><th>Descuento</th><th>VAT</th></tr>
+            </thead>
+            <tbody>
+                {{range .ProductsUsed}}
+                <tr>
+                    <td>{{.product}}</td>
+                    <td>{{.model}}</td>
+                    <td>{{.qty}}</td>
+                    <td>{{.rate}}</td>
+                    <td>{{money .total}}</td>
+                    <td>{{money .discount}}</td>
+                    <td>{{money .vat}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{end}}
+
+        {{if .ServicesUsed}}
+        <h4>Servicios Cotizados</h4>
+        <table class="table table-bordered table-striped">
+            <thead>
+                <tr><th>Servicio</th><th>Cantidad</th><th>Cargo</th><th>VAT</th><th>Total</th></tr>
+            </thead>
+            <tbody>
+                {{range .ServicesUsed}}
+                <tr>
+                    <td>{{.service}}</td>
+                    <td>{{.qty}}</td>
+                    <td>{{.charge}}</td>
+                    <td>{{money .vat}}</td>
+                    <td>{{money .total}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{end}}
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+{{end}}

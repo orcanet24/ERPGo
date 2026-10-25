@@ -1,0 +1,80 @@
+{{define "content"}}
+<div class="row">
+    <div class="col-md-6">
+        <div class="panel panel-bd">
+            <div class="panel-heading">
+                <div class="panel-title"><h4>Mi Perfil</h4></div>
+            </div>
+            <div class="panel-body">
+                <table class="table table-bordered">
+                    <tr><th>Nombre</th><td>{{.First}} {{.Last}}</td></tr>
+                    <tr><th>Usuario</th><td>{{.Username}}</td></tr>
+                    <tr><th>Teléfono</th><td>{{.Phone}}</td></tr>
+                    <tr><th>Nivel</th><td>{{.UserLevel}}</td></tr>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="panel panel-bd">
+            <div class="panel-heading">
+                <div class="panel-title"><h4>Cambiar Contraseña</h4></div>
+            </div>
+            <div class="panel-body">
+                <form id="pwdForm">
+                    <div class="form-group">
+                        <label>Contraseña actual</label>
+                        <input type="password" class="form-control" name="current_password" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Nueva contraseña (mín. 6)</label>
+                        <input type="password" class="form-control" name="new_password" required minlength="6">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Actualizar</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="panel panel-bd">
+            <div class="panel-heading">
+                <div class="panel-title"><h4>Apariencia</h4></div>
+            </div>
+            <div class="panel-body">
+                <div class="appearance-panel" data-appearance>
+                    <span class="appearance-label">Tema</span>
+                    <div class="appearance-choice" data-appearance-choice="theme">
+                        <button type="button" class="appearance-btn" data-appearance-value="light">Claro</button>
+                        <button type="button" class="appearance-btn" data-appearance-value="dark">Oscuro</button>
+                        <button type="button" class="appearance-btn" data-appearance-value="auto">Autom&aacute;tico</button>
+                    </div>
+                    <p class="help-block">El autom&aacute;tico sigue al sistema: si su pantalla est&aacute; en modo oscuro, ERPGo tambi&eacute;n.</p>
+                </div>
+                <div class="appearance-panel" data-appearance>
+                    <span class="appearance-label">Densidad</span>
+                    <div class="appearance-choice" data-appearance-choice="density">
+                        <button type="button" class="appearance-btn" data-appearance-value="comfortable">C&oacute;moda</button>
+                        <button type="button" class="appearance-btn" data-appearance-value="compact">Compacta</button>
+                    </div>
+                    <p class="help-block">La compacta aprieta las filas de las tablas. &Uacute;til si pasa horas mirando listados.</p>
+                </div>
+                <p class="help-block">Se guarda solo, para este usuario en esta empresa.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#pwdForm').on('submit', function (e) {
+        e.preventDefault();
+        $.post('/user/change-password', $(this).serialize(), function (r) {
+            if (r.status == 1) { toastr.success(r.msg); $('#pwdForm')[0].reset(); }
+            else toastr.error(r.error);
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+    });
+});
+</script>
+{{end}}

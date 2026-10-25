@@ -1,0 +1,16 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>ADDON: {{.Code}}</h4></div>
+    </div>
+    <div class="panel-body">
+        {{.Content}}
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+// Addon {{.Code}} loaded
+</script>
+{{end}}

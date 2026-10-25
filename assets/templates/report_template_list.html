@@ -1,0 +1,43 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Informes Personalizados <a class="btn btn-primary btn-sm pull-right" href="/reports/custom/add">+ Nuevo Informe</a></h4></div>
+    </div>
+    <div class="panel-body">
+        <p class="text-muted">Los informes son plantillas JSON: consultan la base de datos (solo lectura, con límites) y se muestran como tablas con totales. Pueden crearse a mano —con el <a href="/ai/catalog">mapa de tablas</a> como ayuda— o pedirle un borrador a la IA desde el diseñador.</p>
+        <table class="table table-striped table-bordered" id="tplTable" width="100%">
+            <thead>
+                <tr><th>ID</th><th>Nombre</th><th>Descripción</th><th>Creado por</th><th>Acciones</th></tr>
+            </thead>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#tplTable').DataTable({
+        processing: true,
+        ajax: { url: '/reports/custom/data', type: 'GET' },
+        columns: [
+            { data: 'id' },
+            { data: 'name' },
+            { data: 'description' },
+            { data: 'created_by' },
+            { data: null, orderable: false, render: function (d) {
+                return '<a class="btn btn-success btn-xs" href="/reports/custom/run/' + d.id + '"><i class="fa fa-bar-chart"></i> Ver</a> ' +
+                       '<a class="btn btn-primary btn-xs" href="/reports/custom/edit/' + d.id + '"><i class="fa fa-edit"></i></a> ' +
+                       '<button class="btn btn-danger btn-xs" onclick="delTpl(' + d.id + ')"><i class="fa fa-trash"></i></button>';
+            }}
+        ]
+    });
+});
+function delTpl(id) {
+    if (!confirm('¿Eliminar este informe?')) return;
+    $.post('/reports/custom/delete/' + id, function (r) {
+        if (r.status === 1) { location.reload(); } else { alert(r.error || 'Error'); }
+    });
+}
+</script>
+{{end}}

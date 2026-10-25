@@ -1,0 +1,174 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Nuevo Ajuste de Inventario
+                <a href="/adjustment/list" class="btn btn-default btn-sm pull-right"><i class="fa fa-arrow-left"></i> Volver</a>
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <form method="POST" action="/adjustment/save" id="adjustmentForm">
+            <div class="row">
+                <div class="col-sm-3">
+                    <div class="form-group">
+                        <label>Fecha</label>
+                        <input type="date" class="form-control" name="adjustment_date" value="{{today}}" required>
+                    </div>
+                </div>
+                <div class="col-sm-3">
+                    <div class="form-group">
+                        <label>Almacén / Bodega</label>
+                        <input type="text" class="form-control" name="warehouse_id" placeholder="Principal">
+                    </div>
+                </div>
+                <div class="col-sm-3">
+                    <div class="form-group">
+                        <label>Referencia</label>
+                        <input type="text" class="form-control" name="reference" placeholder="Ej: Conteo físico">
+                    </div>
+                </div>
+                <div class="col-sm-3">
+                    <div class="form-group">
+                        <label>Nota / Razón General</label>
+                        <input type="text" class="form-control" name="note" placeholder="Ej: Ajuste por conteo">
+                    </div>
+                </div>
+            </div>
+
+            <hr>
+            <h4>Productos a Ajustar</h4>
+
+            <div class="row" style="margin-bottom:15px">
+                <div class="col-sm-12">
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="productSearch" placeholder="Buscar producto por nombre o modelo...">
+                        <span class="input-group-btn">
+                            <button type="button" class="btn btn-primary" id="addSelectedProduct"><i class="fa fa-plus"></i> Agregar</button>
+                        </span>
+                    </div>
+                    <div id="productResults" class="list-group" style="position:absolute;z-index:1000;width:100%;max-height:300px;overflow-y:auto;display:none"></div>
+                </div>
+            </div>
+
+            <table class="table table-bordered table-hover" id="adjustmentTable">
+                <thead>
+                    <tr class="bg-primary">
+                        <th style="width:5%">#</th>
+                        <th style="width:25%">Producto</th>
+                        <th style="width:12%">Tipo</th>
+                        <th style="width:12%">Cantidad</th>
+                        <th style="width:12%">Lote</th>
+                        <th style="width:12%">Vencimiento</th>
+                        <th style="width:12%">Razón</th>
+                        <th style="width:10%">Acción</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td colspan="8" class="text-center text-muted" id="emptyMsg">No hay productos. Busque y agregue productos arriba.</td></tr>
+                </tbody>
+            </table>
+
+            <hr>
+            <div class="text-right">
+                <a href="/adjustment/list" class="btn btn-default">Cancelar</a>
+                <button type="submit" class="btn btn-success btn-lg"><i class="fa fa-save"></i> Registrar Ajuste</button>
+            </div>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+var selectedProducts = [];
+var rowIndex = 0;
+
+// Product search
+$('#productSearch').on('input', function () {
+    var term = $(this).val().trim();
+    if (term.length < 2) { $('#productResults').hide(); return; }
+    $.get('/product/autocomplete', { term: term }, function (data) {
+        var html = '';
+        $.each(data, function (i, p) {
+            var label = p.name + ' (' + p.model + ') - Stock: ' + p.stock;
+            html += '<a href="#" class="list-group-item product-result" data-id="' + p.product_id + '" data-name="' + p.name + '" data-model="' + p.model + '" data-stock="' + p.stock + '">' + label + '</a>';
+        });
+        $('#productResults').html(html).show();
+    });
+});
+
+// Select product from results
+$(document).on('click', '.product-result', function (e) {
+    e.preventDefault();
+    var id = $(this).data('id');
+    if (selectedProducts.indexOf(id) !== -1) {
+        toastr.warning('El producto ya está en la lista');
+        $('#productResults').hide();
+        return;
+    }
+    selectedProducts.push(id);
+    var name = $(this).data('name') + ' (' + $(this).data('model') + ')';
+    var stock = $(this).data('stock');
+    addProductRow(id, name, stock);
+    $('#productResults').hide();
+    $('#productSearch').val('');
+});
+
+// Add product row to table
+function addProductRow(id, name, stock) {
+    rowIndex++;
+    $('#emptyMsg').closest('tr').remove();
+    var html = '<tr data-index="' + rowIndex + '">' +
+        '<td>' + rowIndex + '</td>' +
+        '<td><strong>' + name + '</strong><br><small class="text-muted">Stock actual: ' + stock + '</small></td>' +
+        '<td><select class="form-control input-sm" name="adjust_type">' +
+            '<option value="add">+ Añadir (Entrada)</option>' +
+            '<option value="remove">- Quitar (Salida)</option>' +
+        '</select></td>' +
+        '<td><input type="number" class="form-control input-sm adj-qty" name="quantity" step="0.01" min="0.01" value="1.00" required></td>' +
+        '<td><input type="text" class="form-control input-sm" name="batch_id" placeholder="Opcional"></td>' +
+        '<td><input type="text" class="form-control input-sm" name="expiry_date" placeholder="YYYY-MM-DD"></td>' +
+        '<td><input type="text" class="form-control input-sm" name="reason" placeholder="Razón"></td>' +
+        '<td><input type="hidden" name="product_id" value="' + id + '">' +
+            '<button type="button" class="btn btn-danger btn-xs remove-row"><i class="fa fa-trash"></i></button></td>' +
+        '</tr>';
+    $('#adjustmentTable tbody').append(html);
+}
+
+// Remove row
+$(document).on('click', '.remove-row', function () {
+    var id = $(this).closest('tr').find('input[name="product_id"]').val();
+    selectedProducts = selectedProducts.filter(function (v) { return v !== id; });
+    $(this).closest('tr').remove();
+    if ($('#adjustmentTable tbody tr').length === 0) {
+        $('#adjustmentTable tbody').append('<tr><td colspan="8" class="text-center text-muted" id="emptyMsg">No hay productos. Busque y agregue productos arriba.</td></tr>');
+    }
+});
+
+// Close results when clicking outside
+$(document).on('click', function (e) {
+    if (!$(e.target).closest('#productResults, #productSearch').length) {
+        $('#productResults').hide();
+    }
+});
+
+// Form validation
+$('#adjustmentForm').on('submit', function (e) {
+    if (selectedProducts.length === 0) {
+        e.preventDefault();
+        toastr.error('Debe agregar al menos un producto');
+        return false;
+    }
+    var valid = true;
+    $('.adj-qty').each(function () {
+        if (parseFloat($(this).val()) <= 0) valid = false;
+    });
+    if (!valid) {
+        e.preventDefault();
+        toastr.error('Las cantidades deben ser mayores a cero');
+        return false;
+    }
+});
+</script>
+{{end}}

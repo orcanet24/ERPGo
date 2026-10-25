@@ -1,0 +1,108 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <h3 class="panel-title">{{.Title}}</h3>
+    </div>
+    <div class="panel-body">
+        <form method="POST" action="/return/save" id="retForm">
+            <div class="row">
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>Tipo de Devolución</label>
+                        <select name="return_type" class="form-control" id="retType" onchange="toggleSource()">
+                            <option value="sale" {{if eq .ReturnType "sale"}}selected{{end}}>Venta</option>
+                            <option value="purchase" {{if eq .ReturnType "purchase"}}selected{{end}}>Compra</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="col-md-3" id="saleSource" style="display:none;">
+                    <div class="form-group">
+                        <label>Factura de Venta</label>
+                        <select name="invoice_id" class="form-control">
+                            <option value="">Seleccione...</option>
+                            {{range .Invoices}}
+                            <option value="{{.id}}">{{.id}} - {{.date}} ({{.total}})</option>
+                            {{end}}
+                        </select>
+                    </div>
+                </div>
+                <div class="col-md-3" id="purcSource" style="display:none;">
+                    <div class="form-group">
+                        <label>Factura de Compra</label>
+                        <select name="purchase_id" class="form-control">
+                            <option value="">Seleccione...</option>
+                            {{range .Purchases}}
+                            <option value="{{.id}}">{{.chalan}} - {{.date}} ({{.total}})</option>
+                            {{end}}
+                        </select>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>Fecha de la factura original</label>
+                        <input type="date" name="date_purchase" class="form-control" value="{{today}}">
+                    </div>
+                </div>
+            </div>
+
+            <h4>Productos a Devolver</h4>
+            <table class="table table-bordered" id="retLines">
+                <thead>
+                    <tr>
+                        <th>Producto</th>
+                        <th>Cantidad</th>
+                        <th>Deducción</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+            <button type="button" class="btn btn-info btn-sm" onclick="addRetLine()"><i class="fa fa-plus"></i> Añadir Producto</button>
+
+            <hr>
+            <div class="form-group">
+                <label>Razón / Motivo</label>
+                <textarea name="reason" class="form-control" rows="2" required></textarea>
+            </div>
+            <div class="form-group">
+                <label>Usabilidad</label>
+                <select name="usablity" class="form-control">
+                    <option value="1">Reventa</option>
+                    <option value="2">Dañado</option>
+                    <option value="3">Vencido</option>
+                </select>
+            </div>
+
+            <button type="submit" class="btn btn-primary"><i class="fa fa-save"></i> Registrar Devolución</button>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+const products = [{{range .Products}}{ id: '{{.id}}', name: '{{.name}}', price: {{with .price}}{{.}}{{else}}0{{end}} },{{end}}];
+
+function toggleSource() {
+    const t = $('#retType').val();
+    $('#saleSource').toggle(t==='sale');
+    $('#purcSource').toggle(t==='purchase');
+}
+toggleSource();
+
+function addRetLine() {
+    const tbody = document.querySelector('#retLines tbody');
+    const tr = document.createElement('tr');
+    let opts = '<select name="product_id" class="form-control" required><option value="">Seleccione...</option>';
+    products.forEach(s => { opts += '<option value="'+s.id+'">'+s.name+'</option>'; });
+    opts += '</select>';
+    tr.innerHTML = '<td>'+opts+'</td>' +
+        '<td><input type="number" name="return_qty" value="1" min="1" class="form-control"></td>' +
+        '<td><input type="number" name="deduction" step="0.01" value="0" class="form-control"></td>' +
+        '<td><button type="button" class="btn btn-danger btn-xs" onclick="this.closest(\'tr\').remove()"><i class="fa fa-trash"></i></button></td>';
+    tbody.appendChild(tr);
+}
+
+$(function() { addRetLine(); });
+</script>
+{{end}}

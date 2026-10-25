@@ -1,0 +1,147 @@
+{
+  "meta": {
+    "title": "ERPGo — Manual del Programador",
+    "product": "ERPGo",
+    "tagline": "ERP venezolano en Go: SQLite/MySQL, facturación SENIAT, contabilidad de doble entrada y agentes IA."
+  },
+  "segments": [
+    {
+      "id": "core",
+      "title": "Núcleo y arranque",
+      "tagline": "Del binario al middleware: cómo arranca el servidor y cómo llega una petición hasta el handler.",
+      "summary": "Punto de entrada, configuración, embebido de assets, sesión, autenticación y el registro de rutas que engancha todos los módulos.",
+      "responsibilities": [],
+      "invariants": [],
+      "paths": ["cmd/", "configs/", "tools/", "embed.go", "go.mod", "go.sum", "iniciar.bat", "instalar.bat", "README.md"],
+      "files": [
+        "interfaces/web/server.go",
+        "interfaces/web/session.go",
+        "interfaces/web/handlers.go",
+        "interfaces/web/helpers.go",
+        "interfaces/web/json.go",
+        "interfaces/web/md5compat.go",
+        "interfaces/web/dashboard.go"
+      ]
+    },
+    {
+      "id": "rendering",
+      "title": "Plantillas y assets",
+      "tagline": "Cómo se pinta una página y por qué el binario solo necesita un fichero.",
+      "summary": "Embebido disk-first de templates/static/migrations, conjunto de plantillas cacheado, permisos por vista y caché de estáticos.",
+      "responsibilities": [],
+      "invariants": [],
+      "paths": ["templates/"],
+      "files": [
+        "interfaces/web/render.go",
+        "interfaces/web/cache.go",
+        "interfaces/web/cache_test.go"
+      ]
+    },
+    {
+      "id": "persistence",
+      "title": "Persistencia y migraciones",
+      "tagline": "Un solo juego de .sql que corre en MySQL y en SQLite.",
+      "summary": "Apertura de base de datos, runner de migraciones idempotente, traductor MySQL→SQLite y copia de datos SQLite→MySQL.",
+      "responsibilities": [],
+      "invariants": [],
+      "paths": ["infrastructure/", "migrations/"],
+      "files": [
+        "interfaces/web/dialect.go",
+        "interfaces/web/database_settings.go"
+      ]
+    },
+    {
+      "id": "commerce",
+      "title": "Comercio",
+      "tagline": "Ventas, compras e inventario: el día a día del negocio.",
+      "summary": "Facturas y POS, cotizaciones, devoluciones, productos, clientes, proveedores, ajustes de inventario y reportes.",
+      "responsibilities": [],
+      "invariants": [],
+      "paths": ["interfaces/web/"],
+      "files": []
+    },
+    {
+      "id": "accounting",
+      "title": "Contabilidad",
+      "tagline": "Partida doble: todo movimiento monetario termina en un asiento aprobado.",
+      "summary": "Plan de cuentas, comprobantes, aprobación y reversión de asientos, libro diario y balances.",
+      "responsibilities": [],
+      "invariants": [],
+      "paths": [],
+      "files": [
+        "interfaces/web/accounting.go",
+        "interfaces/web/account.go",
+        "interfaces/web/voucher_extra.go"
+      ]
+    },
+    {
+      "id": "fiscal",
+      "title": "Fiscal venezolana",
+      "tagline": "SENIAT: RIF, series, libros legales, IGTF y kárdex.",
+      "summary": "Validación de RIF, consecutivos fiscales, notas de crédito, sesiones de caja, libros de compras/ventas, retenciones y auditoría encadenada.",
+      "responsibilities": [],
+      "invariants": [],
+      "paths": [],
+      "files": [
+        "interfaces/web/fiscal.go",
+        "interfaces/web/fiscal_settings.go",
+        "interfaces/web/fiscal_test.go",
+        "interfaces/web/creditnote.go",
+        "interfaces/web/cashsession.go",
+        "interfaces/web/legal_books.go",
+        "interfaces/web/kardex.go",
+        "interfaces/web/audit_chain.go",
+        "interfaces/web/audit_igtf.go"
+      ]
+    },
+    {
+      "id": "ai",
+      "title": "Subsistema IA",
+      "tagline": "El modelo propone; Go valida y ejecuta. Siempre.",
+      "summary": "Analista de negocio, proveedores LLM con whitelist compilada, guardian de SQL, agentes, tareas programadas y deshacer.",
+      "responsibilities": [],
+      "invariants": [],
+      "paths": [],
+      "files": [
+        "interfaces/web/ai.go",
+        "interfaces/web/ai_agents.go",
+        "interfaces/web/ai_agents_test.go",
+        "interfaces/web/ai_providers.go",
+        "interfaces/web/ai_providers_tools.go",
+        "interfaces/web/ai_rules.go",
+        "interfaces/web/ai_schema_catalog.go",
+        "interfaces/web/ai_tasks.go",
+        "interfaces/web/ai_tools.go",
+        "interfaces/web/ai_reports.go"
+      ]
+    },
+    {
+      "id": "admin",
+      "title": "Administración",
+      "tagline": "Usuarios, roles, permisos y ajustes de la aplicación.",
+      "summary": "CRUD de usuarios, árbol de roles y permisos, ajustes generales, respaldos y subida de archivos.",
+      "responsibilities": [],
+      "invariants": [],
+      "paths": [],
+      "files": [
+        "interfaces/web/user.go",
+        "interfaces/web/setting.go"
+      ]
+    },
+    {
+      "id": "docs",
+      "title": "Documentación",
+      "tagline": "Lo que el repo dice de sí mismo: planes, bitácoras y marco legal.",
+      "summary": "README, diccionario vivo, bitácoras de migración, planes de producto y guías fiscales.",
+      "responsibilities": [],
+      "invariants": [],
+      "paths": ["doc/"],
+      "files": []
+    }
+  ],
+  "files": {},
+  "funcs": {},
+  "types": {},
+  "rules": [],
+  "tours": []
+}

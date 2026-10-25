@@ -1,0 +1,62 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <h3 class="panel-title">{{.Title}}</h3>
+        <div class="btn-group pull-right">
+            <a href="/reports/exchange-difference" class="btn btn-default btn-sm"><i class="fa fa-refresh"></i> Actualizar</a>
+        </div>
+    </div>
+    <div class="panel-body">
+        <div class="row">
+            <div class="col-md-12">
+                <form method="GET" action="/reports/exchange-difference" class="form-inline">
+                    <div class="form-group">
+                        <label>Desde:</label>
+                        <input type="date" name="from" class="form-control" value="{{.From}}">
+                    </div>
+                    <div class="form-group">
+                        <label>Hasta:</label>
+                        <input type="date" name="to" class="form-control" value="{{.To}}">
+                    </div>
+                    <button type="submit" class="btn btn-primary"><i class="fa fa-search"></i> Consultar</button>
+                </form>
+                <hr>
+                <table class="table table-bordered table-striped">
+                    <thead>
+                        <tr>
+                            <th>Factura</th>
+                            <th>Fecha</th>
+                            <th>Monto Factura</th>
+                            <th>Tasa Factura</th>
+                            <th>Tasa Pago</th>
+                            <th>Diferencial</th>
+                            <th>Ganancia/Pérdida</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Rows}}
+                        <tr>
+                            <td>{{.InvoiceID}}</td>
+                            <td>{{.Date}}</td>
+                            <td>{{printf "%.2f" .MontoFactura}}</td>
+                            <td>{{printf "%.4f" .TasaFactura}}</td>
+                            <td>{{printf "%.4f" .TasaPago}}</td>
+                            <td>{{printf "%.2f" .Diferencia}}</td>
+                            <td><strong>{{printf "%.2f" .Ganancia}}</strong></td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                    <tfoot>
+                        <tr class="bg-warning">
+                            <td colspan="7" class="text-right"><strong>Total Diferencial: {{printf "%.2f" .TotalDiferencia}} {{.Currency}}</strong></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+{{end}}

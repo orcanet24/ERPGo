@@ -1,0 +1,252 @@
+package web
+
+// <MODULO>.go — PLANTILLA del servicio de un módulo.
+//
+// COPIAR A: interfaces/web/<MODULO>.go
+//
+// LA ESTRUCTURA QUE IMPORTA
+//
+// El módulo se parte en dos, y la línea va entre <Inputs> y calcular<MODULO>:
+//
+//   calcular...(in <Inputs>) <Breakdown>   PURO. Sin base, sin reloj, sin Server.
+//   (s *Server) calcular...(ctx, id)       Carga, delega, guarda.
+//
+// Por QUÉ, y no por estética: cada test que levanta MySQL tarda de 30 a 500
+// segundos en este repo; uno puro tarda milisegundos. Los bugs que de verdad
+// duelen en este ERP (merma que no llegaba, aduana dividida por la cantidad
+// pedida y no la recibida, rendimiento aplicado al producto equivocado) son
+// bugs de ARITMÉTICA, y solo se encuentran con pruebas que se ejecutan.
+// Con la base en medio, esos tests habrían costado horas y no se habrían
+// escrito.
+//
+// Ellers reglas que esta plantilla ya respeta:
+//
+//   - El dinero se redondea con round2() antes de escribir. Un float64 crudo en
+//     una columna decimal es el bug 0.3.
+//   - Todo valor que vuelve de la base pasa por valorNumerico() o toF(): el
+//     DECIMAL de MySQL llega como []byte, y saltarse eso deja los totales en
+//     cero sin ningún error visible (bug del motor de informes).
+//   - La empresa se resuelve con dbFor(r), nunca con s.db.
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+)
+
+// ---------------------------------------------------------------------------
+// 1. ENTRADAS Y SALIDAS DEL CÁLCULO
+// ---------------------------------------------------------------------------
+
+// <Modulo>Inputs es TODO lo que el cálculo necesita. Si para calcular hay que
+// abrir otra consulta, es señal de que faltan datos aquí, no de que el cálculo
+// sea "inteligente".
+type <Modulo>Inputs struct {
+	Quantity  float64 // unidades
+	Rate      float64 // precio o costo unitario pactado
+	RateUsed  float64 // tasa realmente usada (columna NORMAL, no GENERATED)
+	MermaPct  float64 // pérdida esperada, 0 si no aplica
+	Reparto   float64 // costo fijo a repartir entre las unidades (aduana, flete)
+	Received  float64 // unidades REALMENTE recibidas. El reparto va por aquí,
+	// no por las pedidas (bug 0.2).
+}
+
+// <Modulo>Breakdown es el desglose. Un desglose sin trazabilidad no se puede
+// reproducir, y un costo que no se puede reproducir es una estimación.
+type <Modulo>Breakdown struct {
+	Total     float64
+	Unit      float64
+	Trace     []ModuloTrace
+}
+
+// ModuloTrace es UN renglón de trazabilidad: qué se calculó, con qué regla y
+// con qué cantidad. Sin esto, un costo no es defendible ante una auditoría.
+type ModuloTrace struct {
+	Component string
+	Regla     string
+	Cantidad  float64
+	Tasa      float64
+}
+
+// ---------------------------------------------------------------------------
+// 2. EL CÁLCULO PURO
+// ---------------------------------------------------------------------------
+
+// calcular<Modulo> es la función que se prueba sin base de datos.
+func calcular<Modulo>(in <Modulo>Inputs) <Modulo>Breakdown {
+	var out <Modulo>Breakdown
+	if in.Quantity <= 0 {
+		return out
+	}
+
+	// --- Regla del módulo. Aquí dentro solo aritmética. ---
+
+	// LA REGLA DEL DENOMINADOR, y es la más fácil de invertir sin querer.
+	//
+	// Todo reparto por unidades va sobre lo RECIBIDO, no sobre lo pedido.
+	// 100 unidades pedidas y 80 recibidas significan que 20 no se compraron:
+	// el costo de aduana de las 100 se reparte entre las 80 que sí entraron,
+	// y el costo por unidad SUBE. Repartir por las pedidas baja el costo de
+	// un producto que no existe (bug 0.2 del módulo de costos).
+	//
+	// Si Received viene en cero (no hay recepción en este tipo de operación),
+	// se reparte por la cantidad pedida, que es lo único que hay.
+	cantidad := in.Quantity
+	denominador := "pedida"
+	if in.Received > 0 {
+		cantidad = in.Received
+		denominador = "recibida"
+	}
+
+	base := in.Rate * cantidad
+	if in.Reparto > 0 {
+		base += in.Reparto / cantidad
+		out.Trace = append(out.Trace, ModuloTrace{
+			Component: "reparto",
+			Regla: fmt.Sprintf("reparto %.2f entre %.0f unidades %s",
+				in.Reparto, cantidad, denominador),
+			Cantidad: cantidad,
+		})
+	}
+
+	// La merma se aplica SOLO a los componentes que la llevan, y solo si el
+	// campo existe y se puebla. Aplicarla "a ver qué pasa" fue el bug 0.1:
+	// se escribía en un campo que nunca se calculaba.
+	if in.MermaPct > 0 {
+		base += base * in.MermaPct
+	}
+
+	out.Trace = append(out.Trace, ModuloTrace{
+		Component: "base",
+		Regla:     fmt.Sprintf("rate x qty %s, merma %.2f%%", denominador, in.MermaPct*100),
+		Cantidad:  cantidad,
+		Tasa:      in.Rate,
+	})
+
+	// El total se redondea UNA vez, al final. Redondear cada paso acumula error.
+	out.Total = round2(base)
+	out.Unit = round2(out.Total / cantidad)
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// 3. CAPA DE DATOS
+// ---------------------------------------------------------------------------
+
+// cargar<Modulo>Inputs lee de la base lo que el cálculo puro necesita.
+//
+// db SIEMPRE como argumento: quien llama ya sabe de qué empresa es la
+// petición. Pasarlo hace imposible que este helper escriba en la base de otra
+// empresa (ver dbFor en tenant_request.go).
+func cargar<Modulo>Inputs(ctx context.Context, db *sql.DB, id int) (<Modulo>Inputs, error) {
+	var in <Modulo>Inputs
+	err := db.QueryRowContext(ctx, `
+		SELECT quantity, rate_used, COALESCE(merma_pct, 0)
+		FROM <MODULO>_main
+		WHERE id = ?`, id).
+		Scan(&in.Quantity, &in.Rate, &in.MermaPct)
+	if err != nil {
+		return in, fmt.Errorf("leer <MODULO> %d: %w", id, err)
+	}
+	return in, nil
+}
+
+// calcular<Modulo>DeProducto carga, calcula y devuelve. Delega, no decide.
+func (s *Server) calcular<Modulo>DeProducto(ctx context.Context, db *sql.DB, id int) (<Modulo>Breakdown, error) {
+	in, err := cargar<Modulo>Inputs(ctx, db, id)
+	if err != nil {
+		return <Modulo>Breakdown{}, err
+	}
+	return calcular<Modulo>(in), nil
+}
+
+// guardar<Modulo> escribe el resultado con la tasa YA congelada.
+func guardar<Modulo>(db *sql.DB, id int, out <Modulo>Breakdown) error {
+	_, err := db.Exec(`
+		UPDATE <MODULO>_main
+		SET amount = ?, rate_used = rate_used
+		WHERE id = ?`, out.Total, id)
+	if err != nil {
+		return fmt.Errorf("guardar <MODULO> %d: %w", id, err)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// 4. LISTADOS
+// ---------------------------------------------------------------------------
+
+// listar<Modulo> devuelve las filas de un período.
+//
+// OJO con el Scan de una columna DECIMAL. MySQL devuelve DECIMAL como []byte
+// para no perder precisión, así que escanear en float64 directamente funciona
+// con el driver pero no es lo que llega; y si se escanea en []byte y se suma
+// directo, el total se queda en cero sin ningún error visible (el bug del
+// motor de informes). El patrón seguro: escanear en `any` y pasar por
+// valorNumerico(), que devuelve un *float64 y nil si no es número.
+//
+// OJO también con acumular por dos claves: el total se acumula por UNA sola
+// clave. Acumular por el alias del SELECT y por la clave declarada duplica la
+// columna cuando coinciden (lo normal) y dobla el total sin avisar: un total
+// que cuadra al doble es peor que uno que no cuadra, porque parece un dato
+// bueno.
+func (s *Server) listar<Modulo>(db *sql.DB, periodo string) ([]map[string]interface{}, float64, error) {
+	rows, err := db.Query(`
+		SELECT id, code, description, amount
+		FROM <MODULO>_main
+		WHERE period = ?
+		ORDER BY id`, periodo)
+	if err != nil {
+		return nil, 0, fmt.Errorf("listar <MODULO>: %w", err)
+	}
+	defer rows.Close()
+
+	var out []map[string]interface{}
+	var total float64
+	for rows.Next() {
+		var id int
+		var code, desc string
+		var amountCrudo any
+		if err := rows.Scan(&id, &code, &desc, &amountCrudo); err != nil {
+			return nil, 0, fmt.Errorf("leer fila de <MODULO>: %w", err)
+		}
+		// nil si la columna no trae un número: se trata como 0, no como NaN.
+		if f := valorNumerico(amountCrudo); f != nil {
+			total += *f
+		}
+		out = append(out, map[string]interface{}{
+			"ID": id, "Code": code, "Description": desc, "Amount": amountCrudo,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("recorrer <MODULO>: %w", err)
+	}
+	// UN redondeo, al final.
+	return out, round2(total), nil
+}
+
+// ---------------------------------------------------------------------------
+// 5. VALIDACIÓN
+// ---------------------------------------------------------------------------
+
+// validar<Modulo> se llama ANTES de escribir. Un módulo sin validación de
+// entrada devuelve en la base lo que el formulario mande.
+func validar<Modulo>(code, descripcion string, cantidad, monto float64) error {
+	if strings.TrimSpace(code) == "" {
+		return fmt.Errorf("el código es obligatorio")
+	}
+	if len(code) > 50 {
+		return fmt.Errorf("el código no puede pasar de 50 caracteres")
+	}
+	if strings.TrimSpace(descripcion) == "" {
+		return fmt.Errorf("la descripción es obligatoria")
+	}
+	if cantidad < 0 {
+		return fmt.Errorf("la cantidad no puede ser negativa")
+	}
+	if monto < 0 {
+		return fmt.Errorf("el monto no puede ser negativo")
+	}
+	return nil
+}

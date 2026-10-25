@@ -1,0 +1,279 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <h3 class="panel-title">Inventario cíclico</h3>
+        <div class="btn-group pull-right">
+            <a href="/inventory" class="btn btn-default btn-sm"><i class="fa fa-arrow-left"></i> Inventario</a>
+        </div>
+    </div>
+    <div class="panel-body">
+        <div class="row">
+            <div class="col-md-5">
+                <div class="panel panel-bd">
+                    <div class="panel-heading"><h4 class="panel-title">Abrir un conteo</h4></div>
+                    <div class="panel-body">
+                        <form id="formAbrir">
+                            <div class="form-group">
+                                <label>Alcance</label>
+                                <select name="scope" class="form-control">
+                                    <option value="full">Todos los productos activos</option>
+                                    <option value="abc">Clasificación ABC</option>
+                                    <option value="category">Una categoría</option>
+                                    <option value="supplier">Los productos de un proveedor</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="grupoValor" style="display:none">
+                                <label>Valor del alcance</label>
+                                <input type="text" name="scope_value" class="form-control" placeholder="ID de categoría, ID de proveedor o A/B/C">
+                            </div>
+                            <div class="form-group">
+                                <label>Nota</label>
+                                <input type="text" name="note" class="form-control" placeholder="Turno de la tarde, carnicería, etc.">
+                            </div>
+                            <button type="submit" class="btn btn-success">
+                                <i class="fa fa-folder-open"></i> Abrir conteo
+                            </button>
+                        </form>
+                        <p class="help-block">
+                            Al abrir se copia la cantidad que dice el sistema. No se vuelve
+                            a leer al cerrar: si se leyera, el conteo compararía el sistema
+                            consigo mismo después de que alguien escribiera en él, y siempre
+                            daría cero.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-7">
+                <div class="panel panel-bd">
+                    <div class="panel-heading"><h4 class="panel-title">Conteos</h4></div>
+                    <div class="panel-body">
+                        <table class="table table-bordered table-striped" id="tablaConteos">
+                            <thead>
+                                <tr>
+                                    <th>Código</th>
+                                    <th>Alcance</th>
+                                    <th>Estado</th>
+                                    <th>Líneas</th>
+                                    <th>Abierto</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="panelConteo" style="display:none">
+            <hr>
+            <div class="row">
+                <div class="col-md-2 col-sm-6">
+                    <div class="tile tile-primary">
+                        <div class="tile-body">
+                            <div class="tile-title">Líneas</div>
+                            <div class="tile-text" id="resLineas">0</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2 col-sm-6">
+                    <div class="tile tile-info">
+                        <div class="tile-body">
+                            <div class="tile-title">Contadas</div>
+                            <div class="tile-text" id="resContadas">0</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2 col-sm-6">
+                    <div class="tile tile-success">
+                        <div class="tile-body">
+                            <div class="tile-title">Exactitud</div>
+                            <div class="tile-text" id="resExactitud">0%</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-sm-6">
+                    <div class="tile tile-danger">
+                        <div class="tile-body">
+                            <div class="tile-title">Valor del descuadre</div>
+                            <div class="tile-text" id="resValor">0,00</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-sm-12">
+                    <div class="panel panel-bd">
+                        <div class="panel-body">
+                            <button class="btn btn-danger btn-sm" id="btnCerrar">
+                                <i class="fa fa-check"></i> Cerrar y ajustar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <table class="table table-bordered table-striped" id="tablaLineas">
+                <thead>
+                    <tr>
+                        <th>Producto</th>
+                        <th>Lote</th>
+                        <th>Caduca</th>
+                        <th>Sistema</th>
+                        <th>Contado</th>
+                        <th>Diferencia</th>
+                        <th>Valor</th>
+                        <th></th>
+                    </tr>
+                </thead>
+            </table>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+function money(v) {
+    return (v || 0).toLocaleString('es-VE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+var conteoActual = 0;
+var tablaConteos = null;
+var tablaLineas = null;
+
+function cargarConteos() {
+    fetch('/inventory/cycle-count/data')
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+            if (tablaConteos) { tablaConteos.destroy(); }
+            tablaConteos = $('#tablaConteos').DataTable({
+                data: j.data,
+                columns: [
+                    {data: 'Codigo'},
+                    {data: 'Ambito', render: function (v, t, f) { return v + ' ' + f.ValorAmbito; }},
+                    {data: 'Estado'},
+                    {data: 'Lineas'},
+                    {data: 'IniciadoPor'},
+                    {
+                        data: 'id',
+                        render: function (v) {
+                            return '<button class="btn btn-xs btn-default" onclick="abrirConteo(' + v + ')">Abrir</button>';
+                        }
+                    }
+                ]
+            });
+        });
+}
+
+function abrirConteo(id) {
+    conteoActual = id;
+    fetch('/inventory/cycle-count/data?id=' + id)
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+            var res = j.resumen;
+            document.getElementById('resLineas').innerText = res.lineas;
+            document.getElementById('resContadas').innerText = res.contadas;
+            document.getElementById('resExactitud').innerText = res.exactitud.toFixed(1) + '%';
+            document.getElementById('resValor').innerText = money(res.valor_descuadre);
+            document.getElementById('panelConteo').style.display = '';
+            if (tablaLineas) { tablaLineas.destroy(); }
+            tablaLineas = $('#tablaLineas').DataTable({
+                data: j.lineas,
+                columns: [
+                    {data: 'product_name'},
+                    {data: 'lot_code', render: function (v) { return v || '&mdash;'; }},
+                    {data: 'expiry_date', render: function (v) { return v || '&mdash;'; }},
+                    {data: 'esperado', render: money},
+                    {
+                        data: 'contado',
+                        render: function (v) {
+                            return v
+                                ? money(v)
+                                : '<input type="number" step="0.001" class="form-control input-sm" data-linea="' +
+                                  '' + '" placeholder="contado">';
+                        }
+                    },
+                    {
+                        data: 'variance',
+                        render: function (v) {
+                            if (v === null || v === undefined) { return '&mdash;'; }
+                            if (v === 0) { return '<span class="label label-success">cuadra</span>'; }
+                            var clase = v > 0 ? 'label-success' : 'label-danger';
+                            var signo = v > 0 ? 'sobran ' : 'faltan ';
+                            return '<span class="label ' + clase + '">' + signo + money(Math.abs(v)) + '</span>';
+                        }
+                    },
+                    {data: 'variance_valor', render: money},
+                    {
+                        data: 'linea_id',
+                        render: function (v, t, f) {
+                            if (f.tiene_conteo) { return ''; }
+                            return '<button class="btn btn-xs btn-primary" onclick="anotar(' +
+                                conteoActual + ',' + v + ')">Anotar</button>';
+                        }
+                    }
+                ]
+            });
+        });
+}
+
+function anotar(conteo, linea) {
+    var fila = $('#tablaLineas tbody tr').filter(function () {
+        return $(this).find('button[onclick*=",' + linea + ',"]').length > 0;
+    });
+    var valor = fila.find('input').val();
+    if (valor === undefined || valor === '') {
+        alert('Escriba la cantidad contada');
+        return;
+    }
+    fetch('/inventory/cycle-count/count', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'cycle_id=' + conteo + '&line_id=' + linea + '&quantity=' + valor
+    }).then(function (r) { return r.json(); })
+      .then(function (j) {
+          if (j.msg_error) { alert(j.msg_error); return; }
+          abrirConteo(conteo);
+          cargarConteos();
+      });
+}
+
+$(function () {
+    cargarConteos();
+
+    $('select[name=scope]').on('change', function () {
+        var v = $(this).val();
+        $('#grupoValor').toggle(v === 'category' || v === 'supplier' || v === 'abc');
+    });
+
+    $('#formAbrir').on('submit', function (e) {
+        e.preventDefault();
+        fetch('/inventory/cycle-count/open', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: $(this).serialize()
+        }).then(function (r) { return r.json(); })
+          .then(function (j) {
+              if (j.msg_error) { alert(j.msg_error); return; }
+              cargarConteos();
+              abrirConteo(j.id);
+          });
+    });
+
+    $('#btnCerrar').on('click', function () {
+        var motivo = prompt('¿Por qué se ajusta? (merma, error de entrada, robo, ajuste)');
+        if (motivo === null) { return; }
+        fetch('/inventory/cycle-count/close', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'cycle_id=' + conteoActual + '&reason=' + encodeURIComponent(motivo)
+        }).then(function (r) { return r.json(); })
+          .then(function (j) {
+              if (j.msg_error) { alert(j.msg_error); return; }
+              alert(j.msg + '\nAsiento: ' + j.asiento + '\nLíneas ajustadas: ' + j.lineas);
+              cargarConteos();
+              abrirConteo(conteoActual);
+          });
+    });
+});
+</script>
+{{end}}

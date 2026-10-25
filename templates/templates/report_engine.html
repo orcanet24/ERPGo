@@ -1,0 +1,419 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Mis Informes
+                <small class="text-muted">un informe se define una vez y se vuelve a consultar cambiando los filtros</small>
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <div class="row">
+            <div class="col-md-3">
+                <div class="panel panel-default">
+                    <div class="panel-heading"><div class="panel-title"><h5>Informes disponibles</h5></div></div>
+                    <div class="panel-body">
+                        <div id="listInfo">Cargando...</div>
+                    </div>
+                </div>
+                <a href="/reports/custom/add" class="btn btn-default btn-block">
+                    <i class="fa fa-plus"></i> Crear un informe nuevo
+                </a>
+            </div>
+
+            <div class="col-md-9">
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <div class="panel-title"><h5 id="reportTitle">Seleccione un informe</h5></div>
+                    </div>
+                    <div class="panel-body">
+                        <form id="paramForm" class="form-inline" style="margin-bottom:12px"></form>
+                        <div id="runButtons" style="display:none">
+                            <button type="button" id="btnRun" class="btn btn-primary btn-sm"><i class="fa fa-play"></i> Ejecutar</button>
+                            <button type="button" id="btnExport" class="btn btn-success btn-sm"><i class="fa fa-download"></i> Exportar CSV</button>
+                            <button type="button" class="btn btn-info btn-sm" id="btnGuide"><i class="fa fa-book"></i> Guía</button>
+                        </div>
+                        <div id="chartWrap" style="display:none;margin-bottom:14px">
+                            <canvas id="reportChart" height="100"></canvas>
+                        </div>
+                        <div id="result"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Guía de creación de informes -->
+<div class="modal fade" id="reportGuideModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title"><i class="fa fa-book"></i> Guía para crear informes personalizados</h4>
+            </div>
+            <div class="modal-body" style="max-height:520px;overflow:auto">
+                <h5>1. Estructura básica</h5>
+<pre style="font-size:12px">{
+  "title": "Ventas por cliente",
+  "sql": "SELECT c.customer_name AS cliente, SUM(i.total_amount) AS total FROM invoice i JOIN customer_information c ON c.customer_id = i.customer_id GROUP BY c.customer_name",
+  "columns": [
+    {"key": "cliente", "label": "Cliente"},
+    {"key": "total", "label": "Total"}
+  ],
+  "totals": ["total"],
+  "params": [
+    {"name":"desde","label":"Desde","type":"date","required":true},
+    {"name":"hasta","label":"Hasta","type":"date","required":true}
+  ]
+}</pre>
+
+                <h5>2. Con gráfico</h5>
+                <p>Agregue un bloque <code>"chart"</code> al JSON:</p>
+<pre style="font-size:12px">{
+  "title": "Ventas por mes",
+  "sql": "SELECT DATE_FORMAT(i.date,'%Y-%m') AS mes, SUM(i.total_amount) AS total FROM invoice i GROUP BY mes ORDER BY mes",
+  "columns": [
+    {"key": "mes", "label": "Mes"},
+    {"key": "total", "label": "Total"}
+  ],
+  "totals": ["total"],
+  "chart": {
+    "type": "line",
+    "x_key": "mes",
+    "y_key": "total",
+    "y_label": "Ventas (Bs)",
+    "title": "Ventas por mes"
+  }
+}</pre>
+
+                <h5>3. Tipos de gráfico: <code>line</code>, <code>bar</code>, <code>pie</code>, <code>doughnut</code></h5>
+
+                <h5>4. Reglas de seguridad</h5>
+                <ul>
+                    <li><b>Solo SELECT</b> — El sistema bloquea cualquier instrucción de escritura, por prompt o por inyección.</li>
+                    <li><b>Tablas fiscales</b> (<code>acc_transaction</code>, <code>acc_vaucher</code>, <code>audit_log</code>) son de solo lectura para informes.</li>
+                    <li><b>Datos de alto perfil</b> — los informes que tocan costos, márgenes o sueldos se registran en auditoría; el administrador puede restringirlos.</li>
+                    <li><b>Informes fiscales</b> (retenciones IVA/ISLR, IGTF) no pueden ser alterados ni por humanos ni por IA.</li>
+                </ul>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Cerrar</button>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    var currentId = null;
+    var currentRoute = null;
+    var reportChart = null;
+
+    $('#btnGuide').on('click', function () { $('#reportGuideModal').modal('show'); });
+
+    // Un informe guardado por la pantalla antigua usa /reports/custom/data,
+    // mientras que el motor de ejecución corre por /reports/engine/*. Se
+    // cargan ambos formatos para no hacer que una plantilla válida desaparezca
+    // según la pantalla desde la que se creó.
+    $.when(
+        $.getJSON('/reports/custom/data'),
+        $.getJSON('/reports/engine/templates')
+    ).done(function (customResult, engineResult) {
+        var lista = [];
+        var vistos = {};
+        var custom = customResult[0] || [];
+        var engine = engineResult[0] || [];
+        // Engine es la vía moderna cuando la definición pasa su validador. El
+        // endpoint clásico sigue aportando plantillas antiguas que no tenían
+        // todos los campos tipados. Ambas fuentes comparten la misma tabla, así
+        // que se deduplican por id para no mostrar el mismo informe dos veces.
+        $.each(engine, function (_, t) {
+            vistos[String(t.id)] = true;
+            lista.push({ id: t.id, name: t.name || t.title || 'Informe', route: 'engine' });
+        });
+        $.each(custom, function (_, t) {
+            if (vistos[String(t.id)]) return;
+            lista.push({ id: t.id, name: t.name || t.title || 'Informe', route: 'custom' });
+        });
+
+        if (!lista.length) {
+            $('#listInfo').html('<p class="text-muted">Todavía no hay informes definidos.</p>');
+            return;
+        }
+        var html = '<ul class="list-unstyled" style="margin-bottom:0">';
+        $.each(lista, function (_, t) {
+            var escapedName = $('<div>').text(t.name).html();
+            html += '<li style="padding:4px 0"><a href="#" class="pick" data-id="' + encodeURIComponent(t.id) +
+                    '" data-route="' + t.route + '">' + escapedName + '</a></li>';
+        });
+        html += '</ul>';
+        $('#listInfo').html(html);
+
+        $('#listInfo').on('click', '.pick', function (e) {
+            e.preventDefault();
+            cargarPlantilla($(this).data('id'), $(this).data('route'));
+        });
+        cargarPlantilla(lista[0].id, lista[0].route);
+    }).fail(function () {
+        $('#listInfo').html('<div class="alert alert-danger">No se pudieron cargar los informes. Recargue la página o vuelva a intentarlo.</div>');
+        toastr.error('No se pudo cargar la lista de informes');
+    });
+
+    function cargarPlantilla(id, route) {
+        currentId = id;
+        currentRoute = route || 'engine';
+        var paramsURL = currentRoute === 'custom'
+            ? '/reports/custom/definition/' + encodeURIComponent(id)
+            : '/reports/engine/params/' + encodeURIComponent(id);
+        $('#result').html('');
+        $('#paramForm').html('');
+        $('#runButtons').hide();
+        $('#chartWrap').hide();
+        if (reportChart) { reportChart.destroy(); reportChart = null; }
+
+        $.get(paramsURL, function (r) {
+            $('#reportTitle').text(r.title || 'Informe');
+        if (!r.params || !r.params.length) {
+            $('#paramForm').html('<span class="text-muted">Este informe no necesita filtros.</span>');
+            $('#runButtons').show();
+            ejecutar();
+            return;
+        }
+            var html = '';
+            $.each(r.params, function (_, p) {
+                var safeName = String(p.name || '');
+                if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(safeName)) {
+                    throw new Error('Parámetro de informe inválido');
+                }
+                var idc = 'p_' + safeName;
+                var req = p.required ? ' required' : '';
+                if (p.type === 'enum' && p.options && p.options.length) {
+                    var enumLabel = $('<span>').text(p.label || p.name).html();
+                    html += '<div class="form-group" style="margin-right:10px"><label>' + enumLabel + '</label>' +
+                            '<select class="form-control input-sm" id="' + idc + '" name="' + idc + '">';
+                    if (!p.required) html += '<option value="">(todos)</option>';
+                    $.each(p.options, function (_, o) {
+                        var escapedOption = $('<span>').text(o).html();
+                        var selected = o === p.default ? ' selected' : '';
+                        html += '<option value="' + escapedOption + '"' + selected + '>' + escapedOption + '</option>';
+                    });
+                    html += '</select></div>';
+                } else {
+                    var tipo = p.type === 'date' ? 'date' : (p.type === 'number' ? 'number' : 'text');
+                    var inputLabel = $('<span>').text(p.label || p.name).html();
+                    var defaultValue = $('<span>').text(p.default || '').html();
+                    html += '<div class="form-group" style="margin-right:10px"><label>' + inputLabel + '</label>' +
+                            '<input type="' + tipo + '" step="any" class="form-control input-sm" id="' + idc +
+                            '" name="' + idc + '" value="' + defaultValue + '"' + req + '></div>';
+                }
+            });
+            $('#paramForm').html(html);
+            $('#runButtons').show();
+            ejecutar();
+        }).fail(function (xhr) {
+            $('#reportTitle').text('No se pudo abrir el informe');
+            $('#result').html('<div class="alert alert-danger"></div>');
+            $('#result .alert').text((xhr.responseJSON && xhr.responseJSON.error) || 'No se pudo leer la plantilla. Recargue e inténtelo de nuevo.');
+            toastr.error('No se pudo leer la plantilla');
+        });
+    }
+
+    function ejecutar() {
+        if (!currentId || !currentRoute) return;
+        $('#btnRun').prop('disabled', true);
+        $('#result').html('<div class="text-center"><i class="fa fa-spinner fa-spin"></i> Ejecutando...</div>');
+        $('#chartWrap').hide();
+        if (reportChart) { reportChart.destroy(); reportChart = null; }
+        var runURL = currentRoute === 'custom'
+            ? '/reports/custom/engine-run/' + encodeURIComponent(currentId)
+            : '/reports/engine/run/' + encodeURIComponent(currentId);
+        $.post(runURL, $('#paramForm').serialize())
+            .done(function (r) { pintar(r); })
+            .fail(function (x) {
+                var message = (x.responseJSON && x.responseJSON.error) || 'Error al ejecutar';
+                $('#result').html('<div class="alert alert-danger"></div>');
+                $('#result .alert').text(message);
+            })
+            .always(function () { $('#btnRun').prop('disabled', false); });
+    }
+
+    function pintar(r) {
+        if (r.warnings && r.warnings.length) {
+            var warning = $('<div class="alert alert-warning" role="status"></div>').text(r.warnings.join(' · '));
+            $('#result').append(warning);
+        }
+        if (!r.rows || !r.rows.length) {
+            $('#result').html('<div class="alert alert-info">El informe no devolvió filas.</div>');
+            if (r.chart_data && r.chart_data.labels && r.chart_data.labels.length) {
+                renderChart(r.chart_data);
+            } else {
+                $('#chartWrap').hide();
+            }
+            return;
+        }
+        function text(value) {
+            return $('<span>').text(value === null || value === undefined ? '' : String(value)).html();
+        }
+        var html = '';
+        if (r.truncated) {
+            html += '<div class="alert alert-warning"><i class="fa fa-exclamation-triangle"></i> ' +
+                    'Se muestran las primeras ' + text(r.row_count) + ' filas (tope del informe: ' + text(r.max_rows) + '). ' +
+                    'Los totales de abajo NO cubren el período completo.</div>';
+        }
+        html += '<div class="table-responsive"><table class="table table-striped table-bordered table-condensed">' +
+                '<thead><tr>';
+        $.each(r.headers, function (_, h) { html += '<th>' + text(h) + '</th>'; });
+        html += '</tr></thead><tbody>';
+        $.each(r.rows, function (_, fila) {
+            html += '<tr>';
+            $.each(r.keys, function (_, k) {
+                html += '<td>' + text(fila[k]) + '</td>';
+            });
+            html += '</tr>';
+        });
+        html += '</tbody>';
+
+        var claves = Object.keys(r.totals || {});
+        if (claves.length) {
+            html += '<tfoot><tr>';
+            $.each(r.headers, function (i) {
+                var k = r.keys[i];
+                if (k && r.totals[k] !== undefined) html += '<th class="text-right">' + text(r.totals[k]) + '</th>';
+                else html += '<th>' + (i === 0 ? 'TOTALES' : '') + '</th>';
+            });
+            html += '</tr></tfoot>';
+        }
+        html += '</table></div>';
+        html += '<small class="text-muted">' + text(r.row_count) + ' fila(s) · motor: ' + text(r.backend) + '</small>';
+        $('#result').html(html);
+
+        // Graficar si hay chart_data
+        if (r.chart_data && r.chart_data.labels && r.chart_data.labels.length) {
+            renderChart(r.chart_data);
+        } else {
+            $('#chartWrap').hide();
+        }
+    }
+
+    function renderChart(data) {
+        if (reportChart) { reportChart.destroy(); reportChart = null; }
+        $('#chartWrap').show();
+        var ctx = document.getElementById('reportChart').getContext('2d');
+
+        function tone(name) {
+            var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+            return v || '#384049';
+        }
+        var series = ['--erp-series-1', '--erp-series-2', '--erp-series-3', '--erp-series-4',
+                      '--erp-series-5', '--erp-series-6', '--erp-series-7', '--erp-series-8'];
+
+        // La paleta de las tartas SALE DEL TEMA, no de una lista escrita aquí.
+        // La lista anterior empezaba por '#384049' y '#7a848d' —dos grises—, así
+        // que las dos primeras porciones de cada tarta salían grises y el resto
+        // de colores sueltos que no eran los del sistema; y en modo oscuro esos
+        // grises quedaban casi invisibles sobre el fondo. Leyendo las variables
+        // del tema, cada porción usa el mismo color que la serie equivalente del
+        // resto del ERP, y cambia solo al cambiar de tema.
+        var palette = [];
+        for (var si = 0; si < series.length; si++) {
+            var sc = tone(series[si]);
+            if (sc) { palette.push(sc); }
+        }
+        if (!palette.length) { palette = ['#1a4f68', '#3f8f7d', '#b3801f', '#7d6a99', '#b0413e', '#2d7dd2', '#c2683f', '#4f8a45']; }
+        var datasets = [];
+        $.each(data.datasets, function (i, ds) {
+            var c = tone(series[i % series.length]) || palette[i % palette.length];
+            var isPie = data.type === 'pie' || data.type === 'doughnut';
+            if (isPie) {
+                var pieColors = [];
+                for (var j = 0; j < data.labels.length; j++) {
+                    pieColors.push(palette[j % palette.length]);
+                }
+                datasets.push({
+                    label: ds.label,
+                    data: ds.data,
+                    backgroundColor: pieColors
+                });
+            } else {
+                datasets.push({
+                    label: ds.label,
+                    data: ds.data,
+                    borderColor: c,
+                    backgroundColor: c + '22',
+                    fill: data.type === 'line',
+                    tension: 0.3
+                });
+            }
+        });
+
+        var opts = {
+            responsive: true,
+            plugins: {
+                legend: { display: true },
+                title: { display: !!data.title, text: data.title || '' }
+            }
+        };
+        if (!data.type || data.type === 'bar' || data.type === 'line') {
+            opts.scales = {
+                y: { beginAtZero: true },
+                x: { grid: { display: false } }
+            };
+        }
+
+        // El proyecto incluye Chart.js 2.5: su configuración es `options.legend`
+        // y `options.title`, no el objeto `plugins` de Chart.js 3+. Usar la
+        // API instalada evita fallos silenciosos y permite que el gráfico se
+        // pinte en el cliente que realmente se sirve desde layout.
+        opts = {
+            responsive: true,
+            maintainAspectRatio: true,
+            legend: { display: data.show_legend !== false },
+            title: { display: !!data.title, text: data.title || '' }
+        };
+        if (!data.type || data.type === 'bar' || data.type === 'line') {
+            opts.scales = {
+                yAxes: [{ ticks: { beginAtZero: true } }],
+                xAxes: [{ gridLines: { display: false } }]
+            };
+        }
+        reportChart = new Chart(ctx, { type: data.type || 'line', data: { labels: data.labels, datasets: datasets }, options: opts });
+    }
+
+    $('#btnRun').on('click', ejecutar);
+
+    $('#btnExport').on('click', function () {
+        if (!currentId || !currentRoute) return;
+        var exportURL = currentRoute === 'custom'
+            ? '/reports/custom/engine-export/' + encodeURIComponent(currentId)
+            : '/reports/engine/export/' + encodeURIComponent(currentId);
+        // El servidor registra las exportaciones como POST para dejar una
+        // auditoría de la salida de datos. Un enlace <a> mandaba GET y acababa
+        // en 405; usar AJAX mantiene el token CSRF y deja la respuesta como
+        // descarga sin navegar a un JSON en blanco.
+        $.ajax({
+            url: exportURL,
+            method: 'POST',
+            data: $('#paramForm').serialize(),
+            xhrFields: { responseType: 'blob' }
+        }).done(function (blob, status, xhr) {
+            var disposition = xhr.getResponseHeader('Content-Disposition') || '';
+            var match = disposition.match(/filename="?([^";]+)"?/i);
+            var filename = match ? match[1] : 'informe.csv';
+            var url = window.URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.setTimeout(function () { window.URL.revokeObjectURL(url); }, 1000);
+        }).fail(function (xhr) {
+            toastr.error((xhr.responseJSON && xhr.responseJSON.error) || 'No se pudo exportar el informe');
+        });
+    });
+});
+</script>
+{{end}}

@@ -1,0 +1,78 @@
+{{define "content"}}
+<div class="row">
+    <div class="col-md-5">
+        <div class="panel panel-bd">
+            <div class="panel-heading">
+                <div class="panel-title"><h4>Añadir Moneda</h4></div>
+            </div>
+            <div class="panel-body">
+                <form id="curForm">
+                    <input type="hidden" name="id" id="cur_id">
+                    <div class="form-group">
+                        <label>Nombre *</label>
+                        <input type="text" class="form-control" name="currency_name" id="cur_name" required placeholder="USD, EUR, Bs...">
+                    </div>
+                    <div class="form-group">
+                        <label>Símbolo *</label>
+                        <input type="text" class="form-control" name="icon" id="cur_icon" required placeholder="$, €, Bs" maxlength="5">
+                    </div>
+                    <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
+            <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
+            </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-7">
+        <div class="panel panel-bd">
+            <div class="panel-heading">
+                <div class="panel-title"><h4>Monedas</h4></div>
+            </div>
+            <div class="panel-body">
+                <table class="table table-striped table-bordered">
+                    <thead><tr><th>ID</th><th>Nombre</th><th>Símbolo</th><th></th></tr></thead>
+                    <tbody>
+                    {{range .Currencies}}
+                        <tr>
+                            <td>{{.ID}}</td>
+                            <td>{{.Name}}</td>
+                            <td>{{.Icon}}</td>
+                            <td>
+                                <button class="btn btn-info btn-xs do-edit" data-id="{{.ID}}" data-name="{{.Name}}" data-icon="{{.Icon}}"><i class="fa fa-pencil"></i></button>
+                                <button class="btn btn-danger btn-xs do-del" data-id="{{.ID}}"><i class="fa fa-trash"></i></button>
+                            </td>
+                        </tr>
+                    {{else}}
+                        <tr><td colspan="4" class="text-center">Sin monedas</td></tr>
+                    {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#curForm').on('submit', function (e) {
+        e.preventDefault();
+        $.post('/settings/currency/save', $(this).serialize(), function (r) {
+            if (r.status == 1) { toastr.success(r.msg); setTimeout(function () { location.reload(); }, 600); }
+            else toastr.error(r.error);
+        });
+    });
+    $('.do-edit').on('click', function () {
+        $('#cur_id').val($(this).data('id'));
+        $('#cur_name').val($(this).data('name'));
+        $('#cur_icon').val($(this).data('icon'));
+    });
+    $('.do-del').on('click', function () {
+        var id = $(this).data('id');
+        swal({ title: "¿Eliminar moneda?", type: "warning", showCancelButton: true, confirmButtonText: "Eliminar", confirmButtonColor: ERPGo.appearance.css("--erp-danger", "#9c3333") }, function () {
+            $.post('/settings/currency/delete/' + id, function (r) { if (r.status == 1) location.reload(); else toastr.error(r.error); });
+        });
+    });
+});
+</script>
+{{end}}

@@ -1,0 +1,59 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Empleados <a href="/hr/employee/add" class="btn btn-primary btn-sm pull-right"><i class="fa fa-plus"></i> Añadir Empleado</a></h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <table class="table table-striped table-bordered" id="employeeTable" width="100%">
+            <thead>
+                <tr>
+                    <th>Código</th>
+                    <th>Nombre</th>
+                    <th>Cédula</th>
+                    <th>Departamento</th>
+                    <th>Cargo</th>
+                    <th class="text-right">Salario base</th>
+                    <th>Frecuencia</th>
+                    <th>Estado</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    var table = $('#employeeTable').DataTable({
+        processing: true,
+        ajax: { url: '/hr/employee/list/data', type: 'GET' },
+        columns: [
+            { data: 'code' },
+            { data: 'name' },
+            { data: 'national_id' },
+            { data: 'department' },
+            { data: 'position' },
+            { data: 'salary', className: 'text-right', render: function (d, t) {
+                var v = parseFloat(d) || 0;
+                return t === 'display' ? v.toFixed(2) : v;
+            }},
+            { data: 'frequency', render: function (d) {
+                return d === 'mensual' ? 'Mensual' : 'Quincenal';
+            }},
+            { data: 'status', render: function (d) {
+                if (d === 'Egresado') return '<span class="label label-default">Egresado</span>';
+                if (d === 'Inactivo') return '<span class="label label-warning">Inactivo</span>';
+                return '<span class="label label-success">Activo</span>';
+            }},
+            { data: null, orderable: false, render: function (d) {
+                return '<a class="btn btn-info btn-xs" href="/hr/employee/edit/' + d.id + '" title="Editar"><i class="fa fa-pencil"></i></a>';
+            }}
+        ]
+    });
+});
+</script>
+{{end}}

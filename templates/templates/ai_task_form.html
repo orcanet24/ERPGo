@@ -1,0 +1,73 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading"><div class="panel-title"><h4>{{.Title}}</h4></div></div>
+    <div class="panel-body">
+        <form id="taskForm" style="max-width:720px">
+            {{if .Task}}<input type="hidden" name="id" value="{{.Task.ID}}">{{end}}
+            <div class="form-group">
+                <label>Agente *</label>
+                <select class="form-control" name="agent_id" required>
+                    <option value="">— seleccione —</option>
+                    {{range .Agents}}<option value="{{.ID}}" {{if $.Task}}{{if eq $.Task.AgentID .ID}}selected{{end}}{{end}}>{{.Name}} ({{.RoleName}}){{if eq .OperatorEnabled 1}} · operador{{end}}</option>{{end}}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Nombre de la tarea *</label>
+                <input type="text" class="form-control" name="name" required value="{{if .Task}}{{.Task.Name}}{{end}}" placeholder="Ej: Analizar cuentas por cobrar">
+            </div>
+            <div class="form-group">
+                <label>Instrucciones para el agente *</label>
+                <textarea class="form-control" name="instructions" rows="6" required placeholder="Instrucciones claras y concretas. Ej: 'Consulta las facturas pendientes del mes y elabora un informe de cuentas por cobrar con totales por cliente y antigüedad de la deuda.'">{{if .Task}}{{.Task.Instructions}}{{end}}</textarea>
+            </div>
+            <div class="row">
+                <div class="col-sm-6 form-group">
+                    <label>Programación</label>
+                    <select class="form-control" name="schedule_type" id="sched">
+                        <option value="manual" {{if .Task}}{{if eq .Task.ScheduleType "manual"}}selected{{end}}{{end}}>Manual</option>
+                        <option value="cron5" {{if .Task}}{{if eq .Task.ScheduleType "cron5"}}selected{{end}}{{end}}>Cada 5 minutos</option>
+                        <option value="daily" {{if .Task}}{{if eq .Task.ScheduleType "daily"}}selected{{end}}{{end}}>Diaria</option>
+                        <option value="weekly" {{if .Task}}{{if eq .Task.ScheduleType "weekly"}}selected{{end}}{{end}}>Semanal</option>
+                    </select>
+                </div>
+                <div class="col-sm-6 form-group" id="schedValueWrap" style="display:none">
+                    <label>Valor</label>
+                    <input type="number" class="form-control" name="schedule_value" min="0" max="23" value="{{if .Task}}{{.Task.ScheduleValue}}{{end}}" placeholder="hora (0-23)">
+                    <small class="text-muted">Para diaria: hora del día. Para semanal: día (0=domingo).</small>
+                </div>
+            </div>
+            <div class="checkbox">
+                <label><input type="checkbox" name="enabled" value="1" {{if .Task}}{{if eq .Task.Enabled 1}}checked{{end}}{{else}}checked{{end}}> Tarea activa</label>
+            </div>
+            <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
+            <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
+            <a class="btn btn-default" href="/ai/tasks">Cancelar</a>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    var submittedAction = 'save';
+
+    $('button[type=submit]', '#taskForm').on('click', function () { submittedAction = $(this).val(); });
+
+    function toggleSched() {
+        var v = $('#sched').val();
+        $('#schedValueWrap').toggle(v === 'daily' || v === 'weekly');
+    }
+    $('#sched').on('change', toggleSched); toggleSched();
+    $('#taskForm').on('submit', function (e) {
+        e.preventDefault();
+        var data = {};
+        $(this).serializeArray().forEach(function (f) { data[f.name] = f.value; });
+        data.enabled = $('input[name="enabled"]').is(':checked') ? '1' : '0';
+        $.post('/ai/tasks/save', data, function (r) {
+            if (r.status === 1) { if (submittedAction === 'save_exit') window.location = '/ai/tasks'; }
+            else { alert(r.error || 'Error al guardar'); }
+        });
+    });
+});
+</script>
+{{end}}

@@ -1,0 +1,149 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>{{.Title}}</h4></div>
+    </div>
+    <div class="panel-body">
+        <form id="dnForm" method="post" action="/debitnote/save">
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Cliente *</label>
+                        <select name="customer_id" id="customerSelect" class="form-control" required>
+                            <option value="">Seleccione...</option>
+                            {{range .Customers}}
+                            <option value="{{.ID}}" data-rif="{{.RIF}}" data-balance="{{.Balance}}">{{.Name}} ({{.RIF}}) — Saldo: {{.Balance}}</option>
+                            {{end}}
+                        </select>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Factura de origen (opcional)</label>
+                        <select name="invoice_id" class="form-control">
+                            <option value="">Sin factura asociada</option>
+                            {{range .Invoices}}
+                            <option value="{{.ID}}">#{{.Invoice}} — {{.Date}} — {{.Customer}} ({{.Total}})</option>
+                            {{end}}
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Motivo *</label>
+                <input type="text" name="reason" class="form-control" required placeholder="Ej: Gastos bancarios, Cargo por mora, Diferencia de precio">
+            </div>
+
+            <hr>
+            <h5><i class="fa fa-list"></i> Renglones</h5>
+            <table class="table table-bordered table-condensed" id="dnLines">
+                <thead>
+                    <tr>
+                        <th>Descripción</th><th style="width:100px">Cantidad</th><th style="width:120px">Precio unit.</th>
+                        <th style="width:100px">% IVA</th><th style="width:120px">Total</th><th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><input type="text" name="item_desc" class="form-control input-sm" required placeholder="Descripción"></td>
+                        <td><input type="number" step="0.01" min="0" name="item_qty" class="form-control input-sm dn-qty" value="1"></td>
+                        <td><input type="number" step="0.01" min="0" name="item_rate" class="form-control input-sm dn-rate" required placeholder="0.00"></td>
+                        <td><input type="number" step="0.01" min="0" max="100" name="item_vat" class="form-control input-sm dn-vat" value="16"></td>
+                        <td class="text-right dn-line-total">0.00</td>
+                        <td><button type="button" class="btn btn-xs btn-danger dn-remove"><i class="fa fa-trash"></i></button></td>
+                    </tr>
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="4" class="text-right"><strong>Subtotal:</strong></td>
+                        <td class="text-right" id="dnSubtotal">0.00</td>
+                        <td></td>
+                    </tr>
+                    <tr>
+                        <td colspan="4" class="text-right"><strong>IVA:</strong></td>
+                        <td class="text-right" id="dnVatTotal">0.00</td>
+                        <td></td>
+                    </tr>
+                    <tr>
+                        <td colspan="4" class="text-right"><strong>Total general:</strong></td>
+                        <td class="text-right" id="dnGrandTotal"><strong>0.00</strong></td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+            <button type="button" class="btn btn-default btn-sm" id="dnAddLine"><i class="fa fa-plus"></i> Agregar renglón</button>
+
+            <hr>
+            <div class="form-group text-right">
+                <a href="/debitnote/list" class="btn btn-default">Cancelar</a>
+                <button type="submit" name="action" value="save" class="btn btn-primary"><i class="fa fa-save"></i> Guardar</button>
+                <button type="submit" name="action" value="save_exit" class="btn btn-success"><i class="fa fa-save"></i> Guardar y Salir</button>
+            </div>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    function recalc() {
+        var sub = 0, vat = 0;
+        $('#dnLines tbody tr').each(function () {
+            var qty = parseFloat($(this).find('.dn-qty').val()) || 0;
+            var rate = parseFloat($(this).find('.dn-rate').val()) || 0;
+            var vatPct = parseFloat($(this).find('.dn-vat').val()) || 0;
+            var lineTotal = Math.round(qty * rate * 100) / 100;
+            var lineVat = Math.round(lineTotal * vatPct / 100 * 100) / 100;
+            $(this).find('.dn-line-total').text(lineTotal.toFixed(2));
+            sub += lineTotal;
+            vat += lineVat;
+        });
+        $('#dnSubtotal').text(sub.toFixed(2));
+        $('#dnVatTotal').text(vat.toFixed(2));
+        $('#dnGrandTotal').html('<strong>' + (sub + vat).toFixed(2) + '</strong>');
+    }
+
+    $('#dnAddLine').on('click', function () {
+        var row = $('#dnLines tbody tr:first').clone();
+        row.find('input').val('');
+        row.find('.dn-qty').val('1');
+        row.find('.dn-vat').val('16');
+        row.find('.dn-line-total').text('0.00');
+        $('#dnLines tbody').append(row);
+    });
+
+    $('#dnLines').on('click', '.dn-remove', function () {
+        if ($('#dnLines tbody tr').length > 1) {
+            $(this).closest('tr').remove();
+            recalc();
+        }
+    });
+
+    $('#dnLines').on('input change', '.dn-qty, .dn-rate, .dn-vat', recalc);
+
+    $('#dnForm').on('submit', function (e) {
+        e.preventDefault();
+        var form = this;
+        $.ajax({
+            url: form.action,
+            type: 'POST',
+            data: $(form).serialize(),
+            success: function (r) {
+                if (r.status == 1) {
+                    alert(r.msg + '\nNota: ' + r.note_no + '\nControl: ' + r.control_no);
+                    if (r.redirect) window.location = r.redirect;
+                } else {
+                    alert(r.msg || 'Error al guardar');
+                }
+            },
+            error: function (xhr) {
+                var r = xhr.responseJSON || {};
+                alert(r.msg || 'Error al guardar');
+            }
+        });
+    });
+});
+</script>
+{{end}}

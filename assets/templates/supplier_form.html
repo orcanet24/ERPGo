@@ -1,0 +1,111 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>{{.Title}}</h4></div>
+    </div>
+    <div class="panel-body">
+        <form id="supplierForm">
+            <input type="hidden" name="supplier_id" value="{{if .S}}{{.S.ID.String}}{{end}}">
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Nombre *</label>
+                        <input type="text" class="form-control" name="supplier_name" value="{{if .S}}{{.S.Name.String}}{{end}}" required>
+                        <div class="form-group" style="margin-top:10px">
+                            <label>RIF del proveedor <small class="text-muted">(obligatorio para libro de compras)</small></label>
+                            <input type="text" class="form-control" name="rif" placeholder="J-12345678-9" value="{{if .S}}{{.S.RIF.String}}{{end}}">
+                            <small class="help-block erp-footnote">Se valida con dígito verificador módulo 11</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>Móvil</label>
+                        <input type="text" class="form-control" name="mobile" value="{{if .S}}{{.S.Mobile.String}}{{end}}">
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>Email</label>
+                        <input type="email" class="form-control" name="email_address" value="{{if .S}}{{.S.Email.String}}{{end}}">
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Dirección</label>
+                        <input type="text" class="form-control" name="address" value="{{if .S}}{{.S.Address.String}}{{end}}">
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Dirección 2</label>
+                        <input type="text" class="form-control" name="address2" value="{{if .S}}{{.S.Address2.String}}{{end}}">
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>Ciudad</label>
+                        <input type="text" class="form-control" name="city" value="{{if .S}}{{.S.City.String}}{{end}}">
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>Estado</label>
+                        <input type="text" class="form-control" name="state" value="{{if .S}}{{.S.State.String}}{{end}}">
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>Código Postal</label>
+                        <input type="text" class="form-control" name="zip" value="{{if .S}}{{.S.Zip.String}}{{end}}">
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>País</label>
+                        <input type="text" class="form-control" name="country" value="{{if .S}}{{.S.Country.String}}{{end}}">
+                    </div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Detalles</label>
+                <textarea class="form-control" name="details" rows="3">{{if .S}}{{.S.Details.String}}{{end}}</textarea>
+            </div>
+            <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
+            <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
+            <a href="/supplier/list" class="btn btn-default">Volver</a>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    var submittedAction = 'save';
+
+    $('button[type=submit]', '#supplierForm').on('click', function () { submittedAction = $(this).val(); });
+
+    $('#supplierForm').on('submit', function (e) {
+        e.preventDefault();
+        var btn = $(this).find('button[type=submit]').prop('disabled', true);
+        $.post('/supplier/save', $(this).serialize(), function (r) {
+            if (r.status == 1) {
+                toastr.success(r.msg);
+                if (submittedAction === 'save_exit') setTimeout(function () { location.href = '/supplier/list'; }, 700);
+            } else {
+                toastr.error(r.error || 'Error');
+                btn.prop('disabled', false);
+            }
+        }).fail(function (x) {
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'Error');
+            btn.prop('disabled', false);
+        });
+    });
+});
+</script>
+{{end}}

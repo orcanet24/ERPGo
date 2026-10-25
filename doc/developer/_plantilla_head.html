@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ERPGo — Índice del proyecto y grafo de conexiones</title>
+<meta name="color-scheme" content="dark">
+<style>
+:root{
+  --bg:#0d1117; --bg2:#161b22; --bg3:#1c2129; --line:#30363d;
+  --fg:#e6edf3; --fg2:#9aa7b3; --acc:#58a6ff; --acc2:#7ee787;
+  --warn:#e3b341; --err:#ff7b72; --violet:#bc8cff; --orange:#ffa657;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%}
+body{
+  background:var(--bg); color:var(--fg);
+  font:14px/1.55 ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  display:flex; flex-direction:column;
+}
+a{color:var(--acc);text-decoration:none}
+a:hover{text-decoration:underline}
+code,kbd,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+/* ── header ─────────────────────────────── */
+header{
+  background:linear-gradient(180deg,#161b22,#11161d);
+  border-bottom:1px solid var(--line);
+  padding:14px 20px; display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+}
+header h1{font-size:17px;margin:0;letter-spacing:.2px}
+header h1 b{color:var(--acc2)}
+header .tag{color:var(--fg2);font-size:12.5px}
+.metrics{display:flex;gap:14px;margin-left:auto;flex-wrap:wrap}
+.metric{background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:5px 11px;text-align:center}
+.metric b{display:block;font-size:15px;color:var(--acc2)}
+.metric span{font-size:10.5px;color:var(--fg2);text-transform:uppercase;letter-spacing:.6px}
+
+/* ── tabs ───────────────────────────────── */
+nav.tabs{display:flex;gap:2px;background:var(--bg2);border-bottom:1px solid var(--line);padding:0 14px}
+nav.tabs button{
+  background:none;border:none;color:var(--fg2);padding:11px 16px;cursor:pointer;
+  font-size:13.5px;border-bottom:2px solid transparent;font-weight:600;
+}
+nav.tabs button:hover{color:var(--fg)}
+nav.tabs button.on{color:var(--acc);border-bottom-color:var(--acc)}
+
+/* ── layout ─────────────────────────────── */
+main{flex:1;overflow:hidden;display:flex}
+.pane{display:none;flex:1;overflow:auto;padding:18px 22px}
+.pane.on{display:block}
+h2{font-size:15.5px;margin:22px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h2:first-child{margin-top:0}
+h3{font-size:13.5px;color:var(--acc2);margin:16px 0 6px}
+p{color:var(--fg2);margin:7px 0}
+.lead{color:var(--fg);font-size:14px}
+
+/* ── buscador ───────────────────────────── */
+.search{margin-bottom:14px}
+.search input{
+  width:100%;max-width:520px;background:var(--bg3);border:1px solid var(--line);
+  color:var(--fg);border-radius:7px;padding:9px 12px;font-size:13.5px;
+}
+.search input:focus{outline:none;border-color:var(--acc)}
+
+/* ── árbol ──────────────────────────────── */
+.tree{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.7px;line-height:1.65}
+.tree ul{list-style:none;margin:0;padding-left:17px;border-left:1px dotted #2c333c}
+.tree>ul{padding-left:2px;border-left:none}
+.tree li{position:relative}
+.tree li.dir>.row{cursor:pointer;user-select:none}
+.tree li.dir>.row:hover{background:#1b2430}
+.tree .row{display:flex;align-items:center;gap:6px;padding:1.5px 5px;border-radius:4px}
+.tree .tw{width:13px;display:inline-block;color:var(--fg2);flex:none;text-align:center;font-size:10px}
+.tree .nm{color:#79c0ff;font-weight:600}
+.tree li.file .nm{color:var(--fg);font-weight:400}
+.tree .meta{color:#6e7681;font-size:11px;margin-left:auto;padding-left:14px}
+.tree .desc{color:#8b949e;font-style:italic;font-family:ui-sans-serif,system-ui,sans-serif;font-size:12px}
+.tree li.hide{display:none}
+.tree .tag{font-size:10px;padding:1px 6px;border-radius:9px;font-weight:700;letter-spacing:.4px;flex:none}
+.tag.core{background:#1f6feb33;color:#79c0ff;border:1px solid #1f6feb66}
+.tag.biz{background:#23863633;color:#7ee787;border:1px solid #23863666}
+.tag.data{background:#9e6a0333;color:#e3b341;border:1px solid #9e6a0366}
+.tag.tool{background:#8957e533;color:#d2a8ff;border:1px solid #8957e566}
+.tag.aux{background:#6e768133;color:#9aa7b3;border:1px solid #6e768166}
+
+/* ── grafo ──────────────────────────────── */
+#grafo{width:100%;height:auto;display:block;background:var(--bg2);
+  border:1px solid var(--line);border-radius:10px}
+.gnode rect{transition:.15s}
+.gnode text{font:12px ui-monospace,monospace;pointer-events:none}
+.gnode{cursor:pointer}
+.gnode.dim{opacity:.16}
+.gedge{transition:.15s}
+.gedge.dim{opacity:.06}
+.glegend{display:flex;gap:16px;flex-wrap:wrap;margin:12px 0;font-size:12.5px;color:var(--fg2)}
+.glegend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+#ginfo{margin-top:12px;background:var(--bg2);border:1px solid var(--line);
+  border-radius:9px;padding:13px 16px;min-height:74px}
+#ginfo h4{margin:0 0 6px;font-size:13.5px;color:var(--acc)}
+#ginfo ul{margin:5px 0 0;padding-left:20px;color:var(--fg2);font-size:13px}
+
+/* ── guía ───────────────────────────────── */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:13px;margin-top:12px}
+.card{background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--acc);
+  border-radius:8px;padding:13px 15px}
+.card.biz{border-left-color:var(--acc2)}
+.card.data{border-left-color:var(--warn)}
+.card.tool{border-left-color:var(--violet)}
+.card.aux{border-left-color:#6e7681}
+.card h4{margin:0 0 5px;font-size:13.5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.card h4 code{color:var(--acc);font-size:13px}
+.card p{margin:5px 0 0;font-size:12.8px;line-height:1.5}
+.card .files{margin-top:8px;font-size:11.7px;color:#6e7681;font-family:ui-monospace,monospace;line-height:1.5}
+
+/* ── tablas y flujo ─────────────────────── */
+table{border-collapse:collapse;width:100%;margin-top:10px;font-size:13px}
+th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+th{background:var(--bg2);color:var(--acc2);font-size:12.3px}
+td{color:var(--fg2)}
+td code{color:#79c0ff;background:#1c2129;padding:1px 5px;border-radius:4px;font-size:12.3px}
+
+ol.flow{counter-reset:s;list-style:none;padding-left:0}
+ol.flow li{position:relative;padding:9px 0 9px 44px;border-bottom:1px dashed var(--line);color:var(--fg2)}
+ol.flow li::before{
+  counter-increment:s;content:counter(s);
+  position:absolute;left:0;top:8px;width:27px;height:27px;border-radius:50%;
+  background:var(--bg3);border:1px solid var(--acc);color:var(--acc);
+  font-size:12.5px;font-weight:700;display:flex;align-items:center;justify-content:center;
+}
+ol.flow li b{color:var(--fg)}
+ol.flow li code{color:#79c0ff}
+footer{padding:11px 20px;border-top:1px solid var(--line);color:#6e7681;font-size:12px;background:var(--bg2)}
+@media(max-width:760px){.metrics{margin-left:0}.cards{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>ERPGo <b>— Índice del proyecto</b></h1>
+    <div class="tag">Árbol de directorios · grafo de conexiones · guía de módulos</div>
+  </div>
+  <div class="metrics">
+    <div class="metric"><b id="m-go">–</b><span>archivos .go</span></div>
+    <div class="metric"><b id="m-dirs">–</b><span>directorios</span></div>
+    <div class="metric"><b id="m-mods">–</b><span>paquetes</span></div>
+    <div class="metric"><b id="m-edges">–</b><span>aristas</span></div>
+    <div class="metric"><b>8080/9095</b><span>HTTP / gRPC</span></div>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="on" data-pane="v-arbol">Árbol</button>
+  <button data-pane="v-grafo">Grafo de conexiones</button>
+  <button data-pane="v-flujo">Flujo de arranque</button>
+  <button data-pane="v-guia">Guía de módulos</button>
+  <button data-pane="v-puertos">Puertos y datos</button>
+</nav>
+
+<main>
+  <!-- ── ÁRBOL ─────────────────────────────── -->
+  <section class="pane on" id="v-arbol">
+    <div class="search">
+      <input id="q" type="search" placeholder="Filtrar directorios y archivos…  (p. ej. orchestrator, .proto, migrations)">
+    </div>
+    <div class="tree" id="tree"></div>
+  </section>
+
+  <!-- ── GRAFO ─────────────────────────────── -->
+  <section class="pane" id="v-grafo">
+    <p class="lead">Dependencias <b>reales</b> extraídas de los <code>import "erpgow/…"</code> de los 240 archivos Go.
+      Haz clic en un nodo para ver a qué paquetes se conecta.</p>
+    <div class="glegend">
+      <span><i style="background:#58a6ff"></i>Punto de entrada / tool</span>
+      <span><i style="background:#7ee787"></i>Lógica de negocio (internal/)</span>
+      <span><i style="background:#e3b341"></i>Capa HTTP / presentación</span>
+      <span><i style="background:#bc8cff"></i>Persistencia / datos</span>
+      <span><i style="background:#ffa657"></i>Contrato externo (proto)</span>
+    </div>
+    <svg id="grafo" viewBox="0 0 1180 640" role="img" aria-label="Grafo de dependencias entre paquetes"></svg>
+    <div id="ginfo"><h4>Detalle del nodo</h4><p>Selecciona un nodo del grafo.</p></div>
+  </section>
+
+  <!-- ── FLUJO ─────────────────────────────── -->
+  <section class="pane" id="v-flujo">
+    <p class="lead">Qué ocurre cuando ejecutas <code>erpgow.exe</code>, paso a paso, con el archivo responsable de cada tramo.</p>
+
+    <h2>Arranque del servidor</h2>
+    <ol class="flow">
+      <li><b>Parseo de flags</b> — <code>cmd/server/main.go</code> lee <code>--setup</code>, <code>--migrate</code>, <code>--install</code>, <code>--uninstall</code>. Si alguno está, resuelve esa tarea y sale.</li>
+      <li><b>Configuración</b> — <code>configs.EnsureEnv()</code> (en <code>configs/config.go</code>) carga/crea el <code>.env</code> y devuelve un <code>*Config</code> con host, puertos, credenciales de BD y nivel de log.</li>
+      <li><b>Logger</b> — <code>internal/logger.Init()</code> abre <code>logs/erpgow.log</code> si <code>LOG_ENABLED=1</code> y redirige también la salida estándar.</li>
+      <li><b>Base de datos</b> — <code>infrastructure/persistence</code> abre o arranca MySQL. Si no encuentra nada en 3306, sube el MySQL embebido en 3307. Crea la BD de control <code>erpgo</code>, aplica migraciones y siembra la empresa por defecto.</li>
+      <li><b>Servidor HTTP</b> — <code>interfaces/web.NewServer(cfg, db)</code> construye el mux, monta plantillas, registra rutas, arranca la cola de tareas y el orquestador de escrituras.</li>
+      <li><b>Servidor gRPC</b> — <code>internal/pos/grpc_server.go</code> escucha en <code>GRPC_PORT</code> (9095) para las cajas POS; cada terminal se autentica con su API key.</li>
+      <li><b>Arranque efectivo</b> — <code>erpApplication.Start()</code> lanza el gRPC en una goroutine y se bloquea en <code>server.Start()</code> (HTTP).</li>
+      <li><b>Apagado</b> — Ctrl+C / Stop del servicio Windows: primero se detiene el gRPC (cierra sesiones POS), luego el HTTP y por último se drenan bases y orquestadores.</li>
+    </ol>
+
+    <h2>Recorrido de una petición HTTP</h2>
+    <ol class="flow">
+      <li><b>Middleware externo</b> — <code>cacheDefaultMiddleware</code> fija <code>Cache-Control</code> y, en desarrollo, imprime un access log por cada request.</li>
+      <li><b>Middleware CORS/headers</b> — <code>corsMiddleware</code> añade <code>X-Content-Type-Options</code>, <code>X-Frame-Options</code> y, bajo <code>/api/</code>, los headers CORS.</li>
+      <li><b>Auth y tenant</b> — <code>authMiddleware</code> llama primero a <code>attachScope</code> (resuelve la <b>empresa activa</b>), luego valida sesión; sin sesión redirige a <code>/login</code>. Rutas públicas: <code>/login</code>, <code>/api/pos/</code>, <code>/static/</code>, <code>/uploads</code>…</li>
+      <li><b>CSRF</b> — <code>ensureCSRFToken</code> renueva el token en cada visita y <code>enforceCSRF</code> lo verifica en mutaciones.</li>
+      <li><b>Handler</b> — el mux enruta al handler correspondiente de <code>interfaces/web/</code> (facturas, contabilidad, caja, usuarios…).</li>
+      <li><b>Escritura transaccional</b> — los endpoints que modifican datos pasan por <code>internal/orchestrator</code>: validación → journal en disco → cola → un único escritor aplica → correlativo confirmado → rastro en <code>audit_log</code>.</li>
+      <li><b>Render</b> — <code>render.go</code> pinta la plantilla de <code>templates/</code> (cacheado) con datos del tenant.</li>
+    </ol>
+
+    <h2>Ruta de las cajas POS</h2>
+    <ol class="flow">
+      <li><b>Terminal POS</b> se conecta por gRPC al puerto <code>9095</code> usando su <code>api_key</code>.</li>
+      <li><b>Interceptor</b> — <code>authInterceptor</code> / <code>streamAuthInterceptor</code> en <code>internal/pos/grpc_server.go</code> valida el token antes de cualquier RPC.</li>
+      <li><b>Servicio</b> — se procesan <code>Login</code>, <code>OpenTurn</code>, <code>ProcessSale</code>, <code>SyncOffline</code>, <code>GetAIAdvice</code>… definidos en <code>proto/pos.proto</code>.</li>
+      <li><b>Persistencia</b> — cada operación escribe contra la BD de la empresa del terminal vía <code>infrastructure/persistence</code> y el orquestador.</li>
+      <li><b>Offline-first</b> — si el enlace cae, la venta se guarda localmente y <code>SyncOffline</code> la reintegra con su número fiscal cuando vuelve.</li>
+    </ol>
+
+    <h2>Herramientas auxiliares (cmd/)</h2>
+    <table>
+      <thead><tr><th>Ejecutable</th><th>Qué hace</th><th>Se usa con…</th></tr></thead>
+      <tbody>
+        <tr><td><code>cmd/server</code></td><td>Servidor principal (HTTP + gRPC)</td><td><code>erpgow.exe</code></td></tr>
+        <tr><td><code>cmd/docgen</code></td><td>Escanea el código fuente y genera el manual <code>index2.html</code></td><td><code>go run ./cmd/docgen</code></td></tr>
+        <tr><td><code>cmd/diag</code></td><td>Diagnóstico de entorno/conexión</td><td><code>go run ./cmd/diag</code></td></tr>
+        <tr><td><code>cmd/genhash</code></td><td>Genera hashes (contraseñas/sumas)</td><td><code>go run ./cmd/genhash</code></td></tr>
+        <tr><td><code>cmd/semillar</code></td><td>Siembra datos de prueba de una empresa</td><td><code>go run ./cmd/semillar</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ── GUÍA ──────────────────────────────── -->
+  <section class="pane" id="v-guia">
+    <p class="lead">Qué encontrarás en cada directorio. Etiquetas: <span class="tag core">núcleo</span> <span class="tag biz">negocio</span> <span class="tag data">datos</span> <span class="tag tool">tool</span> <span class="tag aux">aux</span></p>
+
+    <h2>Núcleo y arranque</h2>
+    <div class="cards">
+      <div class="card"><h4><code>cmd/server/</code> <span class="tag core">núcleo</span></h4>
+        <p>Punto de entrada real del programa. <code>main.go</code> (≈16 KB) parsea flags, carga config, prepara BD y levanta HTTP + gRPC. <code>fieldkey.go</code> resuelve claves de campos.</p>
+        <div class="files">main.go · fieldkey.go</div></div>
+      <div class="card"><h4><code>configs/</code> <span class="tag core">núcleo</span></h4>
+        <p>Todo el acceso a variables de entorno. <code>EnsureEnv()</code> crea o lee <code>.env</code> y devuelve la configuración tipada del servidor.</p>
+        <div class="files">config.go</div></div>
+      <div class="card"><h4><code>embed.go</code> (raíz) <span class="tag core">núcleo</span></h4>
+        <p>Declara <code>//go:embed</code> de <code>static/</code>, <code>templates/</code> y <code>migrations/</code> para que el binario funcione en un solo archivo (con fallback disk-first en desarrollo).</p>
+        <div class="files">embed.go · embed_test.go</div></div>
+      <div class="card"><h4><code>internal/logger/</code> <span class="tag core">núcleo</span></h4>
+        <p>Logger con niveles (debug/info/warn/error) configurable por <code>LOG_ENABLED</code>, <code>LOG_LEVEL</code>, <code>LOG_FILE</code>. Salida dual archivo + consola.</p>
+        <div class="files">logger.go</div></div>
+      <div class="card"><h4><code>internal/service/</code> <span class="tag core">núcleo</span></h4>
+        <p>Registro como servicio de Windows (install/uninstall/run vía SCM). Se compila distinto en Windows y en el resto.</p>
+        <div class="files">service.go · service_windows.go · manage_windows.go</div></div>
+      <div class="card"><h4><code>internal/setup/</code> <span class="tag core">núcleo</span></h4>
+        <p>Asistente de instalación interactivo (<code>--setup</code>): instala/conecta MariaDB, propone puertos, crea el super admin y los roles base.</p>
+        <div class="files">wizard.go · mariadb.go · ports.go · backup.go · schema_check.go</div></div>
+    </div>
+
+    <h2>Capa HTTP y lógica de negocio <span style="font-size:12px;color:#6e7681">(aquí vive la mayor parte del código)</span></h2>
+    <div class="cards">
+      <div class="card biz"><h4><code>interfaces/web/</code> <span class="tag biz">negocio</span></h4>
+        <p>El servidor web completo: ~170 archivos Go con todos los handlers, la sesión, los middlewares, el render de plantillas, permisos, auditoría, multi-empresa y los módulos de negocio.</p>
+        <div class="files">server.go · session.go · permissions.go · render.go · audit_chain.go · tenants.go · pos_api.go · ai_*.go · product.go · purchase.go · payroll.go …</div></div>
+      <div class="card biz"><h4><code>internal/orchestrator/</code> <span class="tag biz">negocio</span></h4>
+        <p><b>La puerta única de escrituras.</b> Toma una entrada, valida identificadores, escribe primero en un journal en disco, la encola y un único escritor la aplica en orden con correlativo e idempotencia. Impide perder ventas.</p>
+        <div class="files">orchestrator.go · journal.go</div></div>
+      <div class="card biz"><h4><code>internal/queue/</code> <span class="tag biz">negocio</span></h4>
+        <p>Cola de tareas en segundo plano con pool fijo, backpressure y volcado a disco cuando se satura. Alimenta trabajos asíncronos del ERP.</p>
+        <div class="files">queue.go · context.go</div></div>
+      <div class="card biz"><h4><code>internal/pos/</code> <span class="tag biz">negocio</span></h4>
+        <p>Servidor gRPC de las cajas POS: sesiones de terminal, turnos de caja, ventas, sincronización offline y consejos de IA. Arranca en el puerto 9095.</p>
+        <div class="files">grpc_server.go · server.go · sync_server.go · ai.go</div></div>
+      <div class="card biz"><h4><code>internal/security/</code> <span class="tag biz">negocio</span></h4>
+        <p>Primitivas criptográficas usadas por la aplicación (cifrado/descifrado de datos sensibles).</p>
+        <div class="files">crypto.go</div></div>
+      <div class="card biz"><h4><code>internal/upload/</code> <span class="tag biz">negocio</span></h4>
+        <p>Gestión segura de subida de archivos (logos, fotos de producto, facturas) con validación de tipo y tamaño.</p>
+        <div class="files">manager.go · README.md</div></div>
+      <div class="card biz"><h4><code>internal/webcheck/</code> <span class="tag biz">negocio</span></h4>
+        <p>Verificador de salud/consistencia de la parte web.</p>
+        <div class="files">main.go</div></div>
+    </div>
+
+    <h2>Persistencia y datos</h2>
+    <div class="cards">
+      <div class="card data"><h4><code>infrastructure/persistence/</code> <span class="tag data">datos</span></h4>
+        <p>Todo el acceso a MySQL/MariaDB: conexión, migraciones idempotentes con ledger, copia de plantillas de esquema, volcado con mysqldump, guardián de WAL, conversión SQLite→MySQL y un MySQL embebido opcional.</p>
+        <div class="files">database.go · mysql.go · embedded_mysql.go · mysql_migrations.go · mysqldump.go · plantilla.go · walguard.go · sqlite_convert.go</div></div>
+      <div class="card data"><h4><code>migrations/</code> <span class="tag data">datos</span></h4>
+        <p>Esquemas SQL organizados por dominio (inventario, ventas, contabilidad, HR, POS, CRM, IA) más el fiscal venezolano y los de sistema. Se aplican en orden alfabético.</p>
+        <div class="files">schema.sql · schema_reconstruido_01…10 · schema_ve_fiscal.sql · schema_z_*.sql</div></div>
+      <div class="card data"><h4><code>data/</code> <span class="tag aux">aux</span></h4>
+        <p>Runtime: una base por empresa (<code>data/empresas/</code>) y el journal de escrituras del orquestador (<code>data/escrituras/</code>). No tocar a mano.</p></div>
+      <div class="card data"><h4><code>backup/</code> <span class="tag aux">aux</span></h4>
+        <p>Respaldos generados por el propio ERP (botón de respaldo y volcados programados).</p></div>
+    </div>
+
+    <h2>Contratos e integración</h2>
+    <div class="cards">
+      <div class="card data"><h4><code>proto/</code> <span class="tag data">datos</span></h4>
+        <p>Definición gRPC del POS: <code>pos.proto</code> define el servicio bidireccional (stream + RPCs) y <code>pos.pb.go</code> / <code>pos_grpc.pb.go</code> son el código generado por <code>protoc</code>.</p>
+        <div class="files">pos.proto · pos/pos.pb.go · pos/pos_grpc.pb.go</div></div>
+      <div class="card biz"><h4><code>addons/</code> <span class="tag biz">negocio</span></h4>
+        <p>Sistema de extensiones de terceros (vía <code>ERPGo-SDK</code>, que está en <code>../ERPGo-SDK</code> y se engancha con un <code>replace</code> en <code>go.mod</code>). Incluye el addon de ejemplo <code>hello/</code>.</p>
+        <div class="files">hello/module.json · hello/web/index.html</div></div>
+      <div class="card data"><h4><code>fiscalprinteradapter/</code> <span class="tag data">datos</span></h4>
+        <p>Adaptador de impresoras fiscales (Epson y similares) — comunicación por puerto serie con <code>go.bug.st/serial</code>.</p></div>
+      <div class="card aux"><h4><code>examples/</code> <span class="tag aux">aux</span></h4>
+        <p>Ejemplos mínimos para desarrolladores de addons.</p></div>
+    </div>
+
+    <h2>Presentación (frontend)</h2>
+    <div class="cards">
+      <div class="card biz"><h4><code>templates/</code> <span class="tag biz">negocio</span></h4>
+        <p>Plantillas Go HTML por pantalla: login, layout, listados, formularios, reportes, PDFs y el POS. Se sirven desde el cache de <code>render.go</code>.</p>
+        <div class="files">layout.html · login.html · pos.html · product_form.html · report_engine.html · pos/…</div></div>
+      <div class="card biz"><h4><code>static/</code> <span class="tag biz">negocio</span></h4>
+        <p>Assets servidos en <code>/static/</code>: CSS, JS de la aplicación, plugins (DataTables, Summernote, SweetAlert, toastr, jstree) e imágenes.</p>
+        <div class="files">css/ · js/ · plugins/ · fonts/ · image/</div></div>
+      <div class="card tool"><h4><code>assets/</code> <span class="tag tool">tool</span></h4>
+        <p>Copia de <code>templates/</code>, <code>migrations/</code> y subidas usada por <code>embed.go</code> para empaquetar el binario único.</p></div>
+    </div>
+
+    <h2>Despliegue, empaquetado y herramientas</h2>
+    <div class="cards">
+      <div class="card tool"><h4><code>instalador/</code> <span class="tag tool">tool</span></h4>
+        <p>Instalador de Windows con Inno Setup (<code>ERPgo-Installer.iss</code>, <code>POS-Installer.iss</code>), imágenes, binarios y Docker.</p>
+        <div class="files">ERPgo-Installer.iss · POS-Installer.iss · docker/ · COMPILAR.bat</div></div>
+      <div class="card tool"><h4><code>deploy/</code> <span class="tag tool">tool</span></h4>
+        <p>Configuración de despliegue: <code>Caddyfile</code> (proxy TLS) y certificados.</p></div>
+      <div class="card tool"><h4><code>tools/</code> <span class="tag tool">tool</span></h4>
+        <p>Utilidades internas: <code>limpiar</code> (basura de tests en CI), <code>estress</code> y <code>loadtest</code> (pruebas de carga), <code>firmar</code> (firmado de binarios), <code>plantillas</code>.</p></div>
+      <div class="card tool"><h4><code>cmd/docgen/</code> <span class="tag tool">tool</span></h4>
+        <p>Generador del manual del programador: escanea el código, construye el grafo de funciones e inyecta el modelo JSON en <code>index2.html</code>.</p>
+        <div class="files">main.go · scan.go · graph.go · render.go · overlay.go</div></div>
+      <div class="card tool"><h4><code>compilar-*.bat</code> / <code>Makefile</code> <span class="tag tool">tool</span></h4>
+        <p>Scripts de compilación: versión protegida (obfuscar), lanzamiento Linux y targets de <code>make</code>.</p></div>
+      <div class="card tool"><h4><code>.github/workflows/ci.yml</code> <span class="tag tool">tool</span></h4>
+        <p>CI en dos carriles: <code>-short</code> en cada PR (minutos) y suite completa con MySQL cada noche (03:00 UTC).</p></div>
+    </div>
+
+    <h2>Documentación y restos</h2>
+    <div class="cards">
+      <div class="card aux"><h4><code>doc/</code> <span class="tag aux">aux</span></h4>
+        <p>Documentación histórica: bitácoras, auditorías, planes, plantillas Excel de costos y el <code>developer/</code> con este índice y el manual <code>index2.html</code>.</p></div>
+      <div class="card aux"><h4><code>docs/</code> <span class="tag aux">aux</span></h4>
+        <p>Documentación operativa corta: planes de seguridad/Docker, resúmenes de ejecución y bitácoras recientes.</p></div>
+      <div class="card aux"><h4><code>legacy/</code>, <code>protoc/</code>, <code>protoc_bin/</code> <span class="tag aux">aux</span></h4>
+        <p>Restos: binario de estrés antiguo y copias del compilador <code>protoc</code> usado para generar el código del POS.</p></div>
+      <div class="card aux"><h4><code>bin/</code>, <code>uploads/</code>, <code>tmp_*</code> <span class="tag aux">aux</span></h4>
+        <p>Salidas de compilación, archivos subidos por el usuario y temporales de pruebas. No son código fuente.</p></div>
+    </div>
+  </section>
+
+  <!-- ── PUERTOS ───────────────────────────── -->
+  <section class="pane" id="v-puertos">
+    <h2>Puertos</h2>
+    <table>
+      <thead><tr><th>Puerto</th><th>Uso</th><th>Configurado en</th></tr></thead>
+      <tbody>
+        <tr><td><code>8080</code></td><td>Servidor HTTP del ERP (panel web y APIs <code>/api/…</code>)</td><td><code>SERVER_PORT</code> en <code>.env</code></td></tr>
+        <tr><td><code>9095</code></td><td>Servidor gRPC de las cajas POS (stream bidireccional)</td><td><code>GRPC_PORT</code> en <code>.env</code></td></tr>
+        <tr><td><code>3306</code></td><td>MySQL/MariaDB externo (si ya existe en el host)</td><td><code>DB_PORT</code></td></tr>
+        <tr><td><code>3307</code></td><td>MySQL embebido que arranca el propio ERP si no encuentra 3306</td><td><code>infrastructure/persistence/embedded_mysql.go</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2>Bases de datos: esquema multi-empresa</h2>
+    <table>
+      <thead><tr><th>Base</th><th>Contenido</th></tr></thead>
+      <tbody>
+        <tr><td><code>erpgo</code></td><td>BD de <b>control</b>: catálogo de empresas, miembros, sesiones y usuarios login.</td></tr>
+        <tr><td><code>erpgo_&lt;codigo&gt;</code></td><td>Una base <b>por empresa</b>: sus productos, facturas, contabilidad, etc. Se aísla por tenant.</td></tr>
+        <tr><td><code>erpgo_plantilla_*</code></td><td>Plantillas de esquema usadas por los tests para clonar esquemas rápidamente.</td></tr>
+      </tbody>
+    </table>
+    <p>Las migraciones de <code>migrations/</code> se aplican con un <i>ledger</i> idempotente en <code>infrastructure/persistence/mysql_migrations.go</code>, de modo que re-ejecutarlas es seguro.</p>
+
+    <h2>Variables de entorno relevantes</h2>
+    <table>
+      <thead><tr><th>Variable</th><th>Qué controla</th></tr></thead>
+      <tbody>
+        <tr><td><code>SERVER_HOST</code> / <code>SERVER_PORT</code></td><td>Dirección y puerto HTTP (usa <code>127.0.0.1</code> solo local; <code>0.0.0.0</code> solo si necesitas red local)</td></tr>
+        <tr><td><code>GRPC_PORT</code></td><td>Puerto gRPC del POS (9095)</td></tr>
+        <tr><td><code>DB_HOST</code> / <code>DB_PORT</code> / <code>DB_USER</code> / <code>DB_PASSWORD</code> / <code>DB_NAME</code></td><td>Conexión a MySQL/MariaDB</td></tr>
+        <tr><td><code>JWT_SECRET</code></td><td>Firma de sesiones/tokens. Rotarlo invalida todas las sesiones.</td></tr>
+        <tr><td><code>LOG_ENABLED</code> / <code>LOG_LEVEL</code> / <code>LOG_FILE</code></td><td>Logging (debug|info|warn|error), por defecto <code>logs/erpgow.log</code></td></tr>
+        <tr><td><code>APP_ENV</code></td><td><code>development</code> activa el access log por request</td></tr>
+        <tr><td><code>TEST_DB_*</code></td><td>Credenciales que usan los tests (CI usa estas)</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Dependencias Go principales</h2>
+    <table>
+      <thead><tr><th>Módulo</th><th>Para qué</th></tr></thead>
+      <tbody>
+        <tr><td><code>go-sql-driver/mysql</code></td><td>Driver MySQL/MariaDB — motor de datos principal</td></tr>
+        <tr><td><code>glebarez/go-sqlite</code></td><td>SQLite puro (sin CGO), usado en migraciones/pruebas</td></tr>
+        <tr><td><code>google.golang.org/grpc</code> + <code>protobuf</code></td><td>Servidor gRPC y mensajes del POS</td></tr>
+        <tr><td><code>gorilla/websocket</code></td><td>WebSockets (tiempo real)</td></tr>
+        <tr><td><code>joho/godotenv</code></td><td>Lectura del archivo <code>.env</code></td></tr>
+        <tr><td><code>golang.org/x/crypto</code></td><td>bcrypt para contraseñas</td></tr>
+        <tr><td><code>go.bug.st/serial</code></td><td>Puerto serie para impresoras fiscales</td></tr>
+        <tr><td><code>orcanet/ergoaddon</code></td><td>SDK de addons — sustituido por <code>../ERPGo-SDK</code> con <code>replace</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2>Cómo ejecutar y compilar</h2>
+    <table>
+      <thead><tr><th>Tarea</th><th>Comando</th></tr></thead>
+      <tbody>
+        <tr><td>Compilar</td><td><code>go build ./cmd/server</code> o <code>go build -o erpgow.exe ./cmd/server</code></td></tr>
+        <tr><td>Ejecutar en desarrollo</td><td><code>go run ./cmd/server</code> (o <code>iniciar.bat</code>)</td></tr>
+        <tr><td>Asistente de instalación</td><td><code>erpgow.exe --setup</code></td></tr>
+        <tr><td>Aplicar migraciones y salir</td><td><code>erpgow.exe --migrate</code></td></tr>
+        <tr><td>Instalar como servicio Windows</td><td><code>erpgow.exe --install</code> → <code>net start</code></td></tr>
+        <tr><td>Tests rápidos</td><td><code>go vet ./...</code> · <code>go test -short ./...</code></td></tr>
+        <tr><td>Tests completos (con MySQL)</td><td><code>go test ./...</code></td></tr>
+        <tr><td>Regenerar el manual <code>index2.html</code></td><td><code>go run ./cmd/docgen</code></td></tr>
+        <tr><td>Reconstruir este índice</td><td><code>node doc/developer/_build.mjs</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+
+<footer>
+  Generado el 19/10/2026 a partir de los archivos fuente de <code>C:\Proyectos\GO\ERPGo</code>.
+  Complementa a <a href="index2.html">index2.html</a> (manual del programador, se regenera con <code>go run ./cmd/docgen</code>).
+</footer>
+

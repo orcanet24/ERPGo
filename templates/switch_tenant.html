@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="{{.Theme}}" data-density="{{.Density}}">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Cambiar de empresa - {{.AppName}}</title>
+    <meta content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" name="viewport">
+    <link href="/static/css/bootstrap.min.css" rel="stylesheet" type="text/css" />
+    <link href="/static/css/font-awesome.min.css" rel="stylesheet" type="text/css" />
+    <link href="/static/css/custom.min.css" rel="stylesheet" type="text/css" />
+    <link href="/static/css/style.css" rel="stylesheet" type="text/css" />
+    <link href="/static/css/erpgow-tema.css" rel="stylesheet" type="text/css" />
+</head>
+<body class="hold-transition login-page">
+<div class="login-box">
+    <div class="login-logo auth-logo">
+        <a href="/"><b>{{.AppName}}</b></a>
+    </div>
+    <div class="login-box-body auth-box">
+        <p class="login-box-msg auth-msg">Seleccione la empresa con la que desea trabajar</p>
+        {{if .Tenants}}
+        <form action="/switch-tenant" method="post" id="tenantForm">
+            {{range .Tenants}}
+            <div class="tenant-option auth-option {{if eq .Code $.Current}}active{{end}}" data-code="{{.Code}}">
+                <div class="t-name"><i class="fa fa-building-o"></i> {{.LegalName}}</div>
+                <div class="text-muted erp-caption">
+                    {{if .RIF}}RIF: {{.RIF}} &middot; {{end}}C&oacute;digo: {{.Code}}
+                </div>
+            </div>
+            {{end}}
+            <input type="hidden" name="tenant" id="tenantInput" value="{{.Current}}">
+            {{if .CSRFToken}}<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">{{end}}
+            <button type="submit" class="btn btn-primary btn-block btn-flat erp-btn-block">
+                Entrar a la empresa
+            </button>
+        </form>
+        {{else}}
+        <div class="alert alert-warning">No pertenece a ninguna empresa.</div>
+        {{end}}
+        <p class="text-center erp-auth-link"><a href="/logout">Cerrar sesi&oacute;n</a></p>
+    </div>
+</div>
+    <div class="appearance-choice auth-choice" data-appearance-choice="theme">
+        <button type="button" class="auth-switch" data-appearance-value="light" title="Tema claro" aria-label="Tema claro"><i class="fa fa-sun-o"></i></button>
+        <button type="button" class="auth-switch" data-appearance-value="dark" title="Tema oscuro" aria-label="Tema oscuro"><i class="fa fa-moon-o"></i></button>
+        <button type="button" class="auth-switch" data-appearance-value="auto" title="Seguir al sistema" aria-label="Seguir al sistema"><i class="fa fa-desktop"></i></button>
+    </div>
+<div class="erp-page-footer">
+    ERPGo &copy; <strong>Orcanet1724 C.A</strong> &mdash; Uso libre para el comercio venezolano
+</div>
+<script src="/static/js/jquery-3.4.1.min.js"></script>
+<script src="/static/js/bootstrap.min.js"></script>
+<script src="/static/js/appearance.js"></script>
+<script src="/static/js/csrf.js" type="text/javascript"></script>
+<script>
+$(function () {
+    var $input = $('#tenantInput');
+    if (!$input.val()) {
+        $('.tenant-option').first().addClass('active');
+        $input.val($('.tenant-option').first().data('code'));
+    }
+    $('.tenant-option').on('click', function () {
+        $('.tenant-option').removeClass('active');
+        $(this).addClass('active');
+        $input.val($(this).data('code'));
+    });
+});
+</script>
+</body>
+</html>

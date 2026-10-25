@@ -1,0 +1,95 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <h3 class="panel-title">{{.Title}}</h3>
+    </div>
+    <div class="panel-body">
+        <form id="customerClassForm">
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Cliente *</label>
+                        <select name="customer_id" class="form-control" required>
+                            <option value="">Seleccione...</option>
+                            {{range .Customers}}
+                            <option value="{{.id}}" {{if .Selected}}selected{{end}}>{{.name}}</option>
+                            {{end}}
+                        </select>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Clasificación</label>
+                        <select name="customer_class" class="form-control">
+                            <option value="">Sin clasificar</option>
+                            <option value="minorista" {{if eq .CurrentClass "minorista"}}selected{{end}}>Minorista</option>
+                            <option value="mayorista" {{if eq .CurrentClass "mayorista"}}selected{{end}}>Mayorista</option>
+                            <option value="distribuidor" {{if eq .CurrentClass "distribuidor"}}selected{{end}}>Distribuidor</option>
+                            <option value="vip" {{if eq .CurrentClass "vip"}}selected{{end}}>VIP</option>
+                            <option value="empleado" {{if eq .CurrentClass "empleado"}}selected{{end}}>Empleado</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Lista de Precio Asignada</label>
+                        <select name="price_list_id" class="form-control">
+                            <option value="">Automática (según clase)</option>
+                            <option value="1">Detalle</option>
+                            <option value="2">Mayor</option>
+                            <option value="3">Gran Mayor</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Crédito Habilitado</label>
+                        <select name="credit_enabled" class="form-control">
+                            <option value="1">Sí</option>
+                            <option value="0">No</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Notas de Clasificación</label>
+                <textarea name="class_notes" class="form-control" rows="2" placeholder="Observaciones sobre la clasificación..."></textarea>
+            </div>
+            <hr>
+            <div class="alert alert-info">
+                <strong>Clases de cliente:</strong> La clasificación determina qué descuentos y listas de precio se aplican automáticamente.
+                Un cliente <em>mayorista</em> puede recibir descuentos diferentes al <em>minorista</em> en el mismo producto.
+            </div>
+            <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
+            <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
+            <a href="/customer/list" class="btn btn-default">Cancelar</a>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    var submittedAction = 'save';
+
+    $('button[type=submit]', '#customerClassForm').on('click', function () { submittedAction = $(this).val(); });
+
+    $('#customerClassForm').on('submit', function (e) {
+        e.preventDefault();
+        $.post('/customer/class/save', $(this).serialize(), function (r) {
+            if (r.status == 1) {
+                toastr.success(r.msg);
+                if (submittedAction === 'save_exit') setTimeout(function () { location.href = '/customer/list'; }, 800);
+            } else {
+                toastr.error(r.error || 'Error al guardar');
+            }
+        }).fail(function (x) {
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'Error');
+        });
+    });
+});
+</script>
+{{end}}

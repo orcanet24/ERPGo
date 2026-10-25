@@ -1,0 +1,280 @@
+package configs
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/joho/godotenv"
+)
+
+type Config struct {
+	DBDriver            string
+	DBHost              string
+	DBPort              int
+	DBUser              string
+	DBPassword          string
+	DBName              string
+	DBMasterTenantCode  string
+	DBRootUser          string
+	DBRootPassword      string
+	DBSQLitePath        string
+	DBTenantPrefix      string
+	DBAutoStart         bool
+	DBMySQLHome         string
+	DBMySQLData         string
+	DBMySQLBufferPoolMB int
+
+	ServerPort  string
+	ServerHost  string
+	GRPCPort    string
+	GZipEnabled bool // Compresión gzip en respuestas textuales (activada en producción)
+	// Credenciales de provisión: se usan SOLO al crear/eliminar empresas
+	// (CREATE DATABASE, CREATE USER, DROP DATABASE). NO para operación diaria.
+	// Si está vacío, se usa DBUser/DBPassword para todo.
+	DBProvisionUser     string
+	DBProvisionPassword string
+	// TLS del servidor HTTP. Si TLSCertFile y TLSKeyFile están definidos, el
+	// servidor sirve por https (obligatorio para exponer por internet); si no,
+	// sirve http plano (normal en LAN/local, donde no hace falta certificado).
+	TLSCertFile string
+	TLSKeyFile  string
+	JWTSecret   string
+	JWTExpiry   int
+	AppName     string
+	AppURL      string
+	AppEnv      string
+	UploadPath  string
+
+	// Logger configurable
+	LogEnabled bool
+	LogLevel   string
+	LogFile    string
+}
+
+type ServerConfig struct {
+	Port string
+	Host string
+}
+
+func Load() (*Config, error) {
+	_ = godotenv.Load(".env")
+
+	jwtExpiry, _ := strconv.Atoi(getEnv("JWT_EXPIRY_HOURS", "24"))
+	puerto, _ := strconv.Atoi(getEnv("DB_PORT", "3307"))
+	bufferPool, _ := strconv.Atoi(getEnv("DB_MYSQL_BUFFER_POOL_MB", "256"))
+
+	autoStart := true
+	if v, ok := os.LookupEnv("DB_AUTO_START"); ok {
+		autoStart = EsVerdadero(v)
+	}
+
+	return &Config{
+		DBDriver:            getEnv("DB_DRIVER", "mysql"),
+		DBHost:              getEnv("DB_HOST", "127.0.0.1"),
+		DBPort:              puerto,
+		DBUser:              getEnv("DB_USER", "root"),
+		DBPassword:          getEnv("DB_PASSWORD", ""),
+		DBName:              getEnv("DB_NAME", "erpgo"),
+		DBMasterTenantCode:  getEnv("DB_MASTER_TENANT_CODE", "default"),
+		DBRootUser:          getEnv("DB_ROOT_USER", ""),
+		DBRootPassword:      getEnv("DB_ROOT_PASSWORD", ""),
+		DBTenantPrefix:      getEnv("DB_TENANT_PREFIX", ""),
+		DBSQLitePath:        getEnv("DB_SQLITE_PATH", "data/empresas/default.sqlite3"),
+		DBAutoStart:         autoStart,
+		DBMySQLHome:         getEnv("DB_MYSQL_HOME", ""),
+		DBMySQLData:         getEnv("DB_MYSQL_DATA", ""),
+		DBMySQLBufferPoolMB: bufferPool,
+		ServerPort:          getEnv("SERVER_PORT", "8080"),
+		GRPCPort:            getEnv("GRPC_PORT", "9095"),
+		DBProvisionUser:     getEnv("DB_PROVISION_USER", ""),
+		DBProvisionPassword: getEnv("DB_PROVISION_PASSWORD", ""),
+		// Seguridad: por defecto solo escucha en localhost (127.0.0.1)
+		// Para acceso desde red local, configurar SERVER_HOST=0.0.0.0
+		ServerHost:  getEnv("SERVER_HOST", "127.0.0.1"),
+		TLSCertFile: getEnv("TLS_CERT_FILE", ""),
+		TLSKeyFile:  getEnv("TLS_KEY_FILE", ""),
+		JWTSecret:   getJWTSecret(),
+		JWTExpiry:   jwtExpiry,
+		AppName:     getEnv("APP_NAME", "ERPGo"),
+		AppURL:      getEnv("APP_URL", "http://localhost:8080"),
+		AppEnv:      getEnv("APP_ENV", "development"),
+		UploadPath:  getEnv("UPLOAD_PATH", "./uploads"),
+		GZipEnabled: EsVerdadero(getEnv("GZIP_ENABLED", "1")),
+
+		// Logger configurable desde .env
+		LogEnabled: EsVerdadero(getEnv("LOG_ENABLED", "0")),
+		LogLevel:   getEnv("LOG_LEVEL", "info"),
+		LogFile:    getEnv("LOG_FILE", "logs/erpgow.log"),
+	}, nil
+}
+
+func EsVerdadero(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "t", "yes", "y", "si", "sí", "on":
+		return true
+	}
+	return false
+}
+
+func (c *Config) DataPath() string {
+	p := c.DBSQLitePath
+	if strings.Contains(p, "empresas"+string(filepath.Separator)) || strings.Contains(p, "empresas/") {
+		return filepath.Dir(filepath.Dir(p))
+	}
+	return filepath.Dir(p)
+}
+
+func (c *Config) Server() ServerConfig {
+	return ServerConfig{
+		Port: c.ServerPort,
+		Host: c.ServerHost,
+	}
+}
+
+func (c *Config) EffectiveRootUser() string {
+	if c.DBRootUser != "" {
+		return c.DBRootUser
+	}
+	return c.DBUser
+}
+
+func (c *Config) EffectiveRootPassword() string {
+	if c.DBRootPassword != "" {
+		return c.DBRootPassword
+	}
+	return c.DBPassword
+}
+
+func getJWTSecret() string {
+	if v, ok := os.LookupEnv("JWT_SECRET"); ok && v != "" {
+		return v
+	}
+	// No env var: generate a strong random secret on first run.
+	// Stored in .env for persistence across restarts.
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: timestamp-based (still better than hardcoded)
+		return fmt.Sprintf("erpgow-%d-%d", os.Getpid(), os.Getpid()*7919)
+	}
+	secret := hex.EncodeToString(b)
+	// Persist to .env so it survives restarts
+	_ = appendToFile(".env", fmt.Sprintf("\nJWT_SECRET=%s\n", secret))
+	fmt.Printf("⚠  JWT_SECRET auto-generado. Para producción, configúralo en .env\n")
+	return secret
+}
+
+func appendToFile(path, content string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(content)
+	return err
+}
+
+func getEnv(key, defaultValue string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return defaultValue
+}
+
+// EnvFileExists reports whether .env exists in the working directory.
+func EnvFileExists() bool {
+	_, err := os.Stat(".env")
+	return err == nil
+}
+
+// WriteEnvFile persists the current configuration to .env.
+// Called once on first run: the binary creates its own .env from the
+// environment variables (set by the installer or the shell) plus defaults.
+func (c *Config) WriteEnvFile() error {
+	var b strings.Builder
+	b.WriteString("# ERPGo - auto-generated on first run\n")
+	b.WriteString("# Generated by erpgow.exe - safe to edit\n\n")
+
+	b.WriteString("# --- MySQL ---\n")
+	b.WriteString(fmt.Sprintf("DB_DRIVER=%s\n", c.DBDriver))
+	b.WriteString(fmt.Sprintf("DB_HOST=%s\n", c.DBHost))
+	b.WriteString(fmt.Sprintf("DB_PORT=%d\n", c.DBPort))
+	b.WriteString(fmt.Sprintf("DB_USER=%s\n", c.DBUser))
+	b.WriteString(fmt.Sprintf("DB_PASSWORD=%s\n", c.DBPassword))
+	b.WriteString(fmt.Sprintf("DB_NAME=%s\n", c.DBName))
+	b.WriteString(fmt.Sprintf("DB_MASTER_TENANT_CODE=%s\n", c.DBMasterTenantCode))
+	b.WriteString(fmt.Sprintf("DB_ROOT_USER=%s\n", c.DBRootUser))
+	b.WriteString(fmt.Sprintf("DB_ROOT_PASSWORD=%s\n", c.DBRootPassword))
+	b.WriteString(fmt.Sprintf("DB_TENANT_PREFIX=%s\n", c.DBTenantPrefix))
+	b.WriteString(fmt.Sprintf("DB_SQLITE_PATH=%s\n", c.DBSQLitePath))
+	if c.DBAutoStart {
+		b.WriteString("DB_AUTO_START=true\n")
+	} else {
+		b.WriteString("DB_AUTO_START=false\n")
+	}
+	b.WriteString(fmt.Sprintf("DB_MYSQL_HOME=%s\n", c.DBMySQLHome))
+	b.WriteString(fmt.Sprintf("DB_MYSQL_DATA=%s\n", c.DBMySQLData))
+	b.WriteString(fmt.Sprintf("DB_MYSQL_BUFFER_POOL_MB=%d\n\n", c.DBMySQLBufferPoolMB))
+
+	b.WriteString("# --- Web Server ---\n")
+	b.WriteString(fmt.Sprintf("SERVER_HOST=%s\n", c.ServerHost))
+	b.WriteString(fmt.Sprintf("SERVER_PORT=%s\n\n", c.ServerPort))
+	b.WriteString("# Puerto gRPC para terminales POS (cajas).\n")
+	b.WriteString(fmt.Sprintf("GRPC_PORT=%s\n\n", c.GRPCPort))
+	b.WriteString("# Credenciales de provisión (solo para crear/eliminar empresas).\n")
+	b.WriteString(fmt.Sprintf("DB_PROVISION_USER=%s\n", c.DBProvisionUser))
+	b.WriteString(fmt.Sprintf("DB_PROVISION_PASSWORD=%s\n\n", c.DBProvisionPassword))
+
+	b.WriteString("# --- JWT ---\n")
+	b.WriteString(fmt.Sprintf("JWT_SECRET=%s\n", c.JWTSecret))
+	b.WriteString(fmt.Sprintf("JWT_EXPIRY_HOURS=%d\n\n", c.JWTExpiry))
+
+	b.WriteString("# --- App ---\n")
+	b.WriteString(fmt.Sprintf("APP_NAME=%s\n", c.AppName))
+	b.WriteString(fmt.Sprintf("APP_URL=%s\n", c.AppURL))
+	b.WriteString(fmt.Sprintf("APP_ENV=%s\n", c.AppEnv))
+	b.WriteString(fmt.Sprintf("UPLOAD_PATH=%s\n", c.UploadPath))
+
+	b.WriteString("\n# --- Logger ---\n")
+	if c.LogEnabled {
+		b.WriteString("LOG_ENABLED=1\n")
+	} else {
+		b.WriteString("LOG_ENABLED=0\n")
+	}
+	b.WriteString(fmt.Sprintf("LOG_LEVEL=%s\n", c.LogLevel))
+	b.WriteString(fmt.Sprintf("LOG_FILE=%s\n", c.LogFile))
+
+	if c.TLSCertFile != "" {
+		b.WriteString(fmt.Sprintf("\n# --- TLS ---\n"))
+		b.WriteString(fmt.Sprintf("TLS_CERT_FILE=%s\n", c.TLSCertFile))
+		b.WriteString(fmt.Sprintf("TLS_KEY_FILE=%s\n", c.TLSKeyFile))
+	}
+
+	return os.WriteFile(".env", []byte(b.String()), 0600)
+}
+
+// EnsureEnv loads .env if present, then generates it if missing.
+// Returns the final config (after .env load + auto-generation).
+func EnsureEnv() (*Config, error) {
+	cfg, err := Load()
+	if err != nil {
+		return nil, err
+	}
+	if !EnvFileExists() {
+		fmt.Println("⚙  .env no encontrado — generando automáticamente...")
+		if err := cfg.WriteEnvFile(); err != nil {
+			return nil, fmt.Errorf("no se pudo crear .env: %w", err)
+		}
+		fmt.Println("✅ .env generado. Revise el archivo si necesita ajustes.")
+		// Reload to pick up the now-persisted values
+		cfg, err = Load()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return cfg, nil
+}

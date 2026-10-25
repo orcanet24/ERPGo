@@ -1,0 +1,136 @@
+{{define "content"}}
+<div class="panel panel-bd no-print" style="margin-bottom:10px">
+    <div class="btn-group">
+        <button class="btn btn-default btn-sm" onclick="window.print()"><i class="fa fa-print"></i> Imprimir</button>
+        <a href="/invoice/edit/{{.IID}}" class="btn btn-warning btn-sm"><i class="fa fa-pencil"></i> Editar</a>
+        <a href="/invoice/list" class="btn btn-primary btn-sm"><i class="fa fa-arrow-left"></i> Volver</a>
+    </div>
+</div>
+
+<div class="panel panel-bd printable-area">
+    <div class="panel-body" style="padding:30px">
+        <div class="row">
+            <div class="col-xs-6">
+                <img src="{{if .Setting.InvoiceLogo}}/{{.Setting.InvoiceLogo}}{{else}}{{if .Setting.Logo}}/{{.Setting.Logo}}{{else}}/static/img/icons/logo.png{{end}}{{end}}" alt="" style="max-height:70px;margin-bottom:6px">
+                <h3 style="margin:0 0 4px 0"><strong>{{.Company.CompanyName}}</strong></h3>
+                <p style="margin:0" class="text-muted">
+                    {{if .Company.Address}}{{.Company.Address}}<br>{{end}}
+                    {{if .Company.Mobile}}Tel: {{.Company.Mobile}}<br>{{end}}
+                    {{if .Company.Email}}{{.Company.Email}}{{end}}
+                </p>
+            </div>
+            <div class="col-xs-6 text-right">
+                <h2 style="margin:0">FACTURA</h2>
+                <h4 style="margin:2px 0"><strong>#{{.IID}}</strong></h4>
+                {{if .ControlNo}}<p style="margin:0" class="text-muted">Control: <strong>{{.ControlNo}}</strong></p>{{end}}
+                <p style="margin:0" class="text-muted">Fecha: {{.IDate}}</p>
+                {{if .Company.VatNo}}<p style="margin:0" class="text-muted">RIF Emisor: <strong>{{.Company.VatNo}}</strong></p>{{end}}
+            </div>
+        </div>
+        <hr>
+        <div class="row">
+            <div class="col-xs-6">
+                <strong>Cliente:</strong> {{.CName}}<br>
+                {{if .CRIF}}<strong>RIF:</strong> {{.CRIF}}<br>{{end}}
+                {{if .CMobile}}Tel: {{.CMobile}}<br>{{end}}
+                {{if .CAddr}}{{.CAddr}}{{end}}
+            </div>
+            <div class="col-xs-6 text-right">
+                {{if .IDetails}}<em>{{.IDetails}}</em>{{end}}
+            </div>
+        </div>
+        <br>
+
+        <table class="table table-bordered" style="margin-bottom:10px">
+            <thead>
+                <tr>
+                    <th style="width:50px">#</th>
+                    <th>Producto</th>
+                    <th>Modelo</th>
+                    <th>Unidad</th>
+                    <th class="text-right" style="width:80px">Cant.</th>
+                    <th class="text-right" style="width:100px">Precio</th>
+                    <th class="text-right" style="width:110px">Total</th>
+                </tr>
+            </thead>
+            <tbody>
+            {{range $i, $d := .Details}}
+                <tr>
+                    <td>{{add $i 1}}</td>
+                    <td>{{$d.ProductName}}</td>
+                    <td>{{$d.Model}}</td>
+                    <td>{{$d.Unit}}</td>
+                    <td class="text-right">{{$d.Qty}}</td>
+                    <td class="text-right">{{money $d.Rate}}</td>
+                    <td class="text-right">{{money $d.Total}}</td>
+                </tr>
+            {{else}}
+                <tr><td colspan="7" class="text-center">Sin productos</td></tr>
+            {{end}}
+            </tbody>
+        </table>
+
+        <div class="row">
+            <div class="col-xs-6">
+                <p class="text-muted" style="font-size:12px">
+                    {{if .Company.VatNo}}RIF/NIT: {{.Company.VatNo}}<br>{{end}}
+                    ¡Gracias por su compra!
+                </p>
+            </div>
+            <div class="col-xs-6">
+                <table class="table table-bordered">
+                    {{if gt .Discount 0.0}}
+                    <tr>
+                        <th class="text-right" style="width:50%">Descuento</th>
+                        <td class="text-right">{{.Currency}} {{money .Discount}}</td>
+                    </tr>
+                    {{end}}
+                    {{if gt .Vat 0.0}}
+                    <tr>
+                        <th class="text-right">IVA</th>
+                        <td class="text-right">{{.Currency}} {{money .Vat}}</td>
+                    </tr>
+                    {{end}}
+                    {{if gt .IGTF 0.0}}
+                    <tr>
+                        <th class="text-right text-warning">IGTF (3% pagos en divisa)</th>
+                        <td class="text-right text-warning">{{.Currency}} {{money .IGTF}}</td>
+                    </tr>
+                    {{end}}
+                    {{if gt .Tax 0.0}}
+                    <tr>
+                        <th class="text-right">Impuesto</th>
+                        <td class="text-right">{{.Currency}} {{money .Tax}}</td>
+                    </tr>
+                    {{end}}
+                    {{if gt .Shipping 0.0}}
+                    <tr>
+                        <th class="text-right">Envío</th>
+                        <td class="text-right">{{.Currency}} {{money .Shipping}}</td>
+                    </tr>
+                    {{end}}
+                    <tr class="active">
+                        <th class="text-right"><h4 style="margin:0">Gran Total</h4></th>
+                        <td class="text-right"><h4 style="margin:0"><strong>{{.Currency}} {{money .Grand}}</strong></h4></td>
+                    </tr>
+                    <tr>
+                        <th class="text-right">Pagado</th>
+                        <td class="text-right">{{.Currency}} {{money .Paid}}</td>
+                    </tr>
+                    <tr class="{{if gt .Due 0.0}}danger{{end}}">
+                        <th class="text-right">Por Pagar</th>
+                        <td class="text-right">{{.Currency}} {{money .Due}}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<!-- El formato de impresion (ocultar barra, cabecera y migas, y forzar
+     el fondo en blanco) vive en la capa del tema, dentro de @media print.
+     Aqui no hace falta repetirlo, y repetirlo era justo lo que hacia que
+     una factura saliera distinta segun el tema que tuviera el usuario. -->
+{{end}}

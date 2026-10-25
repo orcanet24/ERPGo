@@ -1,0 +1,84 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Facturas
+                {{/* Sin botón de POS: el POS es otro proyecto (binario aparte que se
+                     comunica por API/gRPC). Aquí apuntaba a /invoice/pos, que ya no
+                     existe, y el botón sólo llevaba a un 404. */}}
+                <span class="btn-group pull-right">
+                    <a href="/invoice/new" class="btn btn-primary btn-sm"><i class="fa fa-plus"></i> Nueva Factura</a>
+                </span>
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <table class="table table-striped table-bordered" id="invoiceTable" width="100%">
+            <thead>
+                <tr>
+                    <th>Factura</th>
+                    <th>Nº</th>
+                    <th>Cliente</th>
+                    <th class="text-right">Total</th>
+                    <th class="text-right">Pagado</th>
+                    <th class="text-right">Due</th>
+                    <th>Fecha</th>
+                    <th>Estado</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    var table = $('#invoiceTable').DataTable({
+        processing: true,
+        serverSide: true,
+        pageLength: 25,
+        order: [[1, 'desc']],
+        ajax: { url: '/invoice/list/data', type: 'POST' },
+        columns: [
+            { data: 'id', render: function (d) { return '#' + d; } },
+            { data: 'invoice_no' },
+            { data: 'customer' },
+            { data: 'total', className: 'text-right' },
+            { data: 'paid', className: 'text-right' },
+            { data: 'due', className: 'text-right', render: function (d) {
+                var n = parseFloat(d) || 0;
+                return n > 0 ? '<span class="erp-value-danger">' + d + '</span>' : d;
+            }},
+            { data: 'date' },
+            { data: 'draft', render: function (d) {
+                return d === 'yes' ? '<span class="label label-default">Borrador</span>' : '<span class="label label-success">Facturada</span>';
+            }},
+            { data: null, orderable: false, searchable: false, render: function (d) {
+                return '<a class="btn btn-info btn-xs" href="/invoice/details/' + d.id + '" title="Ver"><i class="fa fa-eye"></i></a> ' +
+                    '<a class="btn btn-warning btn-xs" href="/invoice/edit/' + d.id + '" title="Editar"><i class="fa fa-pencil"></i></a> ' +
+                    '<button class="btn btn-danger btn-xs do-del" data-id="' + d.id + '" title="Eliminar"><i class="fa fa-trash"></i></button>';
+            }}
+        ]
+    });
+
+    $('#invoiceTable').on('click', '.do-del', function () {
+        var id = $(this).data('id');
+        swal({
+            title: "¿Eliminar factura #" + id + "?",
+            text: "Se eliminarán también sus comprobantes contables.",
+            type: "warning",
+            showCancelButton: true,
+            confirmButtonText: "Eliminar",
+            confirmButtonColor: ERPGo.appearance.css("--erp-danger", "#9c3333")
+        }, function () {
+            $.post('/invoice/delete/' + id, function (r) {
+                if (r.status == 1) { toastr.success(r.msg); table.ajax.reload(); }
+                else toastr.error(r.error || 'Error');
+            }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+        });
+    });
+});
+</script>
+{{end}}

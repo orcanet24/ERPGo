@@ -1,0 +1,124 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>ADDONS</h4></div>
+    </div>
+    <div class="panel-body">
+
+        <p>Los addons son módulos de terceros que extienden el sistema. Para instalar uno, coloca su directorio en <code>addons/&lt;codigo&gt;/</code> con un archivo <code>module.json</code> válido, luego presiona "Descubrir".</p>
+
+        <div style="margin:15px 0">
+            <button class="btn btn-primary" id="btnDiscover"><i class="fa fa-search"></i> Descubrir addons</button>
+        </div>
+
+        <div id="discoverResults"></div>
+
+        <hr>
+
+        <h4>Registrados</h4>
+        <table class="table table-bordered" id="registeredTable" style="width:100%">
+            <thead>
+                <tr>
+                    <th>Código</th>
+                    <th>Nombre</th>
+                    <th>Versión</th>
+                    <th>Autor</th>
+                    <th>Estado</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function() {
+    // Cargar addons registrados
+    function loadRegistered() {
+        $.getJSON('/module/list/data', function(resp) {
+            var tbody = $('#registeredTable tbody').empty();
+            if (resp.data && resp.data.length > 0) {
+                resp.data.forEach(function(m) {
+                    tbody.append('<tr>' +
+                        '<td>' + m.id + '</td>' +
+                        '<td>' + m.name + '</td>' +
+                        '<td>' + m.version + '</td>' +
+                        '<td>' + (m.author || '') + '</td>' +
+                        '<td>' + (m.is_active ? '<span class="label label-success">Activo</span>' : '<span class="label label-warning">Inactivo</span>') + '</td>' +
+                        '<td><button class="btn btn-xs btn-danger btn-uninstall" data-code="' + m.id + '">Desinstalar</button></td>' +
+                    '</tr>');
+                });
+            }
+        });
+    }
+    loadRegistered();
+
+    // Descubrir addons
+    $('#btnDiscover').on('click', function() {
+        var $btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> Escaneando...');
+        $.getJSON('/module/addons/discover', function(resp) {
+            $btn.prop('disabled', false).html('<i class="fa fa-search"></i> Descubrir addons');
+            if (!resp.data || resp.data.length === 0) {
+                $('#discoverResults').html('<div class="alert alert-info">No se encontraron addons en addons/</div>');
+                return;
+            }
+            var html = '<h4>Descubiertos</h4><table class="table table-bordered"><thead><tr><th>Código</th><th>Nombre</th><th>Versión</th><th>Autor</th><th>Estado</th><th>Acción</th></tr></thead><tbody>';
+            resp.data.forEach(function(a) {
+                html += '<tr>' +
+                    '<td>' + a.code + '</td>' +
+                    '<td>' + a.name + '</td>' +
+                    '<td>' + a.version + '</td>' +
+                    '<td>' + (a.author || '') + '</td>' +
+                    '<td>' + (a.status === 'error' ? '<span class="label label-danger" title="' + (a.error || '') + '">Error</span>' : (a.is_active ? '<span class="label label-success">Activo</span>' : '<span class="label label-info">Descubierto</span>')) + '</td>' +
+                    '<td>' + (a.status === 'error' ? '-' : (a.is_active ? '-' : '<button class="btn btn-xs btn-success btn-install" data-code="' + a.code + '">Instalar</button>')) + '</td>' +
+                '</tr>';
+            });
+            html += '</tbody></table>';
+            $('#discoverResults').html(html);
+        }).fail(function() {
+            $btn.prop('disabled', false).html('<i class="fa fa-search"></i> Descubrir addons');
+            alert('Error escaneando addons');
+        });
+    });
+
+    // Instalar addon
+    $(document).on('click', '.btn-install', function() {
+        var code = $(this).data('code');
+        $.ajax({
+            url: '/module/addons/' + code + '/install',
+            method: 'POST',
+            contentType: 'application/json',
+            success: function(resp) {
+                alert(resp.msg || 'Addon instalado');
+                location.reload();
+            },
+            error: function(xhr) {
+                var r = xhr.responseJSON || {};
+                alert(r.error || 'Error instalando addon');
+            }
+        });
+    });
+
+    // Desinstalar addon
+    $(document).on('click', '.btn-uninstall', function() {
+        var code = $(this).data('code');
+        if (!confirm('Desinstalar ' + code + '?')) return;
+        $.ajax({
+            url: '/module/addons/' + code + '/uninstall',
+            method: 'POST',
+            success: function(resp) {
+                alert(resp.msg || 'Addon desinstalado');
+                location.reload();
+            },
+            error: function(xhr) {
+                var r = xhr.responseJSON || {};
+                alert(r.error || 'Error desinstalando addon');
+            }
+        });
+    });
+});
+</script>
+{{end}}

@@ -1,0 +1,367 @@
+{{define "content"}}
+<link href="/static/css/ai-setting.css" rel="stylesheet" type="text/css" />
+
+
+<div class="ai_setting_container">
+    <div class="section_head">
+        <p class="heading">Configuración IA</p>
+    </div>
+
+    {{if .HasActive}}
+        {{if .ActiveUsable}}
+            <div class="ai_provider_alert alert_ok">
+                Proveedor activo: <strong>{{.Active.Name}}</strong>
+                &mdash; modelo <strong>{{.Active.Model}}</strong>
+                &mdash; <span class="cell_url">{{.Active.BaseURL}}</span>
+            </div>
+        {{else}}
+            <div class="ai_provider_alert alert_warn">
+                El proveedor <strong>{{.Active.Name}}</strong> está activo pero no tiene API key
+                (los servidores locales como Ollama o LM Studio no la necesitan).
+                Edítalo y guarda su clave para poder usarlo.
+            </div>
+        {{end}}
+    {{else if .LegacyActive}}
+        <div class="ai_provider_alert alert_info">
+            Ningún proveedor está activo: se está usando la configuración heredada
+            (clave de OpenAI de <code>ai_setting</code>). Active un proveedor de la lista
+            para reemplazarla.
+        </div>
+    {{else}}
+        <div class="ai_provider_alert alert_error">
+            No hay ningún proveedor de IA activo. Ve a Configuración IA y activa o añade uno.
+        </div>
+    {{end}}
+
+    <!-- Consumo de inferencia (metering) -->
+    <div class="ai_usage_panel">
+        <div class="panel_head">
+            <span class="section_titles">Consumo de inferencia</span>
+            <select id="aiUsageDays" class="input_section" style="width:auto">
+                <option value="7">Últimos 7 días</option>
+                <option value="30" selected>Últimos 30 días</option>
+                <option value="90">Últimos 90 días</option>
+            </select>
+        </div>
+        <p class="section_hint">
+            Tokens consumidos por las llamadas a los proveedores de IA, por periodo.
+            Es la base para la facturación de los paquetes de inferencia.
+        </p>
+        <div id="aiUsageSummary" class="ai_usage_cards">
+            <span class="ai_usage_empty">Cargando consumo…</span>
+        </div>
+        <div id="aiUsageByProvider"></div>
+    </div>
+
+    <!-- Providers -->
+    <div class="ai_providers_panel">
+        <div class="panel_head">
+            <p class="section_titles">Proveedores</p>
+            <button type="button" id="btnNewProvider" class="btn_new_provider">+ Nuevo proveedor</button>
+        </div>
+
+        <table class="table table-bordered ai_providers_table">
+            <thead>
+                <tr>
+                    <th>Nombre</th>
+                    <th>Proveedor</th>
+                    <th>Endpoint (fijo en el binario)</th>
+                    <th>Modelo</th>
+                    <th>Estado</th>
+                    <th style="width:220px">Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Providers}}
+                <tr data-id="{{.ID}}"
+                    data-name="{{.Name}}"
+                    data-vendor="{{.Vendor}}"
+                    data-api-key=""
+                    data-model="{{.Model}}"
+                    data-temperature="{{.Temperature}}"
+                    data-max-tokens="{{.MaxTokens}}"
+                    data-prompt="{{.PromptTemplate}}">
+                    <td><strong>{{.Name}}</strong></td>
+                    <td>{{.VendorLabel}}</td>
+                    <td class="cell_url">{{.BaseURL}}</td>
+                    <td>{{.Model}}</td>
+                    <td>
+                        {{if .IsActive}}
+                            <span class="badge_ai badge_on">Activo</span>
+                        {{else}}
+                            <span class="badge_ai badge_off">Inactivo</span>
+                        {{end}}
+                    </td>
+                    <td>
+                        {{if not .IsActive}}
+                            <button type="button" class="btn_row btn_activate">Activar</button>
+                        {{end}}
+                        <button type="button" class="btn_row btn_edit">Editar</button>
+                        <button type="button" class="btn_row btn_delete">Eliminar</button>
+                    </td>
+                </tr>
+                {{else}}
+                <tr>
+                    <td colspan="6" class="empty_row">No hay proveedores. Pulse "Nuevo proveedor" para crear el primero.</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+
+        <p class="provider_hint">
+            Solo se permiten los 3 proveedores oficiales; el endpoint está compilado en el binario y
+            <strong>no es configurable</strong> (una URL guardada en la base de datos se ignora).
+            Cada proveedor necesita su propia API key. Solo un proveedor puede estar activo a la vez.
+        </p>
+    </div>
+
+    <!-- Create / edit provider -->
+    <div class="update_ai_setting_section">
+        <p class="section_titles" id="providerFormTitle">Nuevo proveedor</p>
+
+        <form id="providerForm" class="form_container">
+            <input type="hidden" name="id" id="provider_id" value="0" />
+
+            <div class="input_label">
+                <label class="label_name" for="provider_name">Nombre</label>
+                <input type="text" name="name" id="provider_name" placeholder="Mi proveedor"
+                    class="input_section" style="width:100%" autocomplete="off">
+            </div>
+
+            <div class="input_label">
+                <label class="label_name" for="provider_vendor">Proveedor *</label>
+                <select name="vendor" id="provider_vendor" class="input_section" style="width:100%">
+                    <option value="orc24" selected>ORC24 (ia.orcanet1724.click) — inferencia propia</option>
+                    <option value="openai">OpenAI (api.openai.com) — requiere clave propia</option>
+                </select>
+                <small class="erp-caption">El endpoint lo resuelve el binario desde una whitelist compilada: no se puede apuntar a otra API.</small>
+            </div>
+
+            <div class="input_label">
+                <label class="label_name" for="api_key">API Key</label>
+                <input type="password" name="api_key" id="api_key"
+                    placeholder="clave del proveedor" class="input_section"
+                    style="width:100%" autocomplete="off">
+                <small class="erp-caption">
+                    <a href="#" id="toggleApiKey">Mostrar / ocultar clave</a>
+                </small>
+            </div>
+
+            <div class="input_label">
+                <label class="label_name" for="model">Modelo</label>
+                <input type="text" list="ai_models" name="model" id="model"
+                    placeholder="gpt-4o-mini" class="input_section" style="width:100%" autocomplete="off">
+                <datalist id="ai_models">
+                    <option value="gpt-4o-mini"></option>
+                    <option value="gpt-4o"></option>
+                    <option value="gpt-4.1-mini"></option>
+                    <option value="gpt-4-turbo"></option>
+                    <option value="o4-mini"></option>
+                    <option value="openai/gpt-4o-mini"></option>
+                    <option value="anthropic/claude-3.5-sonnet"></option>
+                    <option value="google/gemini-flash-1.5"></option>
+                    <option value="llama-3.3-70b-versatile"></option>
+                    <option value="llama-3.1-8b-instant"></option>
+                    <option value="deepseek-chat"></option>
+                    <option value="deepseek-reasoner"></option>
+                    <option value="mistral-small-latest"></option>
+                    <option value="mistral-large-latest"></option>
+                    <option value="grok-2-latest"></option>
+                    <option value="grok-3-mini"></option>
+                    <option value="meta-llama/Llama-3.3-70B-Instruct-Turbo"></option>
+                    <option value="llama3.2"></option>
+                    <option value="qwen2.5:7b"></option>
+                    <option value="local-model"></option>
+                </datalist>
+            </div>
+
+            <div class="input_label">
+                <label class="label_name" for="temperature">Temperatura</label>
+                <input type="number" step="0.1" min="0" max="2" name="temperature" id="temperature"
+                    value="0.7" placeholder="0.7" class="input_section" style="width:100%">
+            </div>
+
+            <div class="input_label">
+                <label class="label_name" for="max_tokens">Max Tokens</label>
+                <input type="number" min="1" name="max_tokens" id="max_tokens"
+                    value="400" placeholder="400" class="input_section" style="width:100%">
+            </div>
+
+            <div class="input_label">
+                <label class="label_name" for="prompt_template">Plantilla de prompt (rol del sistema)</label>
+                <textarea name="prompt_template" id="prompt_template" rows="3" class="input_section"
+                    style="width:100%" placeholder="You are a business analyst."></textarea>
+            </div>
+
+            <div class="submit_button_section">
+                <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
+            <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
+            <button type="button" class="btn_cancel" id="providerCancel">Cancelar</button>
+            </div>
+
+            <p class="provider_hint">
+                La conexión con el proveedor SIEMPRE la inicia este servidor (chat completions + tool calling,
+                estándar compatible con OpenAI). El código añade <code>/chat/completions</code> automáticamente.
+            </p>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    function resetProviderForm() {
+        $('#providerForm')[0].reset();
+        $('#provider_id').val('0');
+        $('#temperature').val('0.7');
+        $('#max_tokens').val('400');
+        $('#api_key').attr('type', 'password');
+        $('#providerFormTitle').text('Nuevo proveedor');
+    }
+
+    $('#toggleApiKey').on('click', function (e) {
+        e.preventDefault();
+        var field = $('#api_key');
+        field.attr('type', field.attr('type') === 'password' ? 'text' : 'password');
+    });
+
+    $('#btnNewProvider').on('click', function () {
+        resetProviderForm();
+        $('#provider_name').focus();
+    });
+
+    $('#providerCancel').on('click', function () {
+        resetProviderForm();
+    });
+
+    $('#providerForm').on('submit', function (e) {
+        e.preventDefault();
+        $.ajax({
+            url: '/ai/providers/save',
+            type: 'POST',
+            data: $(this).serialize(),
+            dataType: 'json',
+            success: function (r) {
+                if (r.status === 'success') {
+                    toastr.success(r.msg || 'Proveedor guardado');
+                    setTimeout(function () { location.reload(); }, 700);
+                } else {
+                    toastr.error(r.message || 'No se pudo guardar el proveedor');
+                }
+            },
+            error: function (x) {
+                toastr.error(x.responseJSON && x.responseJSON.message ? x.responseJSON.message : 'Error al guardar el proveedor');
+            }
+        });
+    });
+
+    $('.ai_providers_table').on('click', '.btn_edit', function () {
+        var $row = $(this).closest('tr');
+        $('#provider_id').val($row.attr('data-id'));
+        $('#provider_name').val($row.attr('data-name'));
+        $('#provider_vendor').val($row.attr('data-vendor') || 'openai');
+        $('#api_key').val($row.attr('data-api-key'));
+        $('#model').val($row.attr('data-model'));
+        $('#temperature').val($row.attr('data-temperature'));
+        $('#max_tokens').val($row.attr('data-max-tokens'));
+        $('#prompt_template').val($row.attr('data-prompt'));
+        $('#api_key').attr('type', 'password');
+        $('#providerFormTitle').text('Editar proveedor: ' + $row.attr('data-name'));
+        $('html, body').animate({ scrollTop: $('#providerForm').offset().top }, 300);
+    });
+
+    $('.ai_providers_table').on('click', '.btn_activate', function () {
+        var id = $(this).closest('tr').attr('data-id');
+        $.post('/ai/providers/activate/' + id, {}, function (res) {
+            if (res.status === 'success') {
+                toastr.success(res.msg || 'Proveedor activado');
+                setTimeout(function () { location.reload(); }, 700);
+            } else {
+                toastr.error(res.message || 'No se pudo activar el proveedor');
+            }
+        }, 'json').fail(function (x) {
+            toastr.error(x.responseJSON && x.responseJSON.message ? x.responseJSON.message : 'No se pudo activar el proveedor');
+        });
+    });
+
+    $('.ai_providers_table').on('click', '.btn_delete', function () {
+        var $row = $(this).closest('tr');
+        var id = $row.attr('data-id');
+        if (!window.confirm('¿Eliminar el proveedor "' + $row.attr('data-name') + '"?')) {
+            return;
+        }
+        $.post('/ai/providers/delete/' + id, {}, function (res) {
+            if (res.status === 'success') {
+                toastr.success(res.msg || 'Proveedor eliminado');
+                setTimeout(function () { location.reload(); }, 700);
+            } else {
+                toastr.error(res.message || 'No se pudo eliminar el proveedor');
+            }
+        }, 'json').fail(function (x) {
+            toastr.error(x.responseJSON && x.responseJSON.message ? x.responseJSON.message : 'No se pudo eliminar el proveedor');
+        });
+    });
+
+    // ---------- Consumo de inferencia ----------
+    // TextContent, no HTML: los nombres de proveedor vienen de la BD y no se
+    // interpolan como markup.
+    function aiNum(n) { return (n || 0).toLocaleString('es-VE'); }
+
+    function aiUsageCard(label, value) {
+        return '<div class="ai_usage_card"><span class="ai_usage_label"></span><b class="ai_usage_value"></b></div>';
+    }
+
+    function loadAIUsage() {
+        var days = $('#aiUsageDays').val() || 30;
+        $('#aiUsageSummary').text('Cargando consumo…');
+        $.getJSON('/ai/usage?days=' + encodeURIComponent(days), function (res) {
+            if (!res || res.status !== 'success') { return; }
+
+            var $cards = $('#aiUsageSummary').empty();
+            var cards = [
+                ['Llamadas', aiNum(res.requests)],
+                ['Tokens totales', aiNum(res.total)],
+                ['Tokens de entrada', aiNum(res.prompt)],
+                ['Tokens de salida', aiNum(res.completion)],
+                ['Coste estimado OpenAI', '$' + (res.cost_usd || 0).toFixed(4)]
+            ];
+            cards.forEach(function (c) {
+                $cards.append(aiUsageCard(c[0], c[1]));
+            });
+            $cards.find('.ai_usage_label').each(function (i) { $(this).text(cards[i][0]); });
+            $cards.find('.ai_usage_value').each(function (i) { $(this).text(cards[i][1]); });
+
+            var $prov = $('#aiUsageByProvider').empty();
+            if (!res.by_provider || !res.by_provider.length) {
+                $prov.append($('<p class="ai_usage_empty"></p>').text('Todavía no hay consumo registrado en este periodo.'));
+                return;
+            }
+            var $table = $('<table class="table table-striped ai_usage_table"></table>');
+            var $head = $('<thead></thead>').appendTo($table);
+            $('<tr></tr>').appendTo($head)
+                .append($('<th></th>').text('Proveedor'))
+                .append($('<th></th>').text('Llamadas'))
+                .append($('<th></th>').text('Tokens'))
+                .append($('<th></th>').text('Coste estimado'));
+            var $body = $('<tbody></tbody>').appendTo($table);
+            res.by_provider.forEach(function (p) {
+                $('<tr></tr>').appendTo($body)
+                    .append($('<td></td>').text(p.Label || p.Vendor))
+                    .append($('<td></td>').text(aiNum(p.Requests)))
+                    .append($('<td></td>').text(aiNum(p.TotalTokens)))
+                    .append($('<td></td>').text('$' + (p.CostUSD || 0).toFixed(4)));
+            });
+            $prov.append($table);
+            $prov.append($('<p class="ai_usage_note"></p>').text(
+                'El coste estimado solo aplica a OpenAI (tarifas de referencia por token). ORC24 se factura por plan: ajústalo a tu tarifa real.'));
+        }).fail(function () {
+            $('#aiUsageSummary').text('No se pudo leer el consumo de inferencia.');
+        });
+    }
+
+    $('#aiUsageDays').on('change', loadAIUsage);
+    loadAIUsage();
+});
+</script>
+{{end}}

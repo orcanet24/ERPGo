@@ -1,0 +1,66 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>{{.Title}}</h4></div>
+    </div>
+    <div class="panel-body">
+        <table class="table table-bordered table-striped" id="pagarTable" style="width:100%">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Compra</th>
+                    <th>Proveedor</th>
+                    <th class="text-right">Monto</th>
+                    <th class="text-right">Pagado</th>
+                    <th class="text-right">Saldo</th>
+                    <th>Fecha Pago</th>
+                    <th>Referencia</th>
+                    <th>Notas</th>
+                    <th></th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#pagarTable').DataTable({
+        processing: true, serverSide: true,
+        ajax: { url: '/pagar/list/data', type: 'GET' },
+        columns: [
+            { data: 'id' },
+            { data: 'purchase_id' },
+            { data: 'supplier_name' },
+            { data: 'amount', className: 'text-right' },
+            { data: 'paid_amount', className: 'text-right' },
+            { data: 'due_amount', className: 'text-right' },
+            { data: 'payment_date' },
+            { data: 'reference' },
+            { data: 'notes' },
+            { data: 'id', orderable: false, render: function (d) {
+                return '<button class="btn btn-xs btn-primary btn-pay" data-id="' + d + '"><i class="fa fa-money"></i> Pagar</button>';
+            } }
+        ],
+        order: [[0, 'desc']]
+    });
+
+    // Pagar: confirma y registra el pago contra la cuenta por pagar.
+    $('#pagarTable').on('click', '.btn-pay', function () {
+        var id = $(this).data('id');
+        var amount = window.prompt('Monto a pagar:');
+        if (!amount) { return; }
+        $.post('/pagar/pay', { id: id, amount: amount }, function (res) {
+            if (res && res.status === 1) {
+                $('#pagarTable').DataTable().ajax.reload(null, false);
+                if (window.toastr) { toastr.success(res.msg || 'Pago registrado'); }
+            } else {
+                alert((res && res.msg) || 'No se pudo registrar el pago');
+            }
+        }).fail(function () { alert('Error al registrar el pago'); });
+    });
+});
+</script>
+{{end}}

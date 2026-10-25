@@ -1,0 +1,53 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <h3 class="panel-title">{{.Title}}</h3>
+        <div class="btn-group pull-right">
+            <a href="/return/new" class="btn btn-success btn-sm"><i class="fa fa-plus"></i> Nueva Devolución</a>
+        </div>
+    </div>
+    <div class="panel-body">
+        <table class="table table-bordered table-striped" id="retTable">
+            <thead>
+                <tr>
+                    <th>No.</th>
+                    <th>Fecha</th>
+                    <th>Tipo</th>
+                    <th>Producto</th>
+                    <th>Cantidad</th>
+                    <th>Total</th>
+                    <th>Razón</th>
+                    <th width="120">Acciones</th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function() {
+    $('#retTable').DataTable({
+        processing: true,
+        serverSide: true,
+        ajax: {
+            url: '/return/list/data',
+            data: function(d) { }
+        },
+        columns: [
+            { data: 'return_id' },
+            { data: 'date_return' },
+            { data: function(r) { return r.invoice_id ? 'Venta' : 'Compra'; } },
+            { data: 'product_name' },
+            { data: 'ret_qty' },
+            { data: 'net_total_amount' },
+            { data: 'reason' },
+            { data: null, render: function(d,t,r) {
+                return '<a href="/return/details/'+r.return_id+'" class="btn btn-xs btn-info"><i class="fa fa-eye"></i></a>';
+            }, orderable: false }
+        ]
+    });
+});
+</script>
+{{end}}

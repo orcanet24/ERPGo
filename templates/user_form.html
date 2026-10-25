@@ -1,0 +1,156 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>{{.Title}}</h4></div>
+    </div>
+    <div class="panel-body">
+        <form id="userForm" style="max-width:600px">
+            <input type="hidden" name="user_id" value="{{if .U}}{{.U.ID}}{{end}}">
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Nombre *</label>
+                        <input type="text" class="form-control" name="first_name" value="{{if .U}}{{.U.First}}{{end}}" required>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Apellido</label>
+                        <input type="text" class="form-control" name="last_name" value="{{if .U}}{{.U.Last}}{{end}}">
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Teléfono</label>
+                        <input type="text" class="form-control" name="phone" value="{{if .U}}{{.U.Phone}}{{end}}">
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Nivel</label>
+                        <select class="form-control" name="user_type">
+                            <option value="2" {{if and .U (eq .U.Type 2)}}selected{{end}}>Usuario</option>
+                            <option value="3" {{if and .U (eq .U.Type 3)}}selected{{end}}>Empleado</option>
+                            <option value="1" {{if and .U (eq .U.Type 1)}}selected{{end}}>Administrador</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            {{/*
+              EL ROL DE SEGURIDAD ES LO QUE DA LOS PERMISOS.
+
+              El «nivel» de arriba es un dato del usuario (administrador o no); el
+              rol es lo que decide QUÉ MÓDULOS ve y qué puede hacer en cada uno, y
+              se edita en Roles y Permisos. Sin este desplegable, un usuario creado
+              aquí quedaba sin rol y el ERP le respondía 403 en todo: la pantalla de
+              roles existía, pero no había forma de aplicarle ninguno a una persona.
+            */}}
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Rol de seguridad</label>
+                        <select class="form-control" name="role_id">
+                            <option value="">— sin rol (solo lo que su nivel permita) —</option>
+                            {{range .Roles}}<option value="{{.ID}}" {{if eq $.UserRoleID .ID}}selected{{end}}>{{.Type}}</option>{{end}}
+                        </select>
+                        <p class="help-block">
+                            Los permisos por módulo se editan en
+                            <a href="/role/list" target="_blank">Roles y Permisos</a>.
+                            Dejar «sin rol» deja al usuario en solo lectura de lo poco
+                            que no pide permisos.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Usuario (login) *</label>
+                        <input type="text" class="form-control" name="username" value="{{if .U}}{{.U.Username}}{{end}}" required>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Contraseña {{if .U}}(dejar vacío para no cambiar){{else}}*{{end}}</label>
+                        <input type="password" class="form-control" name="password" {{if not .U}}required{{end}}>
+                    </div>
+                </div>
+            </div>
+            <hr>
+            <div class="form-group">
+                <label><input type="checkbox" name="is_agent" value="1" id="esAgente" {{if .Agente}}checked{{end}}>
+                    Este usuario es un <strong>agente de IA</strong></label>
+                <p class="help-block">
+                    Un agente es un empleado que no está en nómina: no inicia sesión, no cobra,
+                    y su coste sale de la partida de consumo de IA. Se le da de alta aquí igual
+                    que un humano, y el sistema le asigna el agente correspondiente.
+                </p>
+            </div>
+            <div id="bloqueAgente" style="{{if not .Agente}}display:none{{end}}">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label>Rol de seguridad *</label>
+                            <select class="form-control" name="agent_role_id">
+                                <option value="">— elige el rol —</option>
+                                {{range .Roles}}<option value="{{.ID}}" {{if and $.Agente (eq $.Agente.RoleID .ID)}}selected{{end}}>{{.Type}}</option>{{end}}
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label>Departamento *</label>
+                            <select class="form-control" name="agent_department">
+                                {{range .Departamentos}}<option value="{{.Value}}" {{if and $.Agente (eq $.Agente.Department .Value)}}selected{{end}}>{{.Label}}</option>{{end}}
+                            </select>
+                            <p class="help-block">
+                                Decide qué tablas ve el agente y sobre cuáles puede consultar.
+                                Lo que no entre en su departamento, no lo ve y no lo puede leer.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Prompt de configuración</label>
+                    <textarea class="form-control" name="agent_config_prompt" rows="4"
+                        placeholder="Ej: solo clientes de la zona oeste; toda consulta va con el número de factura.">{{if .Agente}}{{.Agente.ConfigPrompt}}{{end}}</textarea>
+                    <p class="help-block">
+                        Se antepone al prompt del área y describe cómo se comporta <em>este</em>
+                        agente. Si contradice el comportamiento del departamento, manda el del
+                        departamento.
+                    </p>
+                </div>
+            </div>
+            <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
+            <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
+            <a href="/user/list" class="btn btn-default">Volver</a>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    var submittedAction = 'save';
+
+    $('button[type=submit]', '#userForm').on('click', function () { submittedAction = $(this).val(); });
+
+    // Al marcar "es agente" aparece el bloque. Al desmarcarlo se ocultan sus
+    // campos pero NO se borran: el usuario puede estar editando un agente y
+    // quitar la casilla por error.
+    $('#esAgente').on('change', function () {
+        $('#bloqueAgente').toggle($(this).is(':checked'));
+    });
+    $('#userForm').on('submit', function (e) {
+        e.preventDefault();
+        $.post('/user/save', $(this).serialize(), function (r) {
+            if (r.status == 1) { toastr.success(r.msg); if (submittedAction === 'save_exit') setTimeout(function () { location.href = '/user/list'; }, 700); }
+            else toastr.error(r.error || 'Error');
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+    });
+});
+</script>
+{{end}}

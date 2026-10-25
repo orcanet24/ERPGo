@@ -1,0 +1,65 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Ejecución #{{.Run.ID}} — {{.Run.TaskName}}
+                {{if eq .Run.Status "done"}}<span class="label label-success">completada</span>{{end}}
+                {{if eq .Run.Status "failed"}}<span class="label label-danger">fallida</span>{{end}}
+                {{if eq .Run.Status "reverted"}}<span class="label label-warning">revertida</span>{{end}}
+                {{if eq .Run.Status "running"}}<span class="label label-info">en ejecución</span>{{end}}
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <p>
+            <strong>Agente:</strong> {{.Run.AgentName}} &nbsp;·&nbsp;
+            <strong>Inicio:</strong> {{.Run.StartedAt}} &nbsp;·&nbsp;
+            <strong>Fin:</strong> {{if .Run.FinishedAt}}{{.Run.FinishedAt}}{{else}}—{{end}}
+        </p>
+
+        {{if .Run.FinalReport}}
+        <div class="panel panel-default">
+            <div class="panel-heading"><strong>Informe final</strong></div>
+            <div class="panel-body"><pre style="white-space:pre-wrap;max-height:420px;overflow:auto">{{.Run.FinalReport}}</pre></div>
+        </div>
+        {{end}}
+
+        <div class="panel panel-default">
+            <div class="panel-heading"><strong>Bitácora ({{len .Run.Steps}} pasos)</strong></div>
+            <div class="panel-body">
+                <table class="table table-condensed table-striped">
+                    <thead><tr><th style="width:60px">Paso</th><th style="width:80px">Tipo</th><th style="width:160px">Herramienta</th><th>Detalle</th></tr></thead>
+                    <tbody>
+                        {{range .Run.Steps}}
+                        <tr>
+                            <td>{{.N}}</td>
+                            <td>{{if eq .Type "tool"}}<span class="label label-primary">tool</span>{{else if eq .Type "error"}}<span class="label label-danger">error</span>{{else}}<span class="label label-default">modelo</span>{{end}}</td>
+                            <td>{{.Name}}</td>
+                            <td style="max-width:520px"><small><pre style="white-space:pre-wrap;margin:0">{{if .Input}}in: {{.Input}}
+{{end}}{{if .Output}}out: {{.Output}}{{end}}</pre></small></td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        {{if and .Run.CanUndo (ne .Run.Status "reverted")}}
+        <button class="btn btn-danger" onclick="undoRun({{.Run.ID}})"><i class="fa fa-undo"></i> Revertir tarea</button>
+        <small class="text-muted">Solo administradores. Las acciones se compensan en orden inverso; los asientos contables se anulan con contra-asientos, nunca se borran.</small>
+        {{end}}
+        <a class="btn btn-default" href="/ai/tasks">Volver</a>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+function undoRun(id) {
+    if (!confirm('¿Revertir TODAS las acciones de esta tarea?')) return;
+    $.post('/ai/tasks/runs/' + id + '/undo', function (r) {
+        if (r.status === 1) { location.reload(); } else { alert(r.error || 'Error al revertir'); }
+    });
+}
+</script>
+{{end}}

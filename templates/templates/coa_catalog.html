@@ -1,0 +1,147 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Plan de Cuentas de la empresa</h4></div>
+    </div>
+    <div class="panel-body">
+        <p class="text-muted">
+            El plan de cuentas pertenece a la empresa, no al sistema. Hay dos caminos
+            y ninguno anula al otro: usar la codificaci&oacute;n que ya manejas, o cargar
+            el cat&aacute;logo del SENIAT como punto de partida.
+        </p>
+
+        <div class="row">
+            <div class="col-md-6">
+                <div class="box box-primary" style="box-shadow:none">
+                    <div class="box-body">
+                        <h4 style="margin-top:0">{{.Catalog | catalogLabel}}</h4>
+                        <table class="table" style="margin-bottom:8px">
+                            <tr><td style="width:45%">Cuentas</td><td><strong>{{.AccountCount}}</strong></td></tr>
+                            {{if .Source}}<tr><td>Origen</td><td>{{.Source}}</td></tr>{{end}}
+                            {{if .AppliedAt}}<tr><td>Aplicado</td><td>{{.AppliedAt}}</td></tr>{{end}}
+                            {{if .Notes}}<tr><td>Notas</td><td>{{.Notes}}</td></tr>{{end}}
+                        </table>
+
+                        {{if .CollisionCount}}
+                        <div class="alert alert-warning">
+                            <strong>{{.CollisionCount}} c&oacute;digos con nombre distinto</strong> al
+                            cat&aacute;logo est&aacute;ndar. Estas cuentas tienen el c&oacute;digo pero
+                            el nombre que puso la empresa, y as&iacute; se quedan as&iacute;:
+                            el plan de la empresa no se pisa.
+                            <ul style="margin:8px 0 0;padding-left:18px">
+                                {{range .Collisions}}<li style="font-size:12px">{{.}}</li>{{end}}
+                            </ul>
+                        </div>
+                        {{end}}
+
+                        {{if .OrderMissing}}
+                        <div class="alert alert-info">
+                            <strong>{{len .OrderMissing}} cuentas de orden (0x) no cargadas.</strong>
+                            El SENIAT las numera con cero a la izquierda (06, 0124...) y el
+                            c&oacute;digo de cuenta de este sistema es num&eacute;rico, as&iacute; que
+                            no admite ese cero. Se listan para que la diferencia con el
+                            cat&aacute;logo oficial sea visible, no para resolverla por el
+                            camino corto.
+                            <ul style="margin:8px 0 0;padding-left:18px">
+                                {{range .OrderMissing}}<li style="font-size:12px">{{.}}</li>{{end}}
+                            </ul>
+                        </div>
+                        {{end}}
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="box box-default" style="box-shadow:none">
+                    <div class="box-body">
+                        <h4 style="margin-top:0">Cambiar de cat&aacute;logo</h4>
+
+                        {{if .IsCONASEV}}
+                        <p>Esta empresa usa el cat&aacute;logo est&aacute;ndar. Puedes volver a tu
+                        propia codificaci&oacute;n en cualquier momento: eso solo cambia la
+                        etiqueta, <strong>no borra ninguna cuenta</strong>.</p>
+                        <button type="button" class="btn btn-default" id="btnUseOwn">
+                            <i class="fa fa-pencil"></i> Usar mi propia codificaci&oacute;n
+                        </button>
+                        {{else}}
+                        <p>Cargar el cat&aacute;logo del SENIAT agrega sus cuentas al plan.
+                        Solo se permite sobre un plan vac&iacute;o que ya sea CONASEV: si la
+                        empresa ya defin&iacute;o sus c&oacute;digos, mezclarlos ser&iacute;a crear
+                        dos nombres para el mismo c&oacute;digo.</p>
+                        <button type="button" class="btn btn-primary" id="btnApplyCONASEV">
+                            <i class="fa fa-download"></i> Cargar cat&aacute;logo CONASEV
+                        </button>
+                        {{end}}
+
+                        <hr>
+                        <p class="text-muted" style="font-size:12px;margin-bottom:0">
+                            Puedes crear, renombrar y dar de baja cuentas individualmente
+                            desde el <a href="/account/coa">&aacute;rbol de cuentas</a>.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function coaPost(url, onDone) {
+    $.post(url, function (res) {
+        if (res.status) {
+            toastr.success(res.msg || 'Listo');
+            setTimeout(function () { location.reload(); }, 700);
+        } else {
+            toastr.error(res.msg || res.error || 'No se pudo completar');
+        }
+        if (onDone) onDone();
+    }).fail(function (xhr) {
+        var r = xhr.responseJSON || {};
+        toastr.error(r.error || r.msg || 'No se pudo completar');
+    });
+}
+
+$(function () {
+    var $apply = $('#btnApplyCONASEV');
+    if ($apply.length) {
+        $apply.on('click', function () {
+            // Confirmar con el detalle, no con un "si/no" genérico: cargar un
+            // plan contable escribe cientos de cuentas y quien decide tiene que
+            // ver exactamente qué va a pasar.
+            swal({
+                title: 'Cargar cat&aacute;logo CONASEV',
+                text: 'Se agregar&aacute;n las cuentas del SENIAT al plan de esta empresa. ' +
+                      'Solo es posible si a&uacute;n no hay cuentas propias.',
+                type: 'warning',
+                showCancelButton: true,
+                confirmButtonText: 'S&iacute;, cargar',
+                cancelButtonText: 'Cancelar'
+            }, function (ok) {
+                if (!ok) return;
+                coaPost('/account/coa/catalog/apply-conasev', null);
+            });
+        });
+    }
+
+    var $own = $('#btnUseOwn');
+    if ($own.length) {
+        $own.on('click', function () {
+            swal({
+                title: 'Usar mi propia codificaci&oacute;n',
+                text: 'La empresa declarar&aacute; que su plan es propio. ' +
+                      'No se borra ni se cambia ninguna cuenta.',
+                type: 'info',
+                showCancelButton: true,
+                confirmButtonText: 'S&iacute;, cambiar',
+                cancelButtonText: 'Cancelar'
+            }, function (ok) {
+                if (!ok) return;
+                coaPost('/account/coa/catalog/use-own', null);
+            });
+        });
+    }
+});
+</script>
+{{end}}
+
+{{define "pagejs"}}{{end}}

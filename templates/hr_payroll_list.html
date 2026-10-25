@@ -1,0 +1,145 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Nómina</h4></div>
+    </div>
+    <div class="panel-body">
+        <form id="payrollRunForm" class="form-inline" style="margin-bottom:15px">
+            <div class="form-group">
+                <label>Desde</label>
+                <input type="date" class="form-control" name="period_from" id="periodFrom" required>
+            </div>
+            <div class="form-group">
+                <label>Hasta</label>
+                <input type="date" class="form-control" name="period_to" id="periodTo" required>
+            </div>
+            <div class="form-group">
+                <label>Frecuencia</label>
+                <select class="form-control" name="frequency">
+                    <option value="quincenal">Quincenal</option>
+                    <option value="mensual">Mensual</option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-success"><i class="fa fa-calculator"></i> Calcular corrida</button>
+        </form>
+
+        <div id="runResult"></div>
+
+        <table class="table table-striped table-bordered" id="payrollTable" width="100%">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Período</th>
+                    <th>Frecuencia</th>
+                    <th>Estado</th>
+                    <th class="text-right">Empleados</th>
+                    <th class="text-right">Bruto</th>
+                    <th class="text-right">Deducciones</th>
+                    <th class="text-right">Costo empresa</th>
+                    <th class="text-right">Neto</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    var table = $('#payrollTable').DataTable({
+        processing: true,
+        ajax: { url: '/hr/payroll/list/data', type: 'GET' },
+        columns: [
+            { data: 'id' },
+            { data: null, render: function (d) { return d.period_from + ' → ' + d.period_to; } },
+            { data: 'frequency', render: function (d) { return d === 'mensual' ? 'Mensual' : 'Quincenal'; } },
+            { data: 'status', render: function (d) {
+                if (d === 'posted') return '<span class="label label-success">Publicada</span>';
+                if (d === 'cancelled') return '<span class="label label-default">Cancelada</span>';
+                return '<span class="label label-warning">Borrador</span>';
+            }},
+            { data: 'employee_count', className: 'text-right' },
+            { data: 'total_gross', className: 'text-right' },
+            { data: 'total_deductions', className: 'text-right' },
+            { data: 'total_employer', className: 'text-right' },
+            { data: 'total_net', className: 'text-right' },
+            { data: null, orderable: false, render: function (d) {
+                var btn = '<a class="btn btn-xs btn-primary" href="/hr/payroll/view/' + d.id + '"><i class="fa fa-eye"></i></a> ';
+                if (d.status === 'draft') {
+                    btn += '<button class="btn btn-xs btn-success do-post" data-id="' + d.id + '"><i class="fa fa-check"></i></button> ';
+                }
+                if (d.status !== 'cancelled') {
+                    btn += '<button class="btn btn-xs btn-danger do-cancel" data-id="' + d.id + '"><i class="fa fa-times"></i></button>';
+                }
+                return btn;
+            }}
+        ]
+    });
+
+    $('#payrollRunForm').on('submit', function (e) {
+        e.preventDefault();
+        var btn = $(this).find('button[type=submit]').prop('disabled', true);
+        btn.text('Calculando...');
+        $.post('/hr/payroll/run', $(this).serialize(), function (r) {
+            btn.prop('disabled', false).html('<i class="fa fa-calculator"></i> Calcular corrida');
+            if (r.status != 1) { toastr.error(r.error || 'Error'); return; }
+
+            // Las tasas sin verificar se muestran completas, con su cita legal:
+            // quien tiene que decidir si la cifra es correcta necesita ver de
+            // dónde salió, no solo un número.
+            var html = '<div class="alert alert-success"><strong>Corrida #' + r.run_id + ' calculada (borrador).</strong> ' +
+                r.employee_count + ' empleado(s). Bruto ' + r.total_gross +
+                ' | Deducciones ' + r.total_deductions +
+                ' | Neto a pagar <strong>' + r.total_net + '</strong>' +
+                ' | Costo empresa ' + r.total_employer + '</div>';
+            if (r.unverified_rates && r.unverified_rates.length) {
+                var rows = r.unverified_rates.map(function (t) {
+                    return '<tr><td>' + t.label + ' <code>' + t.code + '</code></td>' +
+                           '<td class="text-right">' + t.rate_pct + '%</td>' +
+                           '<td>' + (t.legal_citation || 'sin cita') + '</td></tr>';
+                }).join('');
+                html += '<div class="alert alert-warning"><strong>' + r.warning + '</strong>' +
+                    '<table class="table table-condensed erp-surface">' +
+                    '<tr><th>Concepto</th><th class="text-right">Tasa</th><th>Fuente</th></tr>' + rows + '</table>' +
+                    '<a href="/hr/tax-rates" class="btn btn-warning btn-sm">Validar tasas</a></div>';
+            }
+            $('#runResult').html(html);
+            table.ajax.reload();
+        }).fail(function (x) {
+            btn.prop('disabled', false).html('<i class="fa fa-calculator"></i> Calcular corrida');
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'Error');
+        });
+    });
+
+    $('#payrollTable').on('click', '.do-post', function () {
+        var id = $(this).data('id');
+        swal({
+            title: "¿Publicar la nómina?",
+            text: "A partir de este momento la corrida es inmutable y queda registrada con las tasas usadas. Publicar un período ya pagado se bloquea.",
+            type: "warning", showCancelButton: true, confirmButtonText: "Publicar"
+        }, function () {
+            $.post('/hr/payroll/post/' + id, function (r) {
+                if (r.status == 1) { toastr.success(r.msg); table.ajax.reload(); }
+                else toastr.error(r.error || 'Error');
+            }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+        });
+    });
+
+    $('#payrollTable').on('click', '.do-cancel', function () {
+        var id = $(this).data('id');
+        swal({
+            title: "¿Cancelar la corrida?",
+            text: "Los recibos ya entregados no se borran: quedan como evidencia de lo que se liquidó.",
+            type: "warning", showCancelButton: true, confirmButtonText: "Cancelar corrida"
+        }, function () {
+            $.post('/hr/payroll/cancel/' + id, function (r) {
+                if (r.status == 1) { toastr.success(r.msg); table.ajax.reload(); }
+                else toastr.error(r.error || 'Error');
+            }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+        });
+    });
+});
+</script>
+{{end}}

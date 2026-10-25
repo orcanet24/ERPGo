@@ -1,0 +1,158 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Cierre de períodos
+                <small class="text-muted">cerrar un mes es afirmar que ya no se toca</small>
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <div class="alert alert-info">
+            <i class="fa fa-info-circle"></i>
+            Al cerrar un mes, todo lo que se agregue después tiene que entrar por un
+            asiento de ajuste con fecha del período. Las correcciones hechas sobre la
+            factura original a escondidas hacen imposible defender el mes ante el SENIAT.
+        </div>
+
+        <form class="form-inline" style="margin-bottom:15px">
+            <div class="form-group">
+                <label>Período</label>
+                <input type="text" class="form-control" id="period" placeholder="AAAAMM" value="{{.CurrentPeriod}}" size="8">
+            </div>
+            <button type="button" id="btnCheck" class="btn btn-primary"><i class="fa fa-search"></i> Revisar</button>
+            <button type="button" id="btnClose" class="btn btn-success" style="display:none"><i class="fa fa-lock"></i> Cerrar período</button>
+        </form>
+
+        <div id="diagnostics"></div>
+
+        <h4 style="margin-top:25px">Historial de períodos</h4>
+        <table class="table table-striped table-bordered" id="periodTable" width="100%">
+            <thead>
+                <tr>
+                    <th>Período</th>
+                    <th>Estado</th>
+                    <th>Cerrado por</th>
+                    <th class="text-right">Asientos</th>
+                    <th class="text-right">Débitos</th>
+                    <th class="text-right">Créditos</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    var table = $('#periodTable').DataTable({
+        processing: true,
+        ajax: { url: '/accounting/periods/data', type: 'GET' },
+        columns: [
+            { data: 'period' },
+            { data: null, render: function (d) {
+                return '<span class="label ' + d.badge + '">' + d.estado + '</span>';
+            }},
+            { data: 'closed_by', render: function (d) {
+                return d || '<span class="text-muted">—</span>';
+            }},
+            { data: 'vouchers', className: 'text-right' },
+            { data: 'total_debit', className: 'text-right' },
+            { data: 'total_credit', className: 'text-right' },
+            { data: null, orderable: false, render: function (d) {
+                if (d.status !== 'closed') return '<span class="text-muted">—</span>';
+                return '<button class="btn btn-xs btn-warning do-reopen" data-period="' + d.period + '">' +
+                       '<i class="fa fa-unlock"></i> Reabrir</button>';
+            }}
+        ]
+    });
+
+    $('#btnCheck').on('click', function () {
+        var p = $('#period').val();
+        $('#diagnostics').html('<div class="text-center"><i class="fa fa-spinner fa-spin"></i> Revisando...</div>');
+        $.get('/accounting/periods/check', { period: p }, function (r) {
+            var html = '';
+            var bloqueantes = 0;
+
+            // Se separan bloqueos de avisos a propósito: mezclar ambos en una
+            // lista roja hace que el contador ignore todo, avisos incluidos.
+            html += '<div class="row"><div class="col-md-5"><div class="small-box bg-aqua"><div class="inner"><h3>' +
+                    (r.summary.vouchers || 0) + '</h3><div>Asientos del período</div></div></div></div>';
+            html += '<div class="col-md-3"><div class="small-box bg-blue"><div class="inner"><h3>' +
+                    (r.summary.total_debit || 0).toFixed(2) + '</h3><div>Total débitos</div></div></div></div>';
+            html += '<div class="col-md-4"><div class="small-box bg-green"><div class="inner"><h3>' +
+                    (r.summary.total_net !== undefined ? '' : (r.summary.sales || 0).toFixed(2)) +
+                    '</h3><div>Ventas del período</div></div></div></div></div>';
+
+            var alertas = '';
+            $.each(r.validations, function (_, v) {
+                if (!v.problem) return;
+                var cls = v.blocking ? 'alert-danger' : 'alert-warning';
+                if (v.blocking) bloqueantes++;
+                alertas += '<div class="alert ' + cls + '" style="padding:8px 12px"><strong>' + v.label + ':</strong> ' +
+                           v.problem + '</div>';
+            });
+
+            if (bloqueantes > 0) {
+                html += '<div class="alert alert-danger"><h4><i class="fa fa-times-circle"></i> ' +
+                        'No se puede cerrar: ' + bloqueantes + ' problema(s) que bloquean</h4>' + alertas + '</div>';
+            } else if (r.warnings > 0) {
+                html += '<div class="alert alert-warning"><h4><i class="fa fa-exclamation-triangle"></i> ' +
+                        'Se puede cerrar, con ' + r.warnings + ' aviso(s)</h4>' + alertas + '</div>';
+            } else {
+                html += '<div class="alert alert-success"><h4><i class="fa fa-check-circle"></i> ' +
+                        'El período está en orden y puede cerrarse</h4></div>';
+            }
+
+            $('#diagnostics').html(html);
+            $('#btnClose').toggle(r.can_close);
+        }).fail(function (x) {
+            $('#diagnostics').html('<div class="alert alert-danger">' +
+                (x.responseJSON ? x.responseJSON.error : 'No se pudo revisar el período') + '</div>');
+            $('#btnClose').hide();
+        });
+    });
+
+    $('#btnClose').on('click', function () {
+        var p = $('#period').val();
+        swal({
+            title: "¿Cerrar el período " + p + "?",
+            html: "A partir de este momento el mes queda firmado. " +
+                  "Cualquier cambio posterior tendrá que entrar como asiento de ajuste " +
+                  "con fecha de este período.<br><br>Esta acción queda auditada.",
+            type: "warning", showCancelButton: true, confirmButtonText: "Sí, cerrar"
+        }, function () {
+            $.post('/accounting/periods/close', { period: p }, function (r) {
+                if (r.status == 1) { toastr.success(r.msg); table.ajax.reload(); $('#btnCheck').click(); }
+                else toastr.error(r.error || 'Error');
+            }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+        });
+    });
+
+    // Reabrir exige motivo y avisa de que queda registrado.
+    $('#periodTable').on('click', '.do-reopen', function () {
+        var p = $(this).data('period');
+        swal({
+            title: "Reabrir el período " + p,
+            html: "<input id='swalReason' class='swal2-input' placeholder='Motivo (obligatorio)'>" +
+                  "<p style='margin-top:12px; font-size:13px; color:#888'>Quedará registrado quién lo " +
+                  "reabrió y por qué. No se borra el cierre original.</p>",
+            showCancelButton: true,
+            confirmButtonText: "Reabrir",
+            preConfirm: function () {
+                var v = $('#swalReason').val();
+                if (!v) { swal.showValidationMessage('El motivo es obligatorio'); return false; }
+                return v;
+            }
+        }, function (motivo) {
+            $.post('/accounting/periods/reopen', { period: p, reason: motivo }, function (r) {
+                if (r.status == 1) { toastr.success(r.msg); table.ajax.reload(); }
+                else toastr.error(r.error || 'Error');
+            }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+        });
+    });
+});
+</script>
+{{end}}

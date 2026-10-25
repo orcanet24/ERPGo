@@ -1,0 +1,178 @@
+{{define "content"}}
+{{/*
+  cost_proyectos.html — Horas facturables del período, por proyecto.
+
+  LA PREGUNTA QUE RESPONDE. «¿Cuánto le puedo cobrar a este cliente por las
+  horas de este mes?» Y, sobre todo, la segunda: «¿y qué horas NO le puedo
+  cobrar, y por qué?» Las dos van juntas: un número facturable sin el motivo de
+  lo que se quedó fuera es un número que nadie puede defender ante el cliente.
+
+  POR QUÉ LOS TOTALES VIENEN DEL SERVIDOR. La tabla se pinta desde
+  /cost/proyectos/data, que ya suma con el mismo código que usa el cierre. Si
+  cada pantalla sumara por su cuenta, el mismo mes daría dos cifras distintas
+  según dónde se mirara.
+*/}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Horas facturables &mdash; <span id="periodoTxt">{{.Periodo}}</span></h4></div>
+        <div class="panel-tools pull-right">
+            <a href="/cost" class="btn btn-default">Volver a costos</a>
+            <a href="/cost/timesheet?periodo={{.Periodo}}" class="btn btn-default">Hoja de horas</a>
+        </div>
+    </div>
+    <div class="panel-body">
+
+        {{if .Cerrado}}
+        <div class="alert alert-warning">
+            <strong>El período {{.Periodo}} está cerrado.</strong>
+            Las horas que se registren o modifiquen después de un cierre no cambian
+            el costo congelado del mes: lo que ves aquí es la foto del cierre.
+        </div>
+        {{end}}
+
+        <div class="form-inline">
+            <label>Período</label>
+            <input type="text" id="periodo" class="form-control" value="{{.Periodo}}" style="width:110px;">
+            <button id="btnPeriodo" class="btn btn-default">Ver</button>
+            <span class="text-muted" style="margin-left:12px;">
+                Formato <code>AAAA-MM</code>. El período abierto de hoy es {{.AceptaHoy}}.
+            </span>
+        </div>
+
+        <hr>
+
+        <div class="row" id="totales">
+            <div class="col-md-3">
+                <div class="panel panel-bd">
+                    <div class="panel-body">
+                        <div class="text-muted">Horas registradas</div>
+                        <h3 id="tRegistradas" style="margin:4px 0 0;">&mdash;</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="panel panel-bd">
+                    <div class="panel-body">
+                        <div class="text-muted">Horas facturables</div>
+                        <h3 id="tFacturables" style="margin:4px 0 0; color: var(--erp-series-2, #3f8f7d);">&mdash;</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="panel panel-bd">
+                    <div class="panel-body">
+                        <div class="text-muted">Horas no facturables</div>
+                        <h3 id="tNoFacturables" style="margin:4px 0 0; color: var(--erp-series-5, #b0413e);">&mdash;</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="panel panel-bd">
+                    <div class="panel-body">
+                        <div class="text-muted">A facturar</div>
+                        <h3 id="tImporte" style="margin:4px 0 0;">&mdash;</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <table class="table table-striped" id="tblProyectos">
+            <thead>
+                <tr>
+                    <th>Proyecto</th>
+                    <th>Facturación</th>
+                    <th class="text-right">Tarifa/h</th>
+                    <th class="text-right">Registradas</th>
+                    <th class="text-right">Facturables</th>
+                    <th class="text-right">No facturables</th>
+                    <th class="text-right">A facturar</th>
+                    <th>Por qué no se factura</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td colspan="9" class="text-muted">Cargando...</td></tr>
+            </tbody>
+        </table>
+
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+
+    var PERIODO = '{{.Periodo}}';
+
+    function num(v) {
+        return (Math.round((Number(v) || 0) * 100) / 100).toFixed(2);
+    }
+    function horas(v) {
+        return (Math.round((Number(v) || 0) * 100) / 100).toFixed(2);
+    }
+
+    function cargar() {
+        $.getJSON('/cost/proyectos/data', { periodo: PERIODO })
+            .done(function (r) {
+                var filas = r.proyectos || [];
+                var t = r.totales || {};
+
+                $('#tRegistradas').text(horas(t.horas_registradas));
+                $('#tFacturables').text(horas(t.horas_facturables));
+                $('#tNoFacturables').text(horas(t.horas_no_facturables));                $('#tImporte').text(num(t.importe_facturable));
+
+                var $tb = $('#tblProyectos tbody').empty();
+                if (!filas.length) {
+                    $tb.append('<tr><td colspan="9" class="text-muted">' +
+                        'No hay proyectos con horas en ' + PERIODO +
+                        '. Registra horas en la <a href="/cost/timesheet?periodo=' + PERIODO +
+                        '">hoja de horas</a> o comprueba el período.</td></tr>');
+                    return;
+                }
+                $.each(filas, function (i, p) {
+                    var motivos = [];
+                    $.each(p.motivos || [], function (j, m) {
+                        motivos.push(m.motivo + ' (' + horas(m.horas) + ' h)');
+                    });
+                    var alerta = '';
+                    if (p.presupuesto_agotado) {
+                        alerta = ' <span class="label label-warning" title="Presupuesto de horas agotado">' +
+                                 'presupuesto agotado</span>';
+                    }
+                    $tb.append(
+                        '<tr>' +
+                        '<td><a href="/cost/proyectos/' + p.proyecto_id + '?periodo=' + encodeURIComponent(PERIODO) + '">' +
+                            '<strong>' + p.proyecto + '</strong></a><br>' +
+                            '<span class="text-muted">' + (p.nombre || '') + '</span>' + alerta + '</td>' +
+                        '<td>' + (p.facturacion || '') + '</td>' +
+                        '<td class="text-right">' + num(p.tarifa_hora) + '</td>' +
+                        '<td class="text-right">' + horas(p.horas_registradas) + '</td>' +
+                        '<td class="text-right" style="color: var(--erp-series-2, #3f8f7d);">' + horas(p.horas_facturables) + '</td>' +
+                        '<td class="text-right" style="color: var(--erp-series-5, #b0413e);">' + horas(p.horas_no_facturables) + '</td>' +
+                        '<td class="text-right"><strong>' + num(p.importe_facturable) + '</strong></td>' +
+                        '<td>' + (motivos.length ? motivos.join('<br>') : '<span class="text-muted">&mdash;</span>') + '</td>' +
+                        '<td><a class="btn btn-xs btn-default" href="/cost/proyectos/' + p.proyecto_id +
+                            '?periodo=' + encodeURIComponent(PERIODO) + '">Ver</a></td>' +
+                        '</tr>');
+                });
+            })
+            .fail(function (x) {
+                toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudieron leer los proyectos');
+            });
+    }
+
+    $('#btnPeriodo').on('click', function () {
+        var p = $.trim($('#periodo').val());
+        if (!p) { toastr.error('Escribe el período (AAAA-MM)'); return; }
+        window.location = '/cost/proyectos?periodo=' + encodeURIComponent(p);
+    });
+    $('#periodo').on('keydown', function (e) {
+        if (e.which === 13) { $('#btnPeriodo').click(); }
+    });
+
+    cargar();
+
+});
+</script>
+{{end}}

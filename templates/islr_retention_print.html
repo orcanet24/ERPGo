@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>{{.Title}}</title>
+<link href="/static/css/bootstrap.min.css" rel="stylesheet">
+<link href="/static/css/custom.min.css" rel="stylesheet">
+<link href="/static/css/print.css" rel="stylesheet">
+<style>
+body { padding: 20px; font-size: 12px; }
+.print-header { text-align: center; margin-bottom: 20px; }
+.print-header h3 { margin: 0; }
+.print-header p { margin: 2px 0; }
+@media print {
+    body { padding: 0; }
+    .no-print { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="no-print" style="margin-bottom:15px">
+    <button class="btn btn-default btn-sm" onclick="window.print()"><i class="fa fa-print"></i> Imprimir</button>
+    <a href="/reports/islr-retention" class="btn btn-primary btn-sm"><i class="fa fa-arrow-left"></i> Volver</a>
+</div>
+<div class="print-header">
+    <h3>LIBRO DE RETENCIONES DE ISLR - VENEZUELA</h3>
+    <p><strong>Período:</strong> {{.Month}}/{{.Year}}</p>
+    <p><strong>Fecha generación:</strong> {{now}}</p>
+</div>
+<table class="table table-bordered table-condensed">
+    <thead>
+        <tr>
+            <th>Fecha</th><th>N° Comprobante</th><th>RIF Proveedor</th><th>Proveedor</th>
+            <th>Concepto</th><th class="text-right">Base Imponible</th><th>%</th>
+            <th class="text-right">Retenido</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Rows}}
+        <tr>
+            <td>{{.Date}}</td><td>{{.RetNo}}</td><td>{{.Supplier}}</td>
+            <td>{{.ID}}</td><td>{{.Concept}}</td>
+            <td class="text-right">{{.Base | printf "%.2f"}}</td>
+            <td>{{.Pct | printf "%.2f"}}%</td>
+            <td class="text-right">{{.Amount | printf "%.2f"}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="8" class="text-center">No hay retenciones ISLR registradas para este período</td></tr>
+        {{end}}
+    </tbody>
+    <tfoot>
+        <tr style="font-weight:bold">
+            <td colspan="7" class="text-right">TOTAL RETENCIONES</td>
+            <td class="text-right">{{.TotalRetention | printf "%.2f"}}</td>
+        </tr>
+    </tfoot>
+</table>
+</body>
+</html>

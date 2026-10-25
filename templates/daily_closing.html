@@ -1,0 +1,75 @@
+{{define "content"}}
+<div class="row">
+    <div class="col-md-5">
+        <div class="panel panel-bd">
+            <div class="panel-heading">
+                <div class="panel-title"><h4>Cierre de Caja</h4></div>
+            </div>
+            <div class="panel-body">
+                <form id="closingForm">
+                    <div class="form-group">
+                        <label>Fecha</label>
+                        <input type="date" class="form-control" name="date" id="cDate" value="{{.Date}}">
+                    </div>
+                    <table class="table table-bordered">
+                        <tr><th>Cierre anterior</th><td class="text-right">{{.Currency}} {{money .LastClose}}</td></tr>
+                        <tr><th>Entradas de caja (hoy)</th><td class="text-right">{{.Currency}} {{money .CashIn}}</td></tr>
+                        <tr><th>Salidas de caja (hoy)</th><td class="text-right">{{.Currency}} {{money .CashOut}}</td></tr>
+                        <tr><th>Efectivo esperado</th><td class="text-right"><strong>{{.Currency}} {{money .Expected}}</strong></td></tr>
+                    </table>
+                    <div class="form-group">
+                        <label>Ajuste (diferencia de caja)</label>
+                        <input type="number" step="0.01" class="form-control" name="adjustment" value="0">
+                    </div>
+                    <button type="submit" name="action" value="save" class="btn btn-primary btn-block">Guardar</button>
+            <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
+            </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-7">
+        <div class="panel panel-bd">
+            <div class="panel-heading">
+                <div class="panel-title"><h4>Cierres Recientes</h4></div>
+            </div>
+            <div class="panel-body">
+                <table class="table table-striped table-bordered">
+                    <thead>
+                        <tr>
+                            <th>Fecha</th><th class="text-right">Cierre Ant.</th><th class="text-right">Entradas</th>
+                            <th class="text-right">Salidas</th><th class="text-right">Monto</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {{range .Closings}}
+                        <tr>
+                            <td>{{.Date}}</td>
+                            <td class="text-right">{{money .LastDay}}</td>
+                            <td class="text-right">{{money .CashIn}}</td>
+                            <td class="text-right">{{money .CashOut}}</td>
+                            <td class="text-right"><strong>{{money .Amount}}</strong></td>
+                        </tr>
+                    {{else}}
+                        <tr><td colspan="5" class="text-center">Sin cierres registrados</td></tr>
+                    {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#closingForm').on('submit', function (e) {
+        e.preventDefault();
+        $.post('/reports/daily-closing', $(this).serialize(), function (r) {
+            if (r.status == 1) { toastr.success(r.msg + ': ' + r.amount); setTimeout(function () { location.reload(); }, 800); }
+            else toastr.error(r.error || 'Error');
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+    });
+});
+</script>
+{{end}}

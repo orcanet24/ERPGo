@@ -1,0 +1,149 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <h3 class="panel-title">{{.Title}}</h3>
+    </div>
+    <div class="panel-body">
+        <form method="POST" action="/service/invoice/save" id="srvInvForm">
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Fecha</label>
+                        <input type="date" name="date" class="form-control" value="{{today}}">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Cliente *</label>
+                        <select name="customer_id" class="form-control" required>
+                            <option value="">Seleccione...</option>
+                            {{range .Customers}}
+                            <option value="{{.id}}">{{.name}}</option>
+                            {{end}}
+                        </select>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Saldo Anterior</label>
+                        <input type="number" name="previous" step="0.01" class="form-control" value="0">
+                    </div>
+                </div>
+            </div>
+
+            <h4>Servicios</h4>
+            <table class="table table-bordered" id="srvLines">
+                <thead>
+                    <tr>
+                        <th>Servicio</th>
+                        <th>Cantidad</th>
+                        <th>Cargo</th>
+                        <th>Total</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+            <button type="button" class="btn btn-info btn-sm" onclick="addSrvLine()"><i class="fa fa-plus"></i> Añadir Servicio</button>
+
+            <hr>
+            <div class="row">
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>Total General</label>
+                        <input type="number" name="total_amount" step="0.01" class="form-control" id="grandTotal" readonly>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>Total Descuento</label>
+                        <input type="number" name="total_discount" step="0.01" class="form-control" onchange="recalc()" value="0">
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>Total VAT</label>
+                        <input type="number" name="total_vat_amnt" step="0.01" class="form-control" onchange="recalc()" value="0">
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>Monto Pagado</label>
+                        <input type="number" name="paid_amount" step="0.01" class="form-control" onchange="recalc()" value="0">
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Notas</label>
+                <textarea name="details" class="form-control" rows="2">Factura de servicio</textarea>
+            </div>
+
+            <button type="submit" class="btn btn-primary"><i class="fa fa-save"></i> Registrar Factura</button>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+const services = [
+{{range .Services}}{ id: '{{.id}}', name: '{{.name}}', charge: '{{.charge}}' },{{end}}
+];
+
+function addSrvLine() {
+    const tbody = document.querySelector('#srvLines tbody');
+    const tr = document.createElement('tr');
+    let opts = '<select name="service_id" class="form-control" onchange="updateCharge(this)" required><option value="">Seleccione...</option>';
+    services.forEach(s => { opts += `<option value="${s.id}" data-charge="${s.charge}">${s.name}</option>`; });
+    opts += '</select>';
+    tr.innerHTML = `
+        <td>${opts}</td>
+        <td><input type="number" name="qty" value="1" min="1" step="1" class="form-control" onchange="lineTotal(this)"></td>
+        <td><input type="number" name="charge" step="0.01" class="form-control" onchange="lineTotal(this)"></td>
+        <td><span class="line-total">0.00</span></td>
+        <td><button type="button" class="btn btn-danger btn-xs" onclick="this.closest('tr').remove(); grandTot();"><i class="fa fa-trash"></i></button></td>`;
+    tbody.appendChild(tr);
+}
+
+function updateCharge(sel) {
+    const opt = sel.selectedOptions[0];
+    const charge = parseFloat(opt.dataset.charge) || 0;
+    const tr = sel.closest('tr');
+    tr.querySelector('[name="charge"]').value = charge.toFixed(2);
+    lineTotal(sel);
+}
+
+function lineTotal(el) {
+    const tr = el.closest('tr');
+    const qty = parseFloat(tr.querySelector('[name="qty"]').value) || 0;
+    const charge = parseFloat(tr.querySelector('[name="charge"]').value) || 0;
+    tr.querySelector('.line-total').textContent = (qty * charge).toFixed(2);
+    grandTot();
+}
+
+function grandTot() {
+    let total = 0;
+    document.querySelectorAll('#srvLines tbody tr').forEach(tr => {
+        const qty = parseFloat(tr.querySelector('[name="qty"]').value) || 0;
+        const charge = parseFloat(tr.querySelector('[name="charge"]').value) || 0;
+        total += qty * charge;
+    });
+    document.getElementById('grandTotal').value = total.toFixed(2);
+    recalc();
+}
+
+function recalc() {
+    const grand = parseFloat(document.getElementById('grandTotal').value) || 0;
+    const disc = parseFloat(document.querySelector('[name="total_discount"]').value) || 0;
+    const paid = parseFloat(document.querySelector('[name="paid_amount"]').value) || 0;
+    // due = grand - disc - paid
+    const due = grand - disc - paid;
+    // update due display if element exists
+    const dueEl = document.getElementById('dueAmount');
+    if (dueEl) dueEl.value = due.toFixed(2);
+}
+
+$(function() { addSrvLine(); });
+</script>
+{{end}}

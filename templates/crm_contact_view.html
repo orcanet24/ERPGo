@@ -1,0 +1,303 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>{{.C.FullName}}
+                {{if .C.CustomerID.Valid}}
+                    <span class="label label-success">Cliente</span>
+                {{else}}
+                    <span class="label label-default">Potencial</span>
+                {{end}}
+                <a href="/crm/contact/list" class="btn btn-default btn-sm pull-right"><i class="fa fa-arrow-left"></i> Volver</a>
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <div class="row">
+            <div class="col-md-4">
+                <div class="panel panel-default">
+                    <div class="panel-heading"><div class="panel-title"><h5>Datos</h5></div></div>
+                    <div class="panel-body">
+                        <table class="table" style="margin-bottom:0">
+                            <tr><td style="width:110px"><strong>Empresa</strong></td><td>{{if .C.CompanyName}}{{.C.CompanyName}}{{else}}<span class="text-muted">—</span>{{end}}</td></tr>
+                            <tr><td><strong>Cargo</strong></td><td>{{if .C.PositionTitle}}{{.C.PositionTitle}}{{else}}<span class="text-muted">—</span>{{end}}</td></tr>
+                            <tr><td><strong>Email</strong></td><td>{{if .C.Email}}<a href="mailto:{{.C.Email}}">{{.C.Email}}</a>{{else}}<span class="text-muted">—</span>{{end}}</td></tr>
+                            <tr><td><strong>Teléfono</strong></td><td>{{if .C.Phone}}{{.C.Phone}}{{else}}<span class="text-muted">—</span>{{end}}</td></tr>
+                            <tr><td><strong>Origen</strong></td><td>{{.C.Source}}</td></tr>
+                        </table>
+                        {{if not .C.CustomerID.Valid}}
+                        <hr>
+                        <button class="btn btn-xs btn-default" data-toggle="modal" data-target="#linkModal">
+                            <i class="fa fa-link"></i> Enlazar con un cliente existente
+                        </button>
+                        <p class="help-block">
+                            Al enlazarlo, sus facturas aparecerán aquí y el historial
+                            comercial queda unido al contable.
+                        </p>
+                        {{end}}
+                    </div>
+                </div>
+
+                <div class="panel panel-default">
+                    <div class="panel-heading"><div class="panel-title"><h5>Actividad (30 días)</h5></div></div>
+                    <div class="panel-body">
+                        <ul class="list-unstyled" style="margin-bottom:0">
+                            <li>Llamadas: <strong>{{.Stats.llamadas}}</strong></li>
+                            <li>Reuniones: <strong>{{.Stats.reuniones}}</strong></li>
+                            <li>Correos: <strong>{{.Stats.correos}}</strong></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-8">
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <div class="panel-title">
+                            <h5>Oportunidades</h5>
+                        </div>
+                    </div>
+                    <div class="panel-body">
+                        <table class="table table-striped" style="margin-bottom:0">
+                            <thead>
+                                <tr><th>Oportunidad</th><th>Etapa</th><th class="text-right">Monto</th><th>Cierre esperado</th><th></th></tr>
+                            </thead>
+                            <tbody>
+                            {{range .Opps}}
+                                <tr>
+                                    <td>{{.Title}}</td>
+                                    <td>{{.Stage}}</td>
+                                    <td class="text-right">{{money .Amount}}</td>
+                                    <td>{{if .Expected}}{{.Expected}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+                                    <td style="width:120px">
+                                        <select class="form-control input-sm do-move" data-id="{{.ID}}" data-contact="{{$.C.ID}}">
+                                            {{$current := .Stage}}
+                                            {{range $.Stages}}
+                                                <option value="{{.ID}}" {{if eq .Name $current}}selected{{end}}>{{.Name}}</option>
+                                            {{end}}
+                                        </select>
+                                    </td>
+                                </tr>
+                            {{else}}
+                                <tr><td colspan="5" class="text-center text-muted">Sin oportunidades todavía.</td></tr>
+                            {{end}}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <div class="panel-title"><h5>Historial de interacciones</h5></div>
+                    </div>
+                    <div class="panel-body">
+                        <button class="btn btn-sm btn-success pull-right" data-toggle="modal" data-target="#actModal">
+                            <i class="fa fa-plus"></i> Registrar
+                        </button>
+                        <div style="clear:both"></div>
+                        <table class="table table-striped" style="margin-bottom:0">
+                            <thead>
+                                <tr><th>Fecha</th><th>Tipo</th><th>Asunto</th><th>Vence</th><th></th></tr>
+                            </thead>
+                            <tbody>
+                            {{range .Acts}}
+                                <tr {{if .Done}}style="opacity:.55"{{end}}>
+                                    <td style="width:150px">{{.Date}}</td>
+                                    <td>{{.Type}}</td>
+                                    <td>{{.Subject}}{{if .Body}}<div class="text-muted" style="font-size:12px">{{.Body}}</div>{{end}}</td>
+                                    <td>{{if .Due}}{{.Due}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+                                    <td style="width:40px">
+                                        {{if not .Done}}
+                                        <button class="btn btn-xs btn-success do-done" data-id="{{.ID}}" title="Marcar realizada"><i class="fa fa-check"></i></button>
+                                        {{else}}
+                                        <i class="fa fa-check-circle text-success" title="Realizada"></i>
+                                        {{end}}
+                                    </td>
+                                </tr>
+                            {{else}}
+                                <tr><td colspan="5" class="text-center text-muted">Sin interacciones registradas.</td></tr>
+                            {{end}}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                {{if .Facturas}}
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <div class="panel-title">
+                            <h5>Facturas <small class="text-muted">saldo pendiente: {{.Saldo}}</small></h5>
+                        </div>
+                    </div>
+                    <div class="panel-body">
+                        <table class="table table-striped" style="margin-bottom:0">
+                            <thead><tr><th>Nº</th><th>Fecha</th><th class="text-right">Total</th><th class="text-right">Pendiente</th></tr></thead>
+                            <tbody>
+                            {{range .Facturas}}
+                                <tr>
+                                    <td>{{.invoice}}</td>
+                                    <td>{{.date}}</td>
+                                    <td class="text-right">{{.total}}</td>
+                                    <td class="text-right">{{.due}}</td>
+                                </tr>
+                            {{end}}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                {{end}}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="actModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title">Registrar interacción</h4></div>
+            <div class="modal-body">
+                <input type="hidden" id="actContact" value="{{.C.ID}}">
+                <div class="form-group">
+                    <label>Tipo</label>
+                    <select class="form-control" id="actType">
+                        <option value="llamada">Llamada</option>
+                        <option value="email">Correo</option>
+                        <option value="reunion">Reunión</option>
+                        <option value="visita">Visita</option>
+                        <option value="tarea">Tarea</option>
+                        <option value="nota">Nota</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Asunto</label>
+                    <input type="text" class="form-control" id="actSubject">
+                </div>
+                <div class="form-group">
+                    <label>Detalle</label>
+                    <textarea class="form-control" id="actBody" rows="3"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Fecha de seguimiento (opcional)</label>
+                    <input type="date" class="form-control" id="actDue">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-default" data-dismiss="modal">Cancelar</button>
+                <button class="btn btn-primary" id="actSave">Guardar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{{if not .C.CustomerID.Valid}}
+<div class="modal fade" id="linkModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title">Enlazar con un cliente</h4></div>
+            <div class="modal-body">
+                <input type="hidden" id="linkContact" value="{{.C.ID}}">
+                <div class="form-group">
+                    <label>ID del cliente</label>
+                    <input type="number" class="form-control" id="linkCustomer" placeholder="Ej: 12">
+                    <p class="help-block">
+                        El cliente debe existir ya en Clientes. El historial comercial de
+                        este contacto quedará unido a sus facturas.
+                    </p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-default" data-dismiss="modal">Cancelar</button>
+                <button class="btn btn-primary" id="linkSave">Enlazar</button>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#actSave').on('click', function () {
+        $.post('/crm/activity/save', {
+            contact_id: $('#actContact').val(),
+            activity_type: $('#actType').val(),
+            subject: $('#actSubject').val(),
+            body: $('#actBody').val(),
+            due_date: $('#actDue').val()
+        }, function (r) {
+            if (r.status == 1) { toastr.success(r.msg); location.reload(); }
+            else toastr.error(r.error || 'Error');
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+    });
+
+    $('.do-done').on('click', function () {
+        var id = $(this).data('id');
+        var btn = $(this).prop('disabled', true);
+        $.post('/crm/activity/done/' + id, { done: 1 }, function (r) {
+            if (r.status == 1) { toastr.success('Marcada como realizada'); location.reload(); }
+            else toastr.error(r.error || 'Error');
+        }).fail(function (x) {
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'Error');
+            btn.prop('disabled', false);
+        });
+    });
+
+    // Mover de etapa pide el motivo cuando la oportunidad se pierde: sin motivo
+    // el historial no sirve para aprender qué se dejó de intentar.
+    $('.do-move').on('change', function () {
+        var sel = $(this);
+        var stageId = sel.val();
+        var stageName = sel.find('option:selected').text();
+        var prev = sel.data('prev') || sel.find('option:selected').text();
+
+        function move() {
+            $.post('/crm/opportunity/move', {
+                id: sel.data('id'), stage_id: stageId, lost_reason: ''
+            }, function (r) {
+                if (r.status == 1) { toastr.success('Movida a ' + stageName); sel.data('prev', stageName); }
+                else { toastr.error(r.error || 'Error'); sel.val(sel.data('prevVal') || sel.val()); }
+            }).fail(function (x) {
+                toastr.error(x.responseJSON ? x.responseJSON.error : 'Error');
+                sel.val(sel.data('prevVal') || sel.val());
+            });
+        }
+
+        if (/Perdido/i.test(stageName)) {
+            swal({
+                title: "¿Por qué se perdió?",
+                input: 'text',
+                inputPlaceholder: 'Ej: eligieron un competidor local',
+                showCancelButton: true,
+                confirmButtonText: 'Guardar'
+            }, function (motivo) {
+                if (!motivo) { sel.val(sel.data('prevVal') || sel.val()); return; }
+                $.post('/crm/opportunity/move', {
+                    id: sel.data('id'), stage_id: stageId, lost_reason: motivo
+                }, function (r) {
+                    if (r.status == 1) { toastr.success('Oportunidad cerrada como perdida'); sel.data('prev', stageName); }
+                    else { toastr.error(r.error || 'Error'); sel.val(sel.data('prevVal') || sel.val()); }
+                }).fail(function (x) {
+                    toastr.error(x.responseJSON ? x.responseJSON.error : 'Error');
+                    sel.val(sel.data('prevVal') || sel.val());
+                });
+            });
+            return;
+        }
+        move();
+    });
+
+    $('#linkSave').on('click', function () {
+        $.post('/crm/contact/link-customer', {
+            contact_id: $('#linkContact').val(),
+            customer_id: $('#linkCustomer').val()
+        }, function (r) {
+            if (r.status == 1) { toastr.success(r.msg); location.reload(); }
+            else toastr.error(r.error || 'Error');
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+    });
+});
+</script>
+{{end}}

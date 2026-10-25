@@ -1,0 +1,117 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Órdenes de Entrega
+                <a href="/delivery_order/add" class="btn btn-primary btn-sm pull-right"><i class="fa fa-plus"></i> Nueva Orden</a>
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <table class="table table-striped table-bordered" id="deliveryOrderTable" width="100%">
+            <thead>
+                <tr>
+                    <th>Orden Nº</th>
+                    <th>Cliente</th>
+                    <th>Estado</th>
+                    <th>Fecha</th>
+                    <th>Almacén</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    var table = $('#deliveryOrderTable').DataTable({
+        processing: true,
+        serverSide: true,
+        pageLength: 25,
+        order: [[0, 'desc']],
+        ajax: { url: '/delivery_order/data', type: 'POST' },
+        columns: [
+            { data: 'delivery_no', render: function (d, t, row) { return '<a href="/delivery_order/edit/' + row.id + '">' + d + '</a>'; } },
+            { data: 'customer' },
+            { data: 'status', render: function (d) {
+                var badge = '';
+                switch(d) {
+                    case 'draft': badge = '<span class="label label-default">Borrador</span>'; break;
+                    case 'confirmed': badge = '<span class="label label-info">Confirmado</span>'; break;
+                    case 'picking': badge = '<span class="label label-primary">En Picking</span>'; break;
+                    case 'packed': badge = '<span class="label label-warning">Empacado</span>'; break;
+                    case 'shipped': badge = '<span class="label label-success">Enviado</span>'; break;
+                    case 'delivered': badge = '<span class="label label-success">Entregado</span>'; break;
+                    case 'cancelled': badge = '<span class="label label-danger">Cancelado</span>'; break;
+                    default: badge = '<span class="label label-default">' + d + '</span>';
+                }
+                return badge;
+            }},
+            { data: 'date' },
+            { data: 'warehouse' },
+            { data: null, orderable: false, searchable: false, render: function (d) {
+                var nextStatus = '';
+                var statusLabel = '';
+                switch(d.status) {
+                    case 'draft': nextStatus = 'confirmed'; statusLabel = 'Confirmar'; break;
+                    case 'confirmed': nextStatus = 'picking'; statusLabel = 'Iniciar Picking'; break;
+                    case 'picking': nextStatus = 'packed'; statusLabel = 'Empacar'; break;
+                    case 'packed': nextStatus = 'shipped'; statusLabel = 'Enviar'; break;
+                    case 'shipped': nextStatus = 'delivered'; statusLabel = 'Marcar Entregado'; break;
+                    default: nextStatus = ''; statusLabel = '';
+                }
+                var html = '<a class="btn btn-info btn-xs" href="/delivery_order/edit/' + d.id + '" title="Editar"><i class="fa fa-pencil"></i></a> ';
+                if (nextStatus) {
+                    html += '<button class="btn btn-success btn-xs do-status" data-id="' + d.id + '" data-status="' + nextStatus + '" title="' + statusLabel + '"><i class="fa fa-arrow-right"></i> ' + statusLabel + '</button> ';
+                }
+                if (d.status === 'draft') {
+                    html += '<button class="btn btn-danger btn-xs do-del" data-id="' + d.id + '" title="Eliminar"><i class="fa fa-trash"></i></button>';
+                }
+                return html;
+            }}
+        ]
+    });
+
+    $('#deliveryOrderTable').on('click', '.do-status', function () {
+        var id = $(this).data('id');
+        var status = $(this).data('status');
+        var label = $(this).text().trim();
+        swal({
+            title: "¿Cambiar estado?",
+            text: "Se avanzará el estado de la orden a: " + label,
+            type: "info",
+            showCancelButton: true,
+            confirmButtonText: "Actualizar",
+            confirmButtonColor: ERPGo.appearance.css("--erp-success", "#27ae60"),
+            closeOnConfirm: true
+        }, function () {
+            $.post('/delivery_order/update-status/' + id, { status: status }, function (r) {
+                if (r.status == 1) { toastr.success(r.msg); table.ajax.reload(); }
+                else toastr.error(r.error || 'Error');
+            }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+        });
+    });
+
+    $('#deliveryOrderTable').on('click', '.do-del', function () {
+        var id = $(this).data('id');
+        swal({
+            title: "¿Eliminar orden?",
+            text: "Esta acción no se puede deshacer.",
+            type: "warning",
+            showCancelButton: true,
+            confirmButtonText: "Eliminar",
+            confirmButtonColor: ERPGo.appearance.css("--erp-danger", "#9c3333"),
+            closeOnConfirm: true
+        }, function () {
+            $.post('/delivery_order/delete/' + id, function (r) {
+                if (r.status == 1) { toastr.success(r.msg); table.ajax.reload(); }
+                else toastr.error(r.error || 'Error');
+            }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+        });
+    });
+});
+</script>
+{{end}}

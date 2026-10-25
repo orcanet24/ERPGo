@@ -1,0 +1,310 @@
+{{define "content"}}
+<form id="purchaseForm">
+    {{if .EditID}}<input type="hidden" id="editMode" value="1">{{end}}
+    <div class="panel panel-bd">
+        <div class="panel-heading">
+            <div class="panel-title"><h4>{{.Title}}</h4></div>
+        </div>
+        <div class="panel-body">
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label for="supplier_id">Proveedor <span class="text-danger">*</span></label>
+                        <select class="form-control" id="supplier_id" name="supplier_id" required style="width:100%"></select>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="form-group">
+                        <label for="chalan_no">N° Factura del proveedor</label>
+                        <input type="text" class="form-control" id="chalan_no" name="chalan_no" placeholder="Ej: 000123" value="{{.Chalan}}">
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="form-group">
+                        <label for="control_no">N° Control fiscal</label>
+                        <input type="text" class="form-control" id="control_no" name="control_no" placeholder="Ej: 00-00000123" value="{{.ControlNo}}">
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="form-group">
+                        <label for="purchase_date">Fecha</label>
+                        <input type="text" class="form-control datepicker" id="purchase_date" name="purchase_date"
+                               autocomplete="off" value="{{if .PDate}}{{.PDate}}{{else}}{{today}}{{end}}">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label for="purchase_details">Detalles</label>
+                        <input type="text" class="form-control" id="purchase_details" name="purchase_details" placeholder="Observaciones" value="{{.PDetails}}">
+                    </div>
+                </div>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-striped table-bordered" id="itemsTable">
+                    <thead>
+                        <tr>
+                            <th style="min-width:220px">Producto</th>
+                            <th style="width:80px">Stock</th>
+                            <th style="width:80px">Cant.</th>
+                            <th style="width:90px">Precio</th>
+                            <th style="width:80px">Lote</th>
+                            <th style="width:100px">Vence</th>
+                            <th style="width:70px">Desc %</th>
+                            <th style="width:85px">Desc. Val</th>
+                            <th style="width:70px">IVA %</th>
+                            <th style="width:85px">IVA Val</th>
+                            <th style="width:95px">Total</th>
+                            <th style="width:40px"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="itemRows"></tbody>
+                </table>
+            </div>
+            <button type="button" class="btn btn-success" id="addRow"><i class="fa fa-plus"></i> Añadir Producto</button>
+
+            <div class="row" style="margin-top:15px">
+                <div class="col-md-5 col-md-offset-7">
+                    <table class="table table-bordered">
+                        <tr>
+                            <th class="text-right" style="width:55%">Subtotal</th>
+                            <td class="text-right"><input type="text" class="form-control text-right" id="sumTotal" value="0.00" readonly></td>
+                        </tr>
+                        <tr>
+                            <th class="text-right">Descuento de compra</th>
+                            <td><input type="text" class="form-control text-right" id="discount" name="discount" placeholder="0.00"></td>
+                        </tr>
+                        <tr>
+                            <th class="text-right">Total Descuento</th>
+                            <td class="text-right"><input type="text" class="form-control text-right" id="total_discount" name="total_discount" value="0.00" readonly></td>
+                        </tr>
+                        <tr>
+                            <th class="text-right">Total IVA</th>
+                            <td class="text-right"><input type="text" class="form-control text-right" id="total_vat_amnt" name="total_vat_amnt" value="0.00" readonly></td>
+                        </tr>
+                        <tr class="success">
+                            <th class="text-right"><h4>Gran Total</h4></th>
+                            <td class="text-right"><h4>{{.Currency}} <input type="text" class="form-control input-lg text-right" id="grand_total_price" name="grand_total_price" value="0.00" readonly></h4></td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel panel-bd">
+        <div class="panel-heading">
+            <div class="panel-title"><h4><i class="fa fa-credit-card"></i> Pago</h4></div>
+        </div>
+        <div class="panel-body">
+            <div class="row">
+                <div class="col-md-8">
+                    <table class="table table-bordered" id="payTable">
+                        <thead>
+                            <tr>
+                                <th>Método de Pago</th>
+                                <th style="width:160px">Monto</th>
+                                <th style="width:40px"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="payRows"></tbody>
+                    </table>
+                    <button type="button" class="btn btn-default btn-sm" id="addPay"><i class="fa fa-plus"></i> Añadir pago</button>
+                    <p class="help-block">Sin filas de pago = compra a crédito.</p>
+                </div>
+                <div class="col-md-4">
+                    <table class="table table-bordered">
+                        <tr>
+                            <th class="text-right">Pagado</th>
+                            <td><input type="text" class="form-control text-right" id="paid_amount" name="paid_amount" value="0.00" readonly></td>
+                        </tr>
+                        <tr>
+                            <th class="text-right">Por Pagar</th>
+                            <td><input type="text" class="form-control text-right" id="due_amount" name="due_amount" value="0.00" readonly></td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+            <button type="submit" name="action" value="save" class="btn btn-primary btn-lg">Guardar</button>
+            <button type="submit" name="action" value="save_exit" class="btn btn-default btn-lg">Guardar y Salir</button>
+            <a href="/purchase/list" class="btn btn-default btn-lg">Cancelar</a>
+        </div>
+    </div>
+</form>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+var methods = [];
+var rowSeq = 0;
+var paySeq = 0;
+
+// ---------- product rows ----------
+function itemRow(preset) {
+    preset = preset || {};
+    var i = ++rowSeq;
+    var html =
+        '<tr class="item-row" data-sl="' + i + '">' +
+        '<td><input type="text" class="form-control pname" placeholder="Escriba para buscar..." autocomplete="off">' +
+            '<input type="hidden" class="form-control" name="product_id" value="' + (preset.pid || '') + '"></td>' +
+        '<td><input type="text" class="form-control text-right pstock" value="' + (preset.stock != null ? preset.stock : '') + '" readonly></td>' +
+        '<td><input type="text" class="form-control text-right pqty" name="product_quantity" value="' + (preset.qty || 1) + '"></td>' +
+        '<td><input type="text" class="form-control text-right prate" name="product_rate" value="' + (preset.rate || '0.00') + '"></td>' +
+        '<td><input type="text" class="form-control pbatch" name="batch_no" value="' + (preset.batch || '') + '"></td>' +
+        '<td><input type="text" class="form-control datepicker pexpiry" name="expiry_date" value="' + (preset.expiry || '') + '" autocomplete="off"></td>' +
+        '<td><input type="text" class="form-control text-right pdisc" name="discount_per" value="0.00"></td>' +
+        '<td><input type="text" class="form-control text-right pdiscval" name="discountvalue" value="0.00" readonly></td>' +
+        '<td><input type="text" class="form-control text-right pvat" name="vatpercent" value="0.00"></td>' +
+        '<td><input type="text" class="form-control text-right pvatval" name="vatvalue" value="0.00" readonly></td>' +
+        '<td><input type="text" class="form-control text-right ptotal" name="total_price" value="0.00" readonly></td>' +
+        '<td><button type="button" class="btn btn-danger btn-xs del-row"><i class="fa fa-times"></i></button></td>' +
+        '</tr>';
+    var $row = $(html);
+    $('#itemRows').append($row);
+    bindAutocomplete($row.find('.pname'));
+    $row.find('.datepicker').datepicker({ dateFormat: 'yy-mm-dd' });
+    return $row;
+}
+
+function bindAutocomplete($input) {
+    $input.autocomplete({
+        source: function (req, res) {
+            $.getJSON('/product/search', { term: req.term, supplier_id: $('#supplier_id').val() || 0 }, res);
+        },
+        minLength: 1,
+        select: function (event, ui) {
+            var $row = $(this).closest('tr');
+            $row.find('.pname').val(ui.item.label);
+            $row.find('input[name="product_id"]').val(ui.item.id);
+            $row.find('.pstock').val(ui.item.stock);
+            $row.find('.prate').val(ui.item.supplier_price || ui.item.price || '0.00');
+            calcRow($row);
+            return false;
+        }
+    });
+}
+
+function num(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
+
+function calcRow($row) {
+    var qty = num($row.find('.pqty').val());
+    var rate = num($row.find('.prate').val());
+    var discP = num($row.find('.pdisc').val());
+    var vatP = num($row.find('.pvat').val());
+    var price = qty * rate;
+    var disc = price * discP / 100;         // percentage discount (discount_type=1)
+    var temp = price - disc;
+    var vat = temp * vatP / 100;
+    $row.find('.pdiscval').val(disc.toFixed(2));
+    $row.find('.pvatval').val(vat.toFixed(2));
+    $row.find('.ptotal').val(temp.toFixed(2));
+    calcTotals();
+}
+
+function calcTotals() {
+    var sum = 0, sumDisc = 0, sumVat = 0;
+    $('#itemRows .item-row').each(function () {
+        sum += num($(this).find('.ptotal').val());
+        sumDisc += num($(this).find('.pdiscval').val());
+        sumVat += num($(this).find('.pvatval').val());
+    });
+    var invDisc = num($('#discount').val());
+    $('#sumTotal').val(sum.toFixed(2));
+    $('#total_discount').val((sumDisc + invDisc).toFixed(2));
+    $('#total_vat_amnt').val(sumVat.toFixed(2));
+    var grand = sum - invDisc + sumVat;
+    $('#grand_total_price').val(grand.toFixed(2));
+    var paid = 0;
+    $('#payRows .pay-row').each(function () {
+        paid += num($(this).find('.pay-amt').val());
+    });
+    $('#paid_amount').val(paid.toFixed(2));
+    $('#due_amount').val(Math.max(0, grand - paid).toFixed(2));
+}
+
+// ---------- payment rows ----------
+function payRow() {
+    var opts = '<option value="">-- Método --</option>';
+    methods.forEach(function (m) { opts += '<option value="' + m.id + '">' + escapeHtml(m.name) + '</option>'; });
+    var i = ++paySeq;
+    $('#payRows').append(
+        '<tr class="pay-row">' +
+        '<td><select class="form-control" name="multipaytype">' + opts + '</select></td>' +
+        '<td><input type="text" class="form-control text-right pay-amt" name="pamount_by_method" placeholder="0.00"></td>' +
+        '<td><button type="button" class="btn btn-danger btn-xs del-pay"><i class="fa fa-times"></i></button></td>' +
+        '</tr>');
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+$(function () {
+    var submittedAction = 'save';
+
+    $('button[type=submit]', '#purchaseForm').on('click', function () { submittedAction = $(this).val(); });
+
+    // supplier select2 (AJAX list)
+    $.getJSON('/supplier/dropdown', function (d) {
+        var $sel = $('#supplier_id');
+        $sel.append($('<option>').val('').text('-- Seleccione --'));
+        d.forEach(function (s) {
+            $sel.append($('<option>').val(s.id).text(s.text));
+        });
+        {{if .Supplier}}$sel.val('{{.Supplier}}');{{end}}
+        $sel.select2({ width: '100%' });
+    });
+
+    // payment methods
+    methods = [
+        {{range .Methods}}
+        { id: '{{.id}}', name: '{{.name}}' },
+        {{end}}
+    ];
+
+    // datepicker
+    $('.datepicker').datepicker({ dateFormat: 'yy-mm-dd' });
+
+    // initial rows
+    {{if .Details}}
+    {{range .Details}}
+    itemRow({ pid: '{{.ProductID}}', qty: '{{.Qty}}', rate: '{{.Rate}}', batch: '{{.Batch}}', expiry: '{{.Expiry}}' })
+        .find('.pname').val('{{.ProductName}} ({{.Model}})');
+    {{end}}
+    {{else}}
+    itemRow();
+    {{end}}
+
+    // events
+    $('#addRow').on('click', function () { itemRow(); });
+    $('#itemRows').on('click', '.del-row', function () { $(this).closest('tr').remove(); calcTotals(); });
+    $('#itemRows').on('input change', '.pqty, .prate, .pdisc, .pvat', function () { calcRow($(this).closest('tr')); });
+    $('#discount').on('input change', calcTotals);
+
+    $('#addPay').on('click', payRow);
+    $('#payRows').on('click', '.del-pay', function () { $(this).closest('tr').remove(); calcTotals(); });
+    $('#payRows').on('input change', '.pay-amt', calcTotals);
+
+    // ---------- submit ----------
+    $('#purchaseForm').on('submit', function (e) {
+        e.preventDefault();
+        if (!$('#supplier_id').val()) { toastr.warning('Seleccione un proveedor'); return; }
+        var hasItems = false, allSet = true;
+        $('#itemRows .item-row').each(function () {
+            hasItems = true;
+            if (!$(this).find('input[name="product_id"]').val()) allSet = false;
+            if (!$(this).find('.pqty').val()) allSet = false;
+        });
+        if (!hasItems) { toastr.warning('Agregue al menos un producto'); return; }
+        if (!allSet) { toastr.warning('Complete producto y cantidad en todas las filas'); return; }
+
+        $.post('/purchase/save', $('#purchaseForm').serialize(), function (r) {
+            if (r.status == 1) {
+                toastr.success(r.msg + ' #' + r.purchase_id);
+                if (submittedAction === 'save_exit') setTimeout(function () { location.href = '/purchase/details/' + r.purchase_id; }, 800);
+            } else toastr.error(r.error || 'Error');
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+    });
+});
+</script>
+{{end}}

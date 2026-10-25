@@ -1,0 +1,44 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Copia de Seguridad de Base de Datos</h4></div>
+    </div>
+    <div class="panel-body">
+        <p>Genera un archivo SQL con todas las tablas y datos de la base de datos.</p>
+        <button class="btn btn-primary" id="btnBackup"><i class="fa fa-database"></i> Generar Backup</button>
+        <hr>
+        <table class="table table-striped table-bordered" id="backupsTable">
+            <thead><tr><th>Archivo</th><th class="text-right">Tamaño</th><th>Fecha</th><th></th></tr></thead>
+            <tbody>
+            {{range .Backups}}
+                <tr>
+                    <td>{{.Name}}</td>
+                    <td class="text-right">{{printf "%.1f" (divf .Size 1024.0)}} KB</td>
+                    <td>{{.Date}}</td>
+                    <td><a class="btn btn-default btn-xs" href="/data/backup/{{.Name}}" download><i class="fa fa-download"></i> Descargar</a></td>
+                </tr>
+            {{else}}
+                <tr><td colspan="4" class="text-center">Sin backups todavía</td></tr>
+            {{end}}
+            </tbody>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#btnBackup').on('click', function () {
+        var btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> Generando...');
+        $.post('/settings/backup/run', function (r) {
+            if (r.status == 1) { toastr.success(r.msg); setTimeout(function () { location.reload(); }, 800); }
+            else { toastr.error(r.error); btn.prop('disabled', false).html('<i class="fa fa-database"></i> Generar Backup'); }
+        }).fail(function () {
+            toastr.error('Error');
+            btn.prop('disabled', false).html('<i class="fa fa-database"></i> Generar Backup');
+        });
+    });
+});
+</script>
+{{end}}

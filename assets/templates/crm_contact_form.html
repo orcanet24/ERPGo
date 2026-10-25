@@ -1,0 +1,98 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>{{.Title}}</h4></div>
+    </div>
+    <div class="panel-body">
+        <form id="contactForm">
+            <input type="hidden" name="id" value="{{if .C}}{{.C.ID}}{{end}}">
+            <div class="row">
+                <div class="col-md-5">
+                    <div class="form-group">
+                        <label>Nombre completo *</label>
+                        <input type="text" class="form-control" name="full_name" value="{{if .C}}{{.C.FullName}}{{end}}" required>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Empresa</label>
+                        <input type="text" class="form-control" name="company_name" value="{{if .C}}{{.C.CompanyName}}{{end}}">
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>Cargo</label>
+                        <input type="text" class="form-control" name="position_title" value="{{if .C}}{{.C.PositionTitle}}{{end}}">
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Email</label>
+                        <input type="email" class="form-control" name="email" value="{{if .C}}{{.C.Email}}{{end}}">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Teléfono</label>
+                        <input type="text" class="form-control" name="phone" value="{{if .C}}{{.C.Phone}}{{end}}">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Origen</label>
+                        <select class="form-control" name="source">
+                            {{$origen := "otro"}}{{if .C}}{{$origen = .C.Source}}{{end}}
+                            <option value="referido"    {{if eq $origen "referido"}}selected{{end}}>Referido</option>
+                            <option value="web"         {{if eq $origen "web"}}selected{{end}}>Web</option>
+                            <option value="feria"       {{if eq $origen "feria"}}selected{{end}}>Feria</option>
+                            <option value="red"         {{if eq $origen "red"}}selected{{end}}>Redes</option>
+                            <option value="cold_call"   {{if eq $origen "cold_call"}}selected{{end}}>Llamada en frío</option>
+                            <option value="otro"        {{if eq $origen "otro"}}selected{{end}}>Otro</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-12">
+                    <div class="form-group">
+                        <label>Notas</label>
+                        <textarea class="form-control" name="notes" rows="4">{{if .C}}{{.C.Notes}}{{end}}</textarea>
+                    </div>
+                </div>
+            </div>
+            <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
+            <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
+            <a href="/crm/contact/list" class="btn btn-default">Cancelar</a>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    var submittedAction = 'save';
+
+    $('button[type=submit]', '#contactForm').on('click', function () { submittedAction = $(this).val(); });
+
+    $('#contactForm').on('submit', function (e) {
+        e.preventDefault();
+        var btn = $(this).find('button[type=submit]').prop('disabled', true);
+        $.post('/crm/contact/save', $(this).serialize(), function (r) {
+            if (r.status == 1) {
+                toastr.success(r.msg);
+                if (submittedAction === 'save_exit') setTimeout(function () { location.href = '/crm/contact/view/' + r.id; }, 700);
+            } else {
+                toastr.error(r.error || 'Error');
+                btn.prop('disabled', false);
+            }
+        }).fail(function (x) {
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'Error');
+            btn.prop('disabled', false);
+        });
+    });
+});
+</script>
+{{end}}

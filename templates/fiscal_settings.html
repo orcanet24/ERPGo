@@ -1,0 +1,115 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>{{.Title}}</h4></div>
+    </div>
+    <div class="panel-body">
+        <div class="alert alert-info">
+            <i class="fa fa-university"></i>
+            Estos parámetros regulan la emisión de documentos fiscales conforme a la
+            <strong>Providencia SNAT/2024/000102</strong> (factura digital) y la Ley del IGTF.
+            Las series asignan la <strong>numeración única y consecutiva</strong> y el
+            <strong>número de control</strong> de cada documento.
+        </div>
+
+        <div class="row">
+            <div class="col-md-6">
+                <div class="panel panel-default">
+                    <div class="panel-heading"><h5 style="margin:0">IGTF — Impuesto Grandes Transacciones Financieras</h5></div>
+                    <div class="panel-body">
+                        <form id="fsForm">
+                            <div class="checkbox">
+                                <label>
+                                    <input type="checkbox" name="igtf_enabled" value="1" {{if .FS.IGTFEnabled}}checked{{end}}>
+                                    Percibir IGTF automáticamente en pagos con divisas/cripto
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label>Alícuota (%)</label>
+                                <input type="number" step="0.01" class="form-control" name="igtf_rate" value="{{.FS.IGTFRate}}">
+                            </div>
+                            <div class="checkbox">
+                                <label>
+                                    <input type="checkbox" name="walkin_rif_required" value="1" {{if .FS.WalkinRIFReq}}checked{{end}}>
+                                    Exigir RIF en cliente contado del POS
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label>Pie de página fiscal (impreso en facturas)</label>
+                                <input type="text" class="form-control" name="fiscal_footnote" value="{{.FS.FiscalFootnote}}">
+                            </div>
+                            <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
+            <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
+            </form>
+                    </div>
+                </div>
+
+                <div class="panel panel-default">
+                    <div class="panel-heading"><h5 style="margin:0">Datos del emisor</h5></div>
+                    <div class="panel-body" style="font-size:13px">
+                        <p><strong>Razón social:</strong> {{.Company.CompanyName}}</p>
+                        <p><strong>RIF:</strong> {{if .Company.VatNo}}{{.Company.VatNo}}{{else}}<span class="text-danger">sin configurar — cámbielo en Ajustes &gt; Compañía</span>{{end}}</p>
+                        <p class="text-muted">El RIF del emisor y la imprenta digital se configuran en <a href="/settings/company">Ajustes &gt; Compañía</a>.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="panel panel-default">
+                    <div class="panel-heading"><h5 style="margin:0">Series de documentos fiscales</h5></div>
+                    <div class="panel-body">
+                        <table class="table table-condensed" style="font-size:12px">
+                            <thead>
+                                <tr><th>Código</th><th>Nombre</th><th style="width:90px">Prefijo</th><th style="width:110px">Próximo Nº</th><th style="width:80px">Ctrl. Pref.</th><th style="width:110px">Próx. Ctrl.</th><th></th></tr>
+                            </thead>
+                            <tbody>
+                                {{range .Series}}
+                                <tr data-id="{{.ID}}">
+                                    <td><strong>{{.Code}}</strong></td>
+                                    <td>{{.Name}}</td>
+                                    <td><input class="form-control input-sm s-prefix" value="{{.Prefix}}"></td>
+                                    <td><strong>{{.NextNo}}</strong></td>
+                                    <td><input class="form-control input-sm s-ctrlpre" value="{{.ControlPre}}"></td>
+                                    <td><strong>{{.ControlNext}}</strong></td>
+                                    <td><button class="btn btn-xs btn-default s-save"><i class="fa fa-check"></i></button></td>
+                                </tr>
+                                {{end}}
+                            </tbody>
+                        </table>
+                        <p class="help-block" style="font-size:11px">
+                            El prefijo se imprime delante del número (ej: prefijo "A" → factura A00000001).
+                            El número de control sigue el formato_PREFIJO-NNNNNNNN.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#fsForm').on('submit', function (e) {
+        e.preventDefault();
+        var data = $(this).serialize();
+        if (!$('[name=igtf_enabled]').prop('checked')) data += '&igtf_enabled=0';
+        if (!$('[name=walkin_rif_required]').prop('checked')) data += '&walkin_rif_required=0';
+        $.post('/settings/fiscal/save', data, function (r) {
+            if (r.status == 1) toastr.success(r.msg); else toastr.error(r.error);
+        });
+    });
+    $('.s-save').on('click', function () {
+        var $tr = $(this).closest('tr');
+        $.post('/settings/fiscal/series/save', {
+            id: $tr.data('id'),
+            prefix: $tr.find('.s-prefix').val(),
+            control_prefix: $tr.find('.s-ctrlpre').val()
+        }, function (r) {
+            if (r.status == 1) toastr.success(r.msg); else toastr.error(r.error);
+        });
+    });
+});
+</script>
+{{end}}

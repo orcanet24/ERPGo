@@ -1,0 +1,432 @@
+{{define "content"}}
+<link href="/static/css/ai-setting.css" rel="stylesheet" type="text/css" />
+
+
+<div class="ai_setting_container">
+    <div class="section_head">
+        <p class="heading">AI Business Analyst</p>
+        {{if .AIProvider}}
+        <p class="erp-caption">Proveedor activo: {{.AIProvider}}</p>
+        {{end}}
+        <div id="downloadBtnWrap" style="display:none">
+            <button type="button" id="downloadPdfBtn" class="btn_download">Descargar PDF / Imprimir</button>
+        </div>
+    </div>
+
+    <div class="ai_chat_container">
+        <!-- Ask AI -->
+        <div class="ai_chat_wrapper">
+            <form id="aiChatForm" class="form_container">
+                <div class="input_label">
+                    <label class="label_name">Seleccione tipo de reporte</label>
+                    <select multiple class="form-control" name="report_type[]" id="report_type" size="7"></select>
+
+                    <div class="add_new_type_section">
+                        <button type="button" class="btn_add_new_type" id="btnAddType">+ Agregar tipo</button>
+                        <button type="button" class="btn_remove_type" id="btnRemoveType">&times; Quitar tipo</button>
+                    </div>
+                </div>
+
+                <div class="selected_items" id="selectedItemsContainer"></div>
+
+                <div class="data_range">
+                    <label class="label_name">Rango de fechas</label>
+                    <div class="row" style="margin:0">
+                        <div class="col-xs-6" style="padding-left:0">
+                            <label class="erp-caption">Desde</label>
+                            <input type="date" class="input_section" name="date_from" id="date_from" value="{{.DateFrom}}" style="width:100%">
+                        </div>
+                        <div class="col-xs-6" style="padding-right:0">
+                            <label class="erp-caption">Hasta</label>
+                            <input type="date" class="input_section" name="date_to" id="date_to" value="{{.DateTo}}" style="width:100%">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="input_label">
+                    <label class="label_name">Su pregunta / instrucción</label>
+                    <textarea name="user_input" class="input_section" rows="6"
+                        placeholder="Pregunte algo sobre sus reportes..."></textarea>
+                </div>
+
+                <div class="text-right">
+                    <button type="submit" class="btn_submit" id="btnGenerate">Generar</button>
+                </div>
+            </form>
+
+            <div style="margin-top: 15px;">
+                <button type="button" id="toggleInstructions" class="btn_toggle">Instrucciones</button>
+                <button type="button" id="toggleExample" class="btn_toggle">Ejemplo</button>
+            </div>
+
+            <div id="instructionsBox" class="instructions-box" style="display: none;">
+                <h4>Instrucciones de uso</h4>
+                <ul>
+                    <li>Primero active o cree un proveedor en la página de Configuración IA.</li>
+                    <li>Cada proveedor (OpenAI, OpenRouter, Groq, DeepSeek, Ollama local, ...) usa su propia API key.</li>
+                    <li>Incluya tipos de reporte como: <em>sales, purchase, stock, chart, table_summary</em>.</li>
+                    <li>Para ver el gráfico, seleccione el tipo de reporte <em>chart</em>.</li>
+                    <li>Para ver la tabla, seleccione el tipo de reporte <em>table_summary</em>.</li>
+                    <li>Escriba instrucciones claras y significativas.</li>
+                </ul>
+            </div>
+
+            <div class="example-box" id="exampleBox" style="display: none;">
+                <strong>Ejemplo de prompt:</strong>
+                <p id="examplePromptText" style="margin: 6px 0;">Generate a sales and stock summary report with table format for the last 30 days.</p>
+                <button type="button" id="copyExampleBtn">Copiar y pegar</button>
+            </div>
+        </div>
+
+        <!-- AI Chat Report -->
+        <div class="ai_chat_report">
+            <div id="pdfContent">
+                <div id="aiResponseBox">
+                    <h5 class="section_titles erp-section-badge">Informe de An&aacute;lisis IA</h5>
+                    <div id="aiResponseContent">Seleccione los tipos de reporte, el rango de fechas y escriba su pregunta. Luego presione "Generar".</div>
+                    <table id="aiTable" class="table table-bordered" style="display:none"></table>
+                    <canvas id="summaryChart" width="600" height="400" style="display:none"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add New Type Modal -->
+<div id="addReportTypeModal" class="modal_ai">
+    <div class="modal_overlay"></div>
+    <div class="modal_content_ai">
+        <p class="modal_heading">Agregar tipo de reporte</p>
+        <input class="input_section" type="text" id="new_report_type" placeholder="Nombre del nuevo tipo" />
+        <div class="modal_actions">
+            <button type="button" id="saveReportType" class="btn_save">Guardar</button>
+            <button type="button" id="closeModalBtn" class="btn_cancel">Cancelar</button>
+        </div>
+    </div>
+</div>
+
+<!-- Remove Type Modal -->
+<div id="removeReportTypeModal" class="modal_ai">
+    <div class="modal_overlay"></div>
+    <div class="modal_content_ai">
+        <p class="modal_heading">Quitar tipos de reporte</p>
+        <div id="removeTypeList"></div>
+        <div class="modal_actions">
+            <button type="button" id="closeRemoveModalBtn" class="btn_cancel">Cerrar</button>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+var summaryChart = null;
+
+function esc(value) {
+    return $('<div>').text(value).html();
+}
+
+function loadReportTypes() {
+    $.getJSON('/ai/report-types', function (data) {
+        var $select = $('#report_type');
+        var previous = $select.val() || [];
+        $select.empty();
+        $.each(data, function (i, item) {
+            $select.append($('<option></option>').attr('value', item.name).text(item.name));
+        });
+        if (previous.length) {
+            $select.val(previous);
+        }
+        renderBadges();
+    });
+}
+
+function renderBadges() {
+    var selected = $('#report_type').val() || [];
+    var $container = $('#selectedItemsContainer').empty();
+    $.each(selected, function (i, value) {
+        var $badge = $('<span class="tag"></span>').text(value + ' ');
+        var $remove = $('<button type="button">&times;</button>');
+        $remove.on('click', function () {
+            $('#report_type option').filter(function () {
+                return $(this).val() === value;
+            }).remove();
+            renderBadges();
+        });
+        $badge.append($remove);
+        $container.append($badge);
+    });
+}
+
+function loadRemoveTypeList() {
+    $.getJSON('/ai/report-types', function (data) {
+        var $list = $('#removeTypeList').empty();
+        if (!data.length) {
+            $list.append('<p class="erp-empty-state">No hay tipos de reporte</p>');
+            return;
+        }
+        $.each(data, function (i, item) {
+            var $row = $('<div class="report_type_item erp-row-split"></div>');
+            $row.append($('<span></span>').text(item.name));
+            var $del = $('<button type="button" class="btn_delete_type erp-icon-btn">&#10005;</button>');
+            $del.on('click', function () {
+                $.post('/ai/report-types/delete', { name: item.name }, function (res) {
+                    if (res.status === 'success') {
+                        loadReportTypes();
+                        loadRemoveTypeList();
+                    } else {
+                        toastr.error(res.message || 'No se pudo eliminar');
+                    }
+                }, 'json').fail(function (x) {
+                    toastr.error(x.responseJSON && x.responseJSON.message ? x.responseJSON.message : 'No se pudo eliminar');
+                });
+            });
+            $row.append($del);
+            $list.append($row);
+        });
+    });
+}
+
+function renderResponse(text) {
+    var $box = $('#aiResponseContent');
+    if (text.indexOf('|') > -1 && text.indexOf('---') > -1) {
+        $box.html(markdownTableToHtml(text));
+    } else {
+        $box.text(text);
+    }
+}
+
+function markdownTableToHtml(mdText) {
+    var lines = mdText.trim().split('\n');
+    var headerLine = null;
+    for (var i = 0; i < lines.length; i++) {
+        if (lines[i].indexOf('|') > -1 && lines[i].indexOf('---') === -1) {
+            headerLine = lines[i];
+            break;
+        }
+    }
+    if (!headerLine) {
+        return '<pre>' + esc(mdText) + '</pre>';
+    }
+    var html = '<h5>Tabla de análisis IA</h5><table class="table table-bordered"><thead><tr>';
+    $.each(headerLine.split('|'), function (i, cell) {
+        var value = cell.trim();
+        if (value) {
+            html += '<th>' + esc(value) + '</th>';
+        }
+    });
+    html += '</tr></thead><tbody>';
+    var dataStarted = false;
+    for (var j = 0; j < lines.length; j++) {
+        var line = lines[j];
+        if (line.indexOf('---') > -1) {
+            dataStarted = true;
+            continue;
+        }
+        if (!dataStarted || line.indexOf('|') === -1) {
+            continue;
+        }
+        var cells = line.split('|');
+        var row = '';
+        var count = 0;
+        for (var k = 0; k < cells.length; k++) {
+            var cell = cells[k].trim();
+            if (cell) {
+                row += '<td>' + esc(cell) + '</td>';
+                count++;
+            }
+        }
+        if (count) {
+            html += '<tr>' + row + '</tr>';
+        }
+    }
+    html += '</tbody></table>';
+    return html;
+}
+
+function renderTable(data) {
+    if (!data || !data.headers || !data.rows || !data.rows.length) {
+        $('#aiTable').hide().empty();
+        return;
+    }
+    var html = '<thead><tr>';
+    $.each(data.headers, function (i, header) {
+        html += '<th>' + esc(String(header)) + '</th>';
+    });
+    html += '</tr></thead><tbody>';
+    $.each(data.rows, function (i, row) {
+        html += '<tr>';
+        $.each(row, function (j, cell) {
+            html += '<td>' + esc(String(cell)) + '</td>';
+        });
+        html += '</tr>';
+    });
+    html += '</tbody>';
+    $('#aiTable').html(html).show();
+}
+
+function renderChart(data) {
+    if (!data || !data.labels || !data.labels.length) {
+        $('#summaryChart').hide();
+        return;
+    }
+    if (summaryChart) {
+        summaryChart.destroy();
+        summaryChart = null;
+    }
+    $('#summaryChart').show();
+    var ctx = document.getElementById('summaryChart').getContext('2d');
+    // Cada serie toma su color del tema. Con 'green', 'orange' y 'blue'
+    // escritos aquí, la gráfica salía con cinco colores puros que no
+    // existían en ninguna otra parte del sistema y que en el tema
+    // oscuro quedaban fuera de lugar.
+    function tone(name) {
+        var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        return v || '#384049';
+    }
+    var series = ['--erp-series-1', '--erp-series-2', '--erp-series-3', '--erp-series-4', '--erp-series-5'];
+    function fillOf(i) {
+        var c = tone(series[i]);
+        // alpha() necesita el color en notación rgb; si el navegador no
+        // la acepta, el relleno se queda opaco, que es feo pero legible.
+        return (c.indexOf('rgb') === 0) ? c.replace(/rgba?\(([^)]+)\)/, 'rgba($1,0.14)') : c;
+    }
+    summaryChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: data.labels,
+            datasets: [
+                { label: 'Ventas', data: data.sales || [], borderColor: tone(series[0]), backgroundColor: fillOf(0), fill: true, tension: 0.3 },
+                { label: 'Compras', data: data.purchases || [], borderColor: tone(series[1]), backgroundColor: fillOf(1), fill: true, tension: 0.3 },
+                { label: 'Inventario', data: data.stock || [], borderColor: tone(series[2]), backgroundColor: fillOf(2), fill: true, tension: 0.3 },
+                { label: 'Devolución ventas', data: data.sales_return || [], borderColor: tone(series[3]), backgroundColor: fillOf(3) },
+                { label: 'Devolución compras', data: data.supplier_return || [], borderColor: tone(series[4]), backgroundColor: fillOf(4) }
+            ]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                title: {
+                    display: true,
+                    text: 'Ventas vs Compras vs Inventario'
+                },
+                legend: { labels: { fontColor: tone('--erp-text-muted') } }
+            },
+            scales: {
+                yAxes: [{
+                    ticks: { fontColor: tone('--erp-text-muted') },
+                    gridLines: { color: tone('--erp-border'), zeroLineColor: tone('--erp-border') }
+                }],
+                xAxes: [{ ticks: { fontColor: tone('--erp-text-muted') }, gridLines: { display: false } }]
+            }
+        }
+    });
+}
+
+$(function () {
+    loadReportTypes();
+
+    $('#report_type').on('change', renderBadges);
+
+    $('#btnAddType').on('click', function () {
+        $('#addReportTypeModal').addClass('show');
+    });
+
+    $('#closeModalBtn').on('click', function () {
+        $('#addReportTypeModal').removeClass('show');
+    });
+
+    $('#saveReportType').on('click', function () {
+        var name = $('#new_report_type').val().trim();
+        if (!name) {
+            toastr.error('Ingrese un nombre');
+            return;
+        }
+        $.post('/ai/report-types/add', { name: name }, function (res) {
+            if (res.status === 'success') {
+                $('#new_report_type').val('');
+                $('#addReportTypeModal').removeClass('show');
+                loadReportTypes();
+            } else {
+                toastr.error(res.message || 'No se pudo guardar');
+            }
+        }, 'json').fail(function (x) {
+            toastr.error(x.responseJSON && x.responseJSON.message ? x.responseJSON.message : 'No se pudo guardar');
+        });
+    });
+
+    $('#btnRemoveType').on('click', function () {
+        loadRemoveTypeList();
+        $('#removeReportTypeModal').addClass('show');
+    });
+
+    $('#closeRemoveModalBtn').on('click', function () {
+        $('#removeReportTypeModal').removeClass('show');
+    });
+
+    $('.modal_overlay').on('click', function () {
+        $(this).closest('.modal_ai').removeClass('show');
+    });
+
+    $('#toggleInstructions').on('click', function () {
+        $('#instructionsBox').slideToggle();
+    });
+
+    $('#toggleExample').on('click', function () {
+        $('#exampleBox').slideToggle();
+    });
+
+    $('#copyExampleBtn').on('click', function () {
+        var example = $('#examplePromptText').text().trim();
+        $('textarea[name="user_input"]').val(example).focus();
+    });
+
+    $('#downloadPdfBtn').on('click', function () {
+        window.print();
+    });
+
+    $('#aiChatForm').on('submit', function (e) {
+        e.preventDefault();
+        $.ajax({
+            url: '/ai/analyze',
+            type: 'POST',
+            data: $(this).serialize(),
+            dataType: 'json',
+            beforeSend: function () {
+                $('#aiResponseContent').text('Generando respuesta de la IA...').show();
+                $('#aiTable').hide().empty();
+                $('#summaryChart').hide();
+                $('#downloadBtnWrap').hide();
+                $('#btnGenerate').prop('disabled', true).text('Generando...');
+            },
+            success: function (res) {
+                $('#btnGenerate').prop('disabled', false).text('Generar');
+                if (res.status !== 'success') {
+                    $('#aiResponseContent').text('Error: ' + (res.message || 'No se pudo generar el informe'));
+                    $('#downloadBtnWrap').hide();
+                    return;
+                }
+                renderResponse(res.response || '');
+                if (res.chart_data && res.chart_data.labels && res.chart_data.labels.length) {
+                    renderChart(res.chart_data);
+                } else {
+                    if (summaryChart) {
+                        summaryChart.destroy();
+                        summaryChart = null;
+                    }
+                    $('#summaryChart').hide();
+                }
+                renderTable(res.table_data);
+                $('#downloadBtnWrap').show();
+            },
+            error: function (x) {
+                $('#btnGenerate').prop('disabled', false).text('Generar');
+                var msg = x.responseJSON && x.responseJSON.message ? x.responseJSON.message : 'Ocurrió un error al generar el informe';
+                $('#aiResponseContent').text('Error: ' + msg);
+                $('#downloadBtnWrap').hide();
+            }
+        });
+    });
+});
+</script>
+{{end}}

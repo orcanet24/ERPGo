@@ -1,0 +1,52 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>{{.Title}}</h4></div>
+    </div>
+    <div class="panel-body">
+        <a href="/cartera/statement/0" class="btn btn-default" style="margin-bottom:12px"><i class="fa fa-file-text-o"></i> Estado de Cuenta</a>
+        <table class="table table-bordered table-striped" id="carteraTable" style="width:100%">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Cliente</th>
+                    <th>Factura</th>
+                    <th>Fecha Cobro</th>
+                    <th class="text-right">Monto</th>
+                    <th>Forma de Pago</th>
+                    <th>Referencia</th>
+                    <th>Notas</th>
+                    <th>Registrado por</th>
+                    <th></th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#carteraTable').DataTable({
+        processing: true, serverSide: true,
+        ajax: { url: '/cartera/list/data', type: 'GET' },
+        columns: [
+            { data: 'id' },
+            { data: 'customer' },
+            { data: 'invoice_id', render: function (d) { return d ? '<a href="/invoice/details/' + d + '">#' + d + '</a>' : '—'; } },
+            { data: 'collection_date' },
+            { data: 'amount', className: 'text-right' },
+            { data: 'payment_method' },
+            { data: 'reference' },
+            { data: 'notes' },
+            { data: 'created_by' },
+            { data: 'customer_id', orderable: false, render: function (d) {
+                return '<a href="/cartera/statement/' + d + '" class="btn btn-xs btn-default" title="Estado de cuenta"><i class="fa fa-file-text-o"></i></a>';
+            } }
+        ],
+        order: [[0, 'desc']]
+    });
+});
+</script>
+{{end}}

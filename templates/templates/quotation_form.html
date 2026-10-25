@@ -1,0 +1,149 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <h3 class="panel-title">{{.Title}}</h3>
+        <div class="btn-group pull-right">
+            <a href="/quotation/list" class="btn btn-default btn-sm"><i class="fa fa-arrow-left"></i> Volver</a>
+        </div>
+    </div>
+    <div class="panel-body">
+        <form method="POST" action="/quotation/save" id="quotForm">
+            <input type="hidden" name="quotation_id" value="{{with .Q}}{{.id}}{{end}}">
+            <div class="row">
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>Fecha *</label>
+                        <input type="date" name="quotdate" class="form-control" value="{{with .Q}}{{.date}}{{else}}{{today}}{{end}}" required>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>Fecha Vencimiento</label>
+                        <input type="date" name="expire_date" class="form-control" value="{{with .Q}}{{.expire}}{{end}}">
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Cliente *</label>
+                        <select name="customer_id" class="form-control" required>
+                            <option value="">Seleccione...</option>
+                            {{range .Customers}}
+                            <option value="{{.id}}" {{with $}}{{if eq $.Q.customer_id (printf "%d" .id)}}selected{{end}}{{end}}>{{.name}}</option>
+                            {{end}}
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <h4>Productos</h4>
+            <table class="table table-bordered" id="prodLines">
+                <thead>
+                    <tr>
+                        <th>Producto</th>
+                        <th>Cantidad</th>
+                        <th>Precio</th>
+                        <th>Descuento</th>
+                        <th>Total</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+            <button type="button" class="btn btn-info btn-sm" onclick="addProdLine()"><i class="fa fa-plus"></i> Añadir Producto</button>
+
+            <hr>
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Total Productos</label>
+                        <input type="number" step="0.01" class="form-control" id="itemTotal" name="item_total" readonly value="0.00">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Total Servicios</label>
+                        <input type="number" step="0.01" class="form-control" id="servTotal" name="service_total" readonly value="0.00">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Total General</label>
+                        <input type="number" step="0.01" class="form-control" id="grandTotal" name="grand_total" readonly value="0.00">
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Notas / Descripción</label>
+                <textarea name="quot_description" class="form-control" rows="2">{{with .Q}}{{.description}}{{end}}</textarea>
+            </div>
+
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="is_fixed" value="1" {{with .Q}}{{if eq .is_fixed 1}}checked{{end}}{{end}}> Precio Fijo
+                </label>
+                &nbsp;
+                <label>
+                    <input type="checkbox" name="is_dynamic" value="1" {{with .Q}}{{if eq .is_dynamic 1}}checked{{end}}{{end}}> Precio Dinámico
+                </label>
+            </div>
+
+            <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
+            <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
+            </form>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+const products = [{{range .Products}}{ id: '{{.id}}', name: '{{.name}}', price: {{with .price}}{{.}}{{else}}0{{end}} },{{end}}];
+
+function addProdLine() {
+    const tbody = document.querySelector('#prodLines tbody');
+    const tr = document.createElement('tr');
+    let opts = '<select name="product_id" class="form-control" onchange="updatePrice(this)"><option value="">Seleccione...</option>';
+    products.forEach(s => { opts += '<option value="'+s.id+'" data-price="'+s.price+'">'+s.name+'</option>'; });
+    opts += '</select>';
+    tr.innerHTML = '<td>'+opts+'</td>' +
+        '<td><input type="number" name="qty" value="1" min="1" class="form-control" onchange="lineTotal(this)"></td>' +
+        '<td><input type="number" name="rate" step="0.01" class="form-control" onchange="lineTotal(this)"></td>' +
+        '<td><input type="number" name="discount" step="0.01" value="0" class="form-control" onchange="lineTotal(this)"></td>' +
+        '<td><span class="line-total">0.00</span></td>' +
+        '<td><button type="button" class="btn btn-danger btn-xs" onclick="this.closest(\'tr\').remove(); grandTot();"><i class="fa fa-trash"></i></button></td>';
+    tbody.appendChild(tr);
+}
+
+function updatePrice(sel) {
+    const opt = sel.selectedOptions[0];
+    const price = parseFloat(opt.dataset.price) || 0;
+    const tr = sel.closest('tr');
+    tr.querySelector('[name="rate"]').value = price.toFixed(2);
+    lineTotal(sel);
+}
+
+function lineTotal(el) {
+    const tr = el.closest('tr');
+    const qty = parseFloat(tr.querySelector('[name="qty"]').value) || 0;
+    const rate = parseFloat(tr.querySelector('[name="rate"]').value) || 0;
+    const disc = parseFloat(tr.querySelector('[name="discount"]').value) || 0;
+    tr.querySelector('.line-total').textContent = (qty * rate - disc).toFixed(2);
+    grandTot();
+}
+
+function grandTot() {
+    let total = 0;
+    document.querySelectorAll('#prodLines tbody tr').forEach(tr => {
+        const qty = parseFloat(tr.querySelector('[name="qty"]').value) || 0;
+        const rate = parseFloat(tr.querySelector('[name="rate"]').value) || 0;
+        const disc = parseFloat(tr.querySelector('[name="discount"]').value) || 0;
+        total += qty * rate - disc;
+    });
+    document.getElementById('itemTotal').value = total.toFixed(2);
+    const serv = parseFloat(document.getElementById('servTotal').value) || 0;
+    document.getElementById('grandTotal').value = (total + serv).toFixed(2);
+}
+
+$(function() { addProdLine(); });
+</script>
+{{end}}

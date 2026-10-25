@@ -1,0 +1,226 @@
+{{define "content"}}
+{{/*
+  cost_proyecto.html — Detalle de un proyecto: sus tareas y sus renglones.
+
+  POR QUÉ ESTA PANTALLA EXISTE. El resumen del período dice «21,5 horas
+  facturables»; esta dice de QUÉ horas salen y por qué las demás no cuentan. Es
+  la pantalla a la que se entra cuando el cliente discute una factura.
+
+  POR QUÉ LAS TAREAS SE LISTAN APARTE. Una tarea «no facturable por defecto» no
+  es lo mismo que una hora marcada como no facturable: la primera es una regla
+  del proyecto (montaje, garantía) y la segunda una decisión de quien registró.
+  Mezclarlas escondería cuál de las dos se aplicó.
+*/}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>{{.Proyecto.Codigo}} &mdash; {{.Proyecto.Nombre}} ({{.Periodo}})</h4>
+        </div>
+        <div class="panel-tools pull-right">
+            <a href="/cost/proyectos?periodo={{.Periodo}}" class="btn btn-default">Volver</a>
+            <a href="/cost/timesheet?periodo={{.Periodo}}" class="btn btn-default">Hoja de horas</a>
+        </div>
+    </div>
+    <div class="panel-body">
+
+        <div class="row">
+            <div class="col-md-3">
+                <div class="text-muted">Facturación</div>
+                <strong>{{.Proyecto.Facturacion}}</strong>
+            </div>
+            <div class="col-md-3">
+                <div class="text-muted">Tarifa por hora</div>
+                <strong>{{printf "%.2f" .Proyecto.TarifaHora}}</strong>
+            </div>
+            <div class="col-md-3">
+                <div class="text-muted">Presupuesto de horas</div>
+                <strong>{{printf "%.2f" .Resumen.HorasPresupuesto}}</strong>
+                {{if .Resumen.PresupuestoAgotado}}
+                    <span class="label label-warning">agotado</span>
+                {{end}}
+            </div>
+            <div class="col-md-3">
+                <div class="text-muted">A facturar en {{.Periodo}}</div>
+                <strong style="color: var(--erp-series-2, #3f8f7d);">{{printf "%.2f" .Resumen.ImporteFacturable}}</strong>
+            </div>
+        </div>
+
+        {{if gt .Resumen.HorasExcedente 0.0}}
+        <div class="alert alert-warning" style="margin-top:14px;">
+            <strong>Presupuesto excedido:</strong> {{printf "%.2f" .Resumen.HorasExcedente}} hora(s) por
+            encima de lo pactado, sin orden de cambio.
+            {{if gt .Resumen.OrdenCambioAutorizada 0.0}}
+                Hay {{printf "%.2f" .Resumen.OrdenCambioAutorizada}} hora(s) autorizadas por orden de cambio.
+            {{end}}
+            Lo que pasó del presupuesto <strong>no</strong> se incluye en el importe facturable.
+        </div>
+        {{end}}
+
+        <hr>
+
+        <div class="row">
+            <div class="col-md-6">
+                <h5>Tareas del proyecto</h5>
+                <table class="table table-condensed" id="tblTareas">
+                    <thead><tr>
+                        <th>Código</th><th>Nombre</th><th>Facturable por defecto</th><th>Activa</th>
+                    </tr></thead>
+                    <tbody>
+                        {{range .Tareas}}
+                        <tr>
+                            <td>{{.Codigo}}</td>
+                            <td>{{.Nombre}}</td>
+                            <td>{{if eq .FacturableDef 1}}<span class="label label-success">Sí</span>{{else}}<span class="label label-default">No</span>{{end}}</td>
+                            <td>{{if eq .Activa 1}}Sí{{else}}No{{end}}</td>
+                        </tr>
+                        {{else}}
+                        <tr><td colspan="4" class="text-muted">Este proyecto no tiene tareas: sus horas se registran sin tarea.</td></tr>
+                        {{end}}
+                    </tbody>
+                </table>
+
+                <h5>Nueva tarea</h5>
+                <form id="fTarea" class="form-inline">
+                    <input type="hidden" name="project_id" value="{{.Proyecto.ID}}">
+                    <input type="text" name="code" class="form-control" placeholder="Código" required style="width:110px;">
+                    <input type="text" name="name" class="form-control" placeholder="Nombre" required style="width:200px;">
+                    <label class="checkbox-inline">
+                        <input type="checkbox" name="billable_default" value="1" checked> Facturable
+                    </label>
+                    <button class="btn btn-primary">Añadir tarea</button>
+                </form>
+            </div>
+
+            <div class="col-md-6">
+                <h5>Registrar horas en este proyecto</h5>
+                <form id="fHora">
+                    <input type="hidden" name="project_id" value="{{.Proyecto.ID}}">
+                    <div class="form-group">
+                        <label>Empleado (ID)</label>
+                        <input type="text" name="employee_id" class="form-control" placeholder="ID del empleado" required>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6"><div class="form-group">
+                            <label>Fecha</label>
+                            <input type="date" name="work_date" class="form-control" value="{{.AceptaHoy}}" required>
+                        </div></div>
+                        <div class="col-md-6"><div class="form-group">
+                            <label>Horas</label>
+                            <input type="number" step="0.25" min="0.25" max="24" name="hours" class="form-control" required>
+                        </div></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Tarea</label>
+                        <select name="task_id" class="form-control">
+                            <option value="">Sin tarea concreta</option>
+                            {{range .Tareas}}
+                            {{if eq .Activa 1}}<option value="{{.ID}}">{{.Codigo}} — {{.Nombre}}</option>{{end}}
+                            {{end}}
+                        </select>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6"><div class="form-group">
+                            <label>Grado</label>
+                            <input type="text" name="grade" class="form-control">
+                        </div></div>
+                        <div class="col-md-6"><div class="form-group">
+                            <label>Orden de cambio</label>
+                            <input type="number" step="0.01" min="0" name="change_order_amount" class="form-control" value="0">
+                        </div></div>
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" name="billable" value="1" checked> Facturable al cliente</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Notas</label>
+                        <input type="text" name="notes" class="form-control">
+                    </div>
+                    <button class="btn btn-primary">Registrar horas</button>
+                </form>
+            </div>
+        </div>
+
+        <hr>
+
+        <h5>Renglones del período</h5>
+        <table class="table table-striped" id="tblRenglones">
+            <thead><tr>
+                <th>Fecha</th><th>Empleado</th><th>Tarea</th><th>Grado</th>
+                <th class="text-right">Horas</th><th class="text-right">Tarifa</th>
+                <th class="text-right">Importe</th><th>Se factura</th><th>Motivo</th>
+            </tr></thead>
+            <tbody>
+                {{range .Renglones}}
+                <tr>
+                    <td>{{.Fecha}}</td>
+                    <td>{{.Empleado}}</td>
+                    <td>{{if .Tarea}}{{.Tarea}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+                    <td>{{.Grade}}</td>
+                    <td class="text-right">{{printf "%.2f" .Horas}}</td>
+                    <td class="text-right">{{printf "%.2f" .Tarifa}}</td>
+                    <td class="text-right">{{printf "%.2f" .Importe}}</td>
+                    <td>
+                        {{if .FacturableEfectivo}}
+                            <span class="label label-success">Sí</span>
+                        {{else}}
+                            <span class="label label-default">No</span>
+                        {{end}}
+                    </td>
+                    <td class="text-muted">{{.MotivoNoFacturable}}</td>
+                </tr>
+                {{else}}
+                <tr><td colspan="9" class="text-muted">No hay horas registradas en {{.Periodo}} para este proyecto.</td></tr>
+                {{end}}
+            </tbody>
+        </table>
+
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+
+    var PERIODO = '{{.Periodo}}';
+
+    $('#fTarea').on('submit', function (e) {
+        e.preventDefault();
+        $.post('/cost/tareas/save', $(this).serialize())
+            .done(function (r) {
+                if (r.status === 1) {
+                    toastr.success(r.msg);
+                    setTimeout(function () { location.reload(); }, 700);
+                } else {
+                    toastr.error(r.error || 'No se pudo guardar la tarea');
+                }
+            })
+            .fail(function (x) {
+                toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudo guardar la tarea');
+            });
+    });
+
+    $('#fHora').on('submit', function (e) {
+        e.preventDefault();
+        $.post('/cost/horas/tarea/save', $(this).serialize())
+            .done(function (r) {
+                if (r.status === 1) {
+                    toastr.success(r.msg);
+                    setTimeout(function () {
+                        location.href = '/cost/proyectos/{{.Proyecto.ID}}?periodo=' + encodeURIComponent(PERIODO);
+                    }, 700);
+                } else {
+                    toastr.error(r.error || 'No se pudieron registrar las horas');
+                }
+            })
+            .fail(function (x) {
+                // El servidor explica el motivo real (grado obligatorio, período
+                // cerrado, fecha fuera del período): se muestra tal cual en vez de
+                // un mensaje genérico que obligaría a adivinar.
+                toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudieron registrar las horas');
+            });
+    });
+
+});
+</script>
+{{end}}

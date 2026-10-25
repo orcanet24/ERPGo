@@ -1,0 +1,127 @@
+﻿[
+    {
+        "from":  "cmd/semillar",
+        "to":  "configs",
+        "count":  1
+    },
+    {
+        "from":  "cmd/semillar",
+        "to":  "infrastructure/persistence",
+        "count":  1
+    },
+    {
+        "from":  "cmd/semillar",
+        "to":  "interfaces/web",
+        "count":  1
+    },
+    {
+        "from":  "cmd/server",
+        "to":  "configs",
+        "count":  1
+    },
+    {
+        "from":  "cmd/server",
+        "to":  "infrastructure/persistence",
+        "count":  1
+    },
+    {
+        "from":  "cmd/server",
+        "to":  "interfaces/web",
+        "count":  1
+    },
+    {
+        "from":  "cmd/server",
+        "to":  "internal/logger",
+        "count":  1
+    },
+    {
+        "from":  "cmd/server",
+        "to":  "internal/pos",
+        "count":  1
+    },
+    {
+        "from":  "cmd/server",
+        "to":  "internal/service",
+        "count":  1
+    },
+    {
+        "from":  "cmd/server",
+        "to":  "internal/setup",
+        "count":  1
+    },
+    {
+        "from":  "interfaces/web",
+        "to":  "configs",
+        "count":  7
+    },
+    {
+        "from":  "interfaces/web",
+        "to":  "infrastructure/persistence",
+        "count":  16
+    },
+    {
+        "from":  "interfaces/web",
+        "to":  "internal/orchestrator",
+        "count":  2
+    },
+    {
+        "from":  "interfaces/web",
+        "to":  "internal/pos",
+        "count":  1
+    },
+    {
+        "from":  "interfaces/web",
+        "to":  "internal/queue",
+        "count":  3
+    },
+    {
+        "from":  "interfaces/web",
+        "to":  "internal/security",
+        "count":  1
+    },
+    {
+        "from":  "interfaces/web",
+        "to":  "internal/upload",
+        "count":  1
+    },
+    {
+        "from":  "internal/orchestrator",
+        "to":  "infrastructure/persistence",
+        "count":  1
+    },
+    {
+        "from":  "internal/pos",
+        "to":  "infrastructure/persistence",
+        "count":  1
+    },
+    {
+        "from":  "internal/pos",
+        "to":  "proto/pos",
+        "count":  2
+    },
+    {
+        "from":  "internal/queue",
+        "to":  "infrastructure/persistence",
+        "count":  2
+    },
+    {
+        "from":  "internal/setup",
+        "to":  "infrastructure/persistence",
+        "count":  2
+    },
+    {
+        "from":  "tools/estress",
+        "to":  "infrastructure/persistence",
+        "count":  1
+    },
+    {
+        "from":  "tools/estress",
+        "to":  "internal/orchestrator",
+        "count":  1
+    },
+    {
+        "from":  "tools/limpiar",
+        "to":  "infrastructure/persistence",
+        "count":  1
+    }
+]

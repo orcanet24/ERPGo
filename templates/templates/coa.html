@@ -1,0 +1,133 @@
+{{define "content"}}
+<div class="row">
+    <div class="col-md-7">
+        <div class="panel panel-bd">
+            <div class="panel-heading">
+                <div class="panel-title">
+                    <h4>Árbol de Cuentas <button class="btn btn-primary btn-sm pull-right" data-toggle="modal" data-target="#accountModal" onclick="newAccount()">+ Nueva Cuenta</button></h4>
+                </div>
+            </div>
+            <div class="panel-body">
+                <input type="text" class="form-control" id="treeSearch" placeholder="Buscar cuenta..." style="margin-bottom:10px">
+                <div id="coaTree"></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-5">
+        <div class="panel panel-bd">
+            <div class="panel-heading">
+                <div class="panel-title"><h4>Detalle de Cuenta</h4></div>
+            </div>
+            <div class="panel-body" id="headInfo">
+                <p class="text-muted">Seleccione una cuenta del árbol para ver su balance y movimientos.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal cuenta -->
+<div class="modal fade" id="accountModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <form id="accountForm">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal">&times;</button>
+                    <h4 class="modal-title">Cuenta Contable</h4>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="id" id="acc_id">
+                    <input type="hidden" name="PHeadCode" id="acc_pcode">
+                    <div class="form-group">
+                        <label>Nombre de la cuenta *</label>
+                        <input type="text" class="form-control" name="HeadName" id="acc_name" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Cuenta padre</label>
+                        <input type="text" class="form-control" id="acc_pname" readonly>
+                    </div>
+                    <div class="checkbox">
+                        <label><input type="checkbox" name="IsTransaction" id="acc_trans" value="1" checked> Permite transacciones</label>
+                    </div>
+                    <div class="checkbox">
+                        <label><input type="checkbox" name="IsGL" id="acc_gl" value="1"> Aparece en libro mayor</label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">Cancelar</button>
+                    <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
+            <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
+            </div>
+            </form>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+var treeData;
+function newAccount(parentCode, parentName) {
+    $('#accountForm')[0].reset();
+    $('#acc_id').val('');
+    if (parentCode) {
+        $('#acc_pcode').val(parentCode);
+        $('#acc_pname').val(parentName);
+    } else {
+        $('#acc_pcode').val('');
+        $('#acc_pname').val('');
+    }
+}
+$(function () {
+    $.getJSON('/account/coa/data', function (d) {
+        treeData = d;
+        $('#coaTree').jstree({
+            'core': {
+                'data': function (node, cb) {
+                    if (node.id === '#') { cb(d); return; }
+                    var find = function (list, id) {
+                        for (var i = 0; i < list.length; i++) {
+                            if (String(list[i].id) === String(id)) return list[i];
+                            var r = find(list[i].children || [], id);
+                            if (r) return r;
+                        }
+                        return null;
+                    };
+                    var n = find(d, node.id);
+                    cb(n ? (n.children || []) : []);
+                }
+            },
+            'plugins': ['search']
+        });
+    });
+    $('#treeSearch').on('keyup', function () {
+        $('#coaTree').jstree(true).search($(this).val());
+    });
+    $('#coaTree').on('select_node.jstree', function (e, data) {
+        var hc = data.node.original.headcode;
+        $.getJSON('/account/heads-transactions?headcode=' + hc, function (txns) {
+            var html = '<h4>' + data.node.text + '</h4>';
+            if (hc) {
+                html += '<button class="btn btn-primary btn-sm" onclick="newAccount(\'' + hc + '\',\'' + data.node.text.replace(/'/g, "") + '\')" data-toggle="modal" data-target="#accountModal">+ Subcuenta</button> ';
+                html += '<a class="btn btn-default btn-sm" href="/account/ledger?headcode=' + hc + '">Ver Mayor</a><hr>';
+            }
+            if (!txns.length) { html += '<p class="text-muted">Sin movimientos.</p>'; }
+            else {
+                html += '<table class="table table-condensed"><thead><tr><th>Fecha</th><th>VNo</th><th class="text-right">Débito</th><th class="text-right">Crédito</th></tr></thead><tbody>';
+                txns.forEach(function (t) {
+                    html += '<tr><td>' + t.date + '</td><td>' + t.vno + '</td><td class="text-right">' + t.debit.toFixed(2) + '</td><td class="text-right">' + t.credit.toFixed(2) + '</td></tr>';
+                });
+                html += '</tbody></table>';
+            }
+            $('#headInfo').html(html);
+        });
+    });
+    $('#accountForm').on('submit', function (e) {
+        e.preventDefault();
+        $.post('/account/coa/save', $(this).serialize(), function (r) {
+            if (r.status == 1) { toastr.success(r.msg); location.reload(); }
+            else toastr.error(r.error || 'Error');
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+    });
+});
+</script>
+{{end}}

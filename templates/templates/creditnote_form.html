@@ -1,0 +1,142 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>{{.Title}}</h4></div>
+    </div>
+    <div class="panel-body">
+        <div class="alert alert-info">
+            <i class="fa fa-info-circle"></i> La nota de crédito <strong>anula o ajusta</strong> una factura sin borrarla:
+            revierte el ingreso, el IVA y devuelve el stock. Se asigna número de control fiscal automáticamente.
+        </div>
+        <form id="cnForm" style="max-width:900px">
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Factura a afectar *</label>
+                        <select class="form-control" id="invoice_id" required>
+                            <option value="">— Seleccione factura —</option>
+                            {{range .Invoices}}
+                            <option value="{{.ID}}" data-total="{{.Total}}" data-rif="{{.RIF}}" data-cust="{{.Customer}}">
+                                #{{.Invoice}} — {{.Date}} — {{.Customer}} — {{.Total}}
+                            </option>
+                            {{end}}
+                        </select>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label>Motivo *</label>
+                        <select class="form-control" id="reason" required>
+                            <option value="Devolución de mercancía">Devolución de mercancía</option>
+                            <option value="Descuento posterior a la venta">Descuento posterior a la venta</option>
+                            <option value="Anulación de factura por error">Anulación de factura por error</option>
+                            <option value="Reclamo de cliente (servicio)">Reclamo de cliente (servicio)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div id="custInfo" class="form-group erp-footnote"></div>
+
+            <table class="table table-bordered" id="cnLines">
+                <thead>
+                    <tr><th>Descripción</th><th style="width:90px">Cantidad</th><th style="width:110px">Precio</th><th style="width:90px">IVA %</th><th style="width:110px" class="text-right">Total</th></tr>
+                </thead>
+                <tbody id="cnRows"></tbody>
+            </table>
+            <button type="button" class="btn btn-default btn-sm" id="cnAdd"><i class="fa fa-plus"></i> Añadir renglón</button>
+
+            <table class="table" style="margin-top:12px;max-width:320px;margin-left:auto">
+                <tr><th class="text-right">Base</th><td class="text-right" id="cnBase">0.00</td></tr>
+                <tr><th class="text-right">IVA</th><td class="text-right" id="cnVat">0.00</td></tr>
+                <tr class="success"><th class="text-right"><h4 style="margin:0">TOTAL</h4></th><td class="text-right"><h4 style="margin:0"><strong id="cnGrand">0.00</strong></h4></td></tr>
+            </table>
+
+            <button type="submit" class="btn btn-primary btn-lg"><i class="fa fa-save"></i> Emitir Nota de Crédito</button>
+        </form>
+    </div>
+</div>
+
+<!-- success modal -->
+<div class="modal fade" id="okModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-sm" role="document">
+        <div class="modal-content text-center">
+            <div class="modal-body">
+                <i class="fa fa-check-circle text-success" style="font-size:64px"></i>
+                <h3>Nota emitida</h3>
+                <p><strong id="okNo"></strong></p>
+                <p class="erp-footnote">Control: <strong id="okCtrl"></strong></p>
+            </div>
+            <div class="modal-footer" style="text-align:center">
+                <a href="/creditnote/list" class="btn btn-default">Ir al listado</a>
+                <a href="#" class="btn btn-primary" id="okPrint" target="_blank"><i class="fa fa-print"></i> Imprimir</a>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+function num(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
+
+function cnRow(desc) {
+    $('#cnRows').append(
+        '<tr>' +
+        '<td><input type="text" class="form-control cn-desc" value="' + (desc || '') + '" placeholder="Producto o concepto"></td>' +
+        '<td><input type="text" class="form-control text-right cn-qty" value="1"></td>' +
+        '<td><input type="text" class="form-control text-right cn-rate" value="0.00"></td>' +
+        '<td><input type="text" class="form-control text-right cn-vat" value="16.00"></td>' +
+        '<td class="text-right cn-total" style="font-size:12px">0.00</td>' +
+        '</tr>');
+}
+function calcCN() {
+    var base = 0, vat = 0;
+    $('#cnRows tr').each(function () {
+        var q = num($(this).find('.cn-qty').val());
+        var r = num($(this).find('.cn-rate').val());
+        var v = num($(this).find('.cn-vat').val());
+        var b = Math.round(q * r * 100) / 100;
+        var t = Math.round(b * v / 100 * 100) / 100;
+        $(this).find('.cn-total').text(b.toFixed(2));
+        base += b; vat += t;
+    });
+    $('#cnBase').text(base.toFixed(2));
+    $('#cnVat').text(vat.toFixed(2));
+    $('#cnGrand').text((base + vat).toFixed(2));
+}
+$(function () {
+    cnRow(); calcCN();
+    $('#cnAdd').on('click', function () { cnRow(); });
+    $('#cnRows').on('input change', 'input', calcCN);
+
+    $('#invoice_id').on('change', function () {
+        var $o = $(this).find(':selected');
+        $('#custInfo').text($o.val() ? ('Cliente: ' + $o.data('cust') + ' — RIF: ' + ($o.data('rif') || 'sin RIF') + ' — Total original: ' + $o.data('total')) : '');
+    });
+
+    $('#cnForm').on('submit', function (e) {
+        e.preventDefault();
+        var inv = $('#invoice_id').val();
+        if (!inv) { toastr.warning('Seleccione la factura'); return; }
+        var descs = [], qtys = [], rates = [], vats = [];
+        $('#cnRows tr').each(function () {
+            descs.push($(this).find('.cn-desc').val());
+            qtys.push(num($(this).find('.cn-qty').val()));
+            rates.push(num($(this).find('.cn-rate').val()));
+            vats.push(num($(this).find('.cn-vat').val()));
+        });
+        $.post('/creditnote/save', {
+            invoice_id: inv, reason: $('#reason').val(),
+            item_id: descs, item_qty: qtys, item_rate: rates, item_vat: vats
+        }, function (r) {
+            if (r.status == 1) {
+                $('#okNo').text(r.note_no);
+                $('#okCtrl').text(r.control_no);
+                $('#okPrint').attr('href', '/creditnote/print/' + r.id);
+                $('#okModal').modal('show');
+            } else toastr.error(r.error || 'Error');
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+    });
+});
+</script>
+{{end}}

@@ -1,0 +1,54 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Usuarios <a href="/user/add" class="btn btn-primary btn-sm pull-right">+ Añadir Usuario</a></h4></div>
+    </div>
+    <div class="panel-body">
+        <table class="table table-striped table-bordered" id="userTable" width="100%">
+            <thead>
+                <tr>
+                    <th>ID</th><th>Nombre</th><th>Teléfono</th><th>Usuario</th><th>Nivel</th><th>Estado</th><th>Acciones</th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    var table = $('#userTable').DataTable({
+        processing: true,
+        ajax: { url: '/user/list/data', type: 'GET' },
+        columns: [
+            { data: 'id' },
+            { data: 'name' },
+            { data: 'phone' },
+            { data: 'username' },
+            { data: 'level', render: function (d) {
+                if (d === 'admin') return '<span class="label label-primary">Admin</span>';
+                if (d === 'employee') return '<span class="label label-default">Empleado</span>';
+                return '<span class="label label-info">Usuario</span>';
+            }},
+            { data: 'status', render: function (d) {
+                return d == 1 ? '<span class="label label-success">Activo</span>' : '<span class="label label-danger">Inactivo</span>';
+            }},
+            { data: null, orderable: false, render: function (d) {
+                return '<a class="btn btn-info btn-xs" href="/user/edit/' + d.id + '"><i class="fa fa-pencil"></i></a> ' +
+                    '<button class="btn btn-danger btn-xs do-del" data-id="' + d.id + '"><i class="fa fa-trash"></i></button>';
+            }}
+        ]
+    });
+    $('#userTable').on('click', '.do-del', function () {
+        var id = $(this).data('id');
+        swal({ title: "¿Eliminar usuario?", type: "warning", showCancelButton: true, confirmButtonText: "Eliminar", confirmButtonColor: ERPGo.appearance.css("--erp-danger", "#9c3333") }, function () {
+            $.post('/user/delete/' + id, function (r) {
+                if (r.status == 1) { toastr.success(r.msg); table.ajax.reload(); }
+                else toastr.error(r.error);
+            });
+        });
+    });
+});
+</script>
+{{end}}

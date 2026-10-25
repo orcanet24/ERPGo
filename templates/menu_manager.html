@@ -1,0 +1,274 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4><i class="fa fa-bars"></i> Gestor de Menús</h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <div class="alert alert-info">
+            <strong><i class="fa fa-info-circle"></i> Instrucciones:</strong>
+            Arrastre los menús para reordenarlos dentro de su grupo o moverlos a otro grupo.
+            Los cambios se guardan automáticamente al soltar.
+        </div>
+        <div id="menu-tree" class="menu-tree"></div>
+        <div id="save-status" class="text-center" style="margin-top:10px;"></div>
+    </div>
+</div>
+
+<style>
+.menu-tree { padding: 0; }
+.menu-group { list-style: none; padding: 0; margin: 0; }
+.menu-item {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin-bottom: 4px;
+    padding: 10px 12px;
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: background 0.15s;
+}
+.menu-item:hover { background: #f5f5f5; }
+.menu-item:active { cursor: grabbing; }
+.menu-item.dragging { opacity: 0.5; background: #e8f4fd; }
+.menu-item .drag-handle { color: #aaa; }
+.menu-item .menu-icon { width: 24px; text-align: center; color: #666; }
+.menu-item .menu-label { flex: 1; font-weight: 500; }
+.menu-item .menu-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
+.menu-badge-core { background: #d4edda; color: #155724; }
+.menu-badge-addon { background: #cce5ff; color: #004085; }
+.menu-children {
+    list-style: none;
+    padding-left: 24px;
+    margin: 4px 0 8px 12px;
+    border-left: 2px solid #e0e0e0;
+}
+.menu-drop-zone {
+    min-height: 30px;
+    border: 2px dashed transparent;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+.menu-drop-zone.drag-over { border-color: #2196F3; background: #e3f2fd; }
+</style>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+(function() {
+    // Leer CSRF de la cookie erpgo_csrf
+    function readCSRFCookie() {
+        var match = document.cookie.match(new RegExp('erpgo_csrf=([^;]+)'));
+        if (match && match[1]) return decodeURIComponent(match[1]);
+        return '';
+    }
+    var csrfToken = readCSRFCookie();
+    if (!csrfToken) {
+        var inp = document.querySelector('#CSRF_TOKEN');
+        if (inp && inp.value) csrfToken = inp.value;
+    }
+    console.log('CSRF Token:', csrfToken ? 'OK' : 'MISSING');
+
+    function iconHtml(icon) {
+        if (!icon) return '<i class="fa fa-circle-o"></i>';
+        if (icon.indexOf('fa-') === 0 || icon.indexOf('ti-') === 0 || icon.indexOf('pe-') === 0) {
+            return '<i class="' + icon + '"></i>';
+        }
+        return '<i class="fa fa-circle-o"></i>';
+    }
+
+    function renderItem(item, parentID) {
+        var html = '<li class="menu-drop-zone" data-parent="' + (parentID || 0) + '">';
+        html += '<div class="menu-item" draggable="true" data-id="' + item.id + '" data-parent="' + (item.parent_id || 0) + '">';
+        html += '  <span class="drag-handle"><i class="fa fa-arrows"></i></span>';
+        html += '  <span class="menu-icon">' + iconHtml(item.icon) + '</span>';
+        html += '  <span class="menu-label">' + escapeHtml(item.label) + '</span>';
+        html += '  <span class="menu-badge ' + (item.is_core == 1 ? 'menu-badge-core' : 'menu-badge-addon') + '">';
+        html += item.is_core == 1 ? 'Core' : item.module_id;
+        html += '  </span>';
+        html += '</div>';
+        if (item.children && item.children.length > 0) {
+            html += '<ul class="menu-children">';
+            for (var i = 0; i < item.children.length; i++) {
+                html += renderItem(item.children[i], item.id);
+            }
+            html += '</ul>';
+        }
+        html += '</li>';
+        return html;
+    }
+
+    function escapeHtml(s) {
+        if (!s) return '';
+        return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function renderTree(menus) {
+        var html = '<ul class="menu-group">';
+        for (var i = 0; i < menus.length; i++) {
+            html += renderItem(menus[i], 0);
+        }
+        html += '</ul>';
+        document.getElementById('menu-tree').innerHTML = html;
+        attachDragHandlers();
+    }
+
+    var dragSrcEl = null;
+
+    function attachDragHandlers() {
+        var items = document.querySelectorAll('.menu-item');
+        for (var i = 0; i < items.length; i++) {
+            items[i].addEventListener('dragstart', handleDragStart);
+            items[i].addEventListener('dragend', handleDragEnd);
+        }
+        var zones = document.querySelectorAll('.menu-drop-zone');
+        for (var i = 0; i < zones.length; i++) {
+            zones[i].addEventListener('dragover', handleDragOver);
+            zones[i].addEventListener('dragleave', handleDragLeave);
+            zones[i].addEventListener('drop', handleDrop);
+        }
+    }
+
+    function handleDragStart(e) {
+        dragSrcEl = this;
+        this.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', this.getAttribute('data-id'));
+    }
+
+    function handleDragEnd(e) {
+        this.classList.remove('dragging');
+        document.querySelectorAll('.drag-over').forEach(function(el) {
+            el.classList.remove('drag-over');
+        });
+    }
+
+    function handleDragOver(e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        this.classList.add('drag-over');
+        return false;
+    }
+
+    function handleDragLeave(e) {
+        this.classList.remove('drag-over');
+    }
+
+    function handleDrop(e) {
+        e.preventDefault();
+        this.classList.remove('drag-over');
+        if (!dragSrcEl) return false;
+
+        var draggedID = parseInt(dragSrcEl.getAttribute('data-id'));
+        var targetParentID = parseInt(this.getAttribute('data-parent'));
+
+        // No hacer nada si se suelta en la misma posición
+        var currentParentID = parseInt(dragSrcEl.getAttribute('data-parent'));
+        if (currentParentID === targetParentID) {
+            // Reordenar dentro del mismo grupo
+            reorderInGroup(targetParentID);
+        } else {
+            // Mover a otro grupo
+            moveMenu(draggedID, targetParentID);
+        }
+        return false;
+    }
+
+    function reorderInGroup(parentID) {
+        var container;
+        if (parentID === 0) {
+            container = document.querySelector('.menu-group');
+        } else {
+            var parentItem = document.querySelector('.menu-item[data-id="' + parentID + '"]');
+            if (!parentItem) return;
+            container = parentItem.parentNode.querySelector('.menu-children');
+            if (!container) {
+                // El padre no tenía hijos, crear ul
+                container = document.createElement('ul');
+                container.className = 'menu-children';
+                parentItem.parentNode.appendChild(container);
+            }
+        }
+
+        var items = container.querySelectorAll(':scope > .menu-drop-zone > .menu-item');
+        var ids = [];
+        for (var i = 0; i < items.length; i++) {
+            ids.push(parseInt(items[i].getAttribute('data-id')));
+        }
+
+        showStatus('Guardando...', 'info');
+        saveReorder(parentID, ids);
+    }
+
+    function moveMenu(id, newParentID) {
+        showStatus('Moviendo menú...', 'info');
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/settings/menu/move', true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                var resp;
+                try { resp = JSON.parse(xhr.responseText); } catch(e) { resp = {error: 'Respuesta inválida'}; }
+                if (resp.status == 1) {
+                    showStatus('✓ ' + resp.msg, 'success');
+                    loadMenus();
+                } else {
+                    showStatus('✗ ' + (resp.error || 'Error desconocido'), 'danger');
+                    loadMenus(); // recargar para volver al estado anterior
+                }
+            }
+        };
+        xhr.send(JSON.stringify({id: id, parent_id: newParentID}));
+    }
+
+    function saveReorder(parentID, ids) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/settings/menu/reorder', true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                var resp;
+                try { resp = JSON.parse(xhr.responseText); } catch(e) { resp = {error: 'Respuesta inválida'}; }
+                if (resp.status == 1) {
+                    showStatus('✓ ' + resp.msg, 'success');
+                } else {
+                    showStatus('✗ ' + (resp.error || 'Error'), 'danger');
+                }
+                loadMenus();
+            }
+        };
+        xhr.send(JSON.stringify({parent_id: parentID, ids: ids}));
+    }
+
+    function showStatus(msg, type) {
+        var el = document.getElementById('save-status');
+        el.innerHTML = '<span class="text-' + type + '">' + msg + '</span>';
+        if (type === 'success') {
+            setTimeout(function() { el.innerHTML = ''; }, 3000);
+        }
+    }
+
+    function loadMenus() {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '/settings/menu/data', true);
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4 && xhr.status === 200) {
+                var resp;
+                try { resp = JSON.parse(xhr.responseText); } catch(e) { return; }
+                if (resp.status == 1 && resp.menus) {
+                    renderTree(resp.menus);
+                }
+            }
+        };
+        xhr.send();
+    }
+
+    loadMenus();
+})();
+</script>
+{{end}}

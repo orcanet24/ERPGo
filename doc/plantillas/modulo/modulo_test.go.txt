@@ -1,0 +1,337 @@
+package web
+
+// <MODULO>_test.go — PLANTILLA de las pruebas de un módulo.
+//
+// COPIAR A: interfaces/web/<MODULO>_test.go
+//
+// LAS DOS MITADES, Y POR QUÉ NO ES OPCIONAL HACER LA PRIMERA
+//
+//   1. TESTS PUROS: calculan<Modulo>() con entradas a mano. SIN base de datos.
+//      Tardan milisegundos.
+//
+//   2. TEST DE INTEGRACIÓN: monta la empresa y comprueba que el módulo es
+//      alcanzable. Tarda de 30 a 500 segundos porque cada test crea una base
+//      MySQL nueva.
+//
+// El reparto no es caprichoso. En este repo los bugs que de verdad dolieron en
+// el módulo de costos fueron CUATRO de aritmética: la merma aplicada a un
+// campo que nunca se calculaba, la aduana dividida por la cantidad pedida en
+// vez de la recibida, DOUBLE para dinero, y la tasa como columna generada que
+// reescribía el histórico. Los cuatro se encontraron con tests puros. Con la
+// base en medio, esos cuatro tests habrían costado horas y probablemente no se
+// habrían escrito.
+//
+// Y no es solo velocidad: un test puro que falla dice "esta fórmula está mal".
+// Un test de integración que falla dice "algo falló", y a veces es la fórmula,
+// y a veces es que no había proveedor.
+//
+// REGLAS DE ESTE FICHERO
+//
+//   - t.Cleanup SIEMPRE. Sin él, cada corrida deja una base basura detrás, y
+//     en un par de días son 38. Ese fue un fallo real de este repo.
+//   - PrefijoDePrueba(t, "etiqueta") nombra la base con un prefijo único, para
+//     que BorrarBasesConPrefijo sepa cuál es.
+//   - Un test que necesite credenciales de IA se SALTA y lo dice con t.Skip.
+//     Un go test sin claves debe saltar, no fallar: lo que se prueba necesita
+//     una red y una clave, y eso no es cosa del código.
+//   - table-driven: cada caso es un nombre y una struct, no veinte asserts
+//     sueltos en el mismo test.
+//
+// IMPORTS: solo los que se usan de verdad.
+//   net/http, net/http/httptest -> solo en Test<Modulo>LasRutasSeRegistran
+//   os, strings                 -> solo en Test<Modulo>NewServerLoInvoca
+// Si borras uno de los tests, borra sus imports: el compilador no avisa de un
+// import de más, y un unused import sí rompe el build.
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+)
+
+// ===========================================================================
+// 1. TESTS PUROS — la parte que se ejecuta siempre y en milisegundos
+// ===========================================================================
+
+func TestCalcular<Modulo>CasoSimple(t *testing.T) {
+	got := calcular<Modulo>(<Modulo>Inputs{Quantity: 10, Rate: 2.50})
+
+	if got.Total != 25.00 {
+		t.Errorf("total: %.2f, esperado 25.00", got.Total)
+	}
+	if got.Unit != 2.50 {
+		t.Errorf("unitario: %.2f, esperado 2.50", got.Unit)
+	}
+}
+
+// TestCalcular<Modulo>Casos es el test que de verdad encuentra bugs: cada caso
+// nombra la regla de negocio que está comprobando.
+func TestCalcular<Modulo>Casos(t *testing.T) {
+	casos := []struct {
+		nombre    string
+		in        <Modulo>Inputs
+		wantTotal float64
+		wantUnit  float64
+	}{
+		{
+			nombre:    "cantidad cero da cero y no revienta",
+			in:        <Modulo>Inputs{Quantity: 0, Rate: 100},
+			wantTotal: 0,
+			wantUnit:  0,
+		},
+		{
+			nombre:    "cantidad negativa da cero, no un costo negativo",
+			in:        <Modulo>Inputs{Quantity: -5, Rate: 100},
+			wantTotal: 0,
+			wantUnit:  0,
+		},
+		{
+			nombre:    "merma al 10% sube el costo, no lo baja",
+			in:        <Modulo>Inputs{Quantity: 100, Rate: 1.00, MermaPct: 0.10},
+			wantTotal: 110.00,
+			wantUnit:  1.10,
+		},
+		{
+			nombre:    "sin merma el total es la compra exacta",
+			in:        <Modulo>Inputs{Quantity: 3, Rate: 10.10},
+			wantTotal: 30.30,
+			wantUnit:  10.10,
+		},
+		{
+			// Este es el caso que demuestra la regla del denominador.
+			// Se piden 100 unidades y se reciben 80, con 200 de aduana.
+			//
+			//   reparto por lo RECIBIDO: 80 x 5.00 + 200/80 = 402.50 -> 5.03
+			//   reparto por lo PEDIDO:   100 x 5.00 + 200/100 = 520.00 -> 5.20
+			//
+			// Si el reparto entra por Quantity en vez de por Received, este
+			// caso falla con 520.00, y ese fallo es exactamente el bug 0.2.
+			nombre:    "el reparto usa lo recibido, no lo pedido",
+			in:        <Modulo>Inputs{Quantity: 100, Received: 80, Rate: 5.00, Reparto: 200.00},
+			wantTotal: 402.50,
+			wantUnit:  5.03,
+		},
+		{
+			// El caso anterior, pero sin faltantes: 100 x 5.00 + 200/100 = 502.
+			// Junto al anterior, demuestra que Received cambia el reparto
+			// SOLO cuando hay diferencia entre pedido y recibido.
+			nombre:    "sin faltantes el reparto da lo mismo por ambos caminos",
+			in:        <Modulo>Inputs{Quantity: 100, Received: 100, Rate: 5.00, Reparto: 200.00},
+			wantTotal: 502.00,
+			wantUnit:  5.02,
+		},
+		{
+			// Received en cero: el reparto cae a la cantidad pedida, que es
+			// lo único que hay. No se divide por cero y no devuelve NaN.
+			nombre:    "sin dato de recepción el reparto usa lo pedido y no revienta",
+			in:        <Modulo>Inputs{Quantity: 50, Rate: 4.00, Reparto: 100.00},
+			wantTotal: 202.00,
+			wantUnit:  4.04,
+		},
+		{
+			nombre:    "un decimal no se pierde en el redondeo",
+			in:        <Modulo>Inputs{Quantity: 3, Rate: 0.333},
+			wantTotal: 1.00,
+			wantUnit:  0.33,
+		},
+		{
+			nombre:    "el total se redondea a dos decimales",
+			in:        <Modulo>Inputs{Quantity: 7, Rate: 1.115},
+			wantTotal: 7.81,
+			wantUnit:  1.12,
+		},
+	}
+
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			got := calcular<Modulo>(c.in)
+			if !almost(got.Total, c.wantTotal) {
+				t.Errorf("total: %.4f, esperado %.4f", got.Total, c.wantTotal)
+			}
+			if !almost(got.Unit, c.wantUnit) {
+				t.Errorf("unitario: %.4f, esperado %.4f", got.Unit, c.wantUnit)
+			}
+		})
+	}
+}
+
+// TestCalcular<Modulo>DejaTraza: un desglose sin trazabilidad no se puede
+// reproducir, y un costo que no se puede reproducir no es un costo, es una
+// estimación.
+func TestCalcular<Modulo>DejaTraza(t *testing.T) {
+	got := calcular<Modulo>(<Modulo>Inputs{Quantity: 100, Rate: 2.00, MermaPct: 0.05})
+	if len(got.Trace) == 0 {
+		t.Fatal("el calculo no dejo ninguna traza: nadie podria reproducirlo")
+	}
+	// La traza tiene que decir QUE REGLA se aplico, no solo el numero.
+	if got.Trace[0].Regla == "" {
+		t.Error("el primer renglon de la traza no dice que regla se aplico")
+	}
+}
+
+func TestValidar<Modulo>RechazaLoQueNoDebe(t *testing.T) {
+	casos := []struct {
+		nombre string
+		code   string
+		desc   string
+		qty    float64
+		wantOK bool
+	}{
+		{"codigo vacio", "", "algo", 1, false},
+		{"descripcion vacia", "X1", "", 1, false},
+		{"cantidad negativa", "X1", "algo", -1, false},
+		{"caso bueno", "X1", "algo", 1, true},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			err := validar<Modulo>(c.code, c.desc, c.qty, 0)
+			if c.wantOK && err != nil {
+				t.Errorf("no debería fallar: %v", err)
+			}
+			if !c.wantOK && err == nil {
+				t.Error("debería haber fallado y no falló")
+			}
+		})
+	}
+}
+
+// almost compara dinero con tolerancia. El redondeo a 2 decimales es parte del
+// comportamiento esperado, así que aquí no se exige igualdad exacta.
+func almost(a, b float64) bool {
+	d := a - b
+	return d < 0.005 && d > -0.005
+}
+
+// ===========================================================================
+// 2. TEST DE INTEGRACIÓN — la parte lenta, la que prueba que el módulo existe
+// ===========================================================================
+
+// Test<Modulo>LasRutasSeRegistran comprueba que las rutas del módulo existen en
+// el router. NO ejecuta los handlers.
+//
+// POR QUÉ NO SE EJECUTAN. Un Server de prueba construido a mano no tiene base
+// ni sesión: `newTenantServer` arma el struct literal sin inicializar `mux`, y
+// un handler que abre la base entra en PANIC por puntero nulo en lugar de
+// devolver un 500. Un test que revienta con panic no informa de nada, así que
+// aquí se comprueba el REGISTRO y no la ejecución. Lo que hacen los handlers se
+// prueba en otra parte, con el servidor entero y una sesión de verdad.
+//
+// Y por eso este test NO puede comprobar el paso 3 por sí solo: si el test llama
+// a register<Modulo>Routes() a mano, el módulo "funciona" en la prueba aunque
+// nadie lo haya enganchado en NewServer. Para eso está el test de abajo, que
+// mira el código fuente de server.go.
+func Test<Modulo>LasRutasSeRegistran(t *testing.T) {
+	mux := http.NewServeMux()
+	s := &Server{mux: mux}
+
+	// Se registra con un mux propio para no depender de cómo se construyó el
+	// servidor de prueba. Un panic aquí significa que alguien cambió el
+	// registro de rutas y lo rompió: eso sí es un fallo real.
+	s.register<Modulo>Routes()
+
+	// mux.Handler devuelve el PATRÓN que casó, sin ejecutar nada. Un patrón
+	// devuelto es la prueba de que la ruta está registrada.
+	//
+	// Importante: pedir una plantilla inexistente devuelve 404 igual que una
+	// ruta sin registrar, así que un 404 no distingue una cosa de la otra. Por
+	// eso se compara el PATRÓN y no el código de respuesta.
+	for _, c := range []struct {
+		metodo string
+		ruta   string
+		quiere string
+	}{
+		{"GET", "/<MODULO>", "GET /<MODULO>"},
+		{"GET", "/<MODULO>/data", "GET /<MODULO>/data"},
+		{"POST", "/<MODULO>/save", "POST /<MODULO>/save"},
+	} {
+		req := httptest.NewRequest(c.metodo, c.ruta, nil)
+		h, patron := mux.Handler(req)
+		if h == nil {
+			t.Errorf("%s %s: el mux no devolvió handler", c.metodo, c.ruta)
+			continue
+		}
+		if patron != c.quiere {
+			t.Errorf("%s %s	case con el patrón %q, esperado %q",
+				c.metodo, c.ruta, patron, c.quiere)
+		}
+	}
+}
+
+// Test<Modulo>NewServerLoInvoca es el que de verdad vigila el paso 3.
+//
+// Mira el código fuente de server.go en vez de confiar en el router del test,
+// porque el paso que se olvida es precisamente la LLAMADA. Un módulo al que
+// nadie llama compila, pasa vet, pasa los tests de la plantilla (que registran
+// las rutas a mano) y no aparece. Este test corta eso.
+//
+// Es una comprobación de fuente, no de comportamiento, y es aceptable aquí: lo
+// que se busca es la presencia de una llamada exacta, y eso se lee mejor en el
+// texto que a través de un servidor entero.
+func Test<Modulo>NewServerLoInvoca(t *testing.T) {
+	src, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("leer server.go: %v", err)
+	}
+	if !strings.Contains(string(src), "register<Modulo>Routes()") {
+		t.Fatal("server.go no llama a register<Modulo>Routes():\n" +
+			"el módulo está terminado pero NO está conectado. Compila, pasa vet " +
+			"y no aparece en el ERP. Añade s.register<Modulo>Routes() dentro de NewServer.")
+	}
+}
+
+// Test<Modulo>LasTablasNewNoEstanHuerfanas: comprueba los pasos 7 y 8 (la IA
+// las ve) en el mismo sitio donde se olvidaron por primera vez.
+func Test<Modulo>LasTablasNoEstanHuerfanas(t *testing.T) {
+	for _, tabla := range []string{"<MODULO>_main", "<MODULO>_line"} {
+		if _, ok := aiCatalogWhitelist[tabla]; !ok {
+			t.Errorf("%s no está en aiCatalogWhitelist: la IA no la verá, ni IT", tabla)
+		}
+		if len(aiDeptDeTabla[tabla]) == 0 {
+			t.Errorf("%s no está en aiDeptDeTabla: solo la verá IT", tabla)
+		}
+	}
+}
+
+// Test<Modulo>ContraLaBaseReal: el único que prueba que el SQL es válido contra
+// MySQL de verdad, que es donde aparecen los errores de columna que no existen.
+//
+// Si este test necesita credenciales de IA o una base que no está, se SALTA y
+// lo dice. No falla.
+func Test<Modulo>ContraLaBaseReal(t *testing.T) {
+	s, db, _ := empresaCompletaVacia(t)
+	t.Cleanup(func() {
+		if db != nil {
+			db.Close()
+		}
+	})
+
+	// El servidor se usa para lo que es suyo: la sesión y la empresa. db es la
+	// conexión directa para lo demás.
+	_ = s
+
+	// El tipo DECIMAL de MySQL llega como []byte, no como float64. Si este
+	// Scan falla con "unsupported type", la columna es DECIMAL y falta el
+	// []byte en el destino: ese es el bug que dejó todos los totales en cero.
+	var id int
+	var code string
+	var amount []byte
+	err := db.QueryRow(`SELECT id, code, amount FROM <MODULO>_main LIMIT 1`).Scan(&id, &code, &amount)
+	if err != nil {
+		t.Fatalf("leer <MODULO>_main: %v", err)
+	}
+	if v := valorNumerico(string(amount)); v == nil {
+		t.Errorf("amount = %q no se pudo convertir a numero: "+
+			"el DECIMAL de MySQL llega como []byte y hay que pasar por valorNumerico()", amount)
+	}
+}
+
+// Test<Modulo>ConsultaCredencialesDeIA, si el módulo habla con un modelo.
+// Sin claves: se salta. Con claves: compara el informe con el dato real.
+func Test<Modulo>ConsultaCredencialesDeIA(t *testing.T) {
+	if entornoDePrueba("AI_AUXILIAR_API_KEY", "") == "" {
+		t.Skip("sin credenciales de IA: lo que se prueba necesita red y clave")
+	}
+	// ... aquí va la prueba contra el modelo real.
+}

@@ -1,0 +1,17 @@
+**Decision técnica:** Correcto. El ahorro de 361 líneas de traducción y la eliminación de la capa de conversión justifican el cambio a MySQL. La elección de una base por empresa sobre `search_path` es estructuralmente más segura.
+
+## Riesgos no mencionados
+
+1. **Gestión manual de mysqld como proceso hijo** — El ERP ahora actúa como orquestador de un servidor de base de datos nativo. Si el proceso `mysqld` se cuelga o se niega a apagarse limpiamente, el ERP necesita lógica de recuperación que no existe: *timeout de shutdown*, *kill forzado*, o *limpieza de archivos de lock*. Un `mysqld` zombie puede bloquear puertos y hacer imposible el reinicio.
+
+2. **Actualizaciones de seguridad del motor** — Al empaquetar un `mysqld` binario, el ERP asume responsabilidad de parchear vulnerabilidades de MySQL. Si la PyME no actualiza el paquete, sigue vulnerable años después. No hay mecanismo descrito para *auto-update* del binario ni verificación de checksums.
+
+3. **Corrupción silenciosa de Innodb en shutdown forzado** — Si el `SHUTDOWN` limpio falla y se recurre a terminar el proceso, el redo log puede quedar inconsistente. El siguiente arranque requeriría *crash recovery*, pero no se menciona si el proceso de arranque valida la integridad o maneja tablas marcadas como "crashed".
+
+4. **Puerto 3307 como punto único de fallo** — Si otra aplicación usa el 3307, entra en conflicto. No hay detección de puerto ocupado ni *fallback* dinámico. El diseño asume que 3307 siempre estará libre.
+
+5. **Fugas de datos entre empresas por error en nombre de base** — Aunque el aislamiento es estructural, una función que construya mal el nombre `erpgo_<codigo>` (ej: por sanitización faltante) puede apuntar a una base de otra empresa. No se menciona validación de identificadores de tenant.
+
+6. **Performance de creación de bases en filesystem lento** — Crear 121 tablas en ~9s se mantiene constante, pero si el *data directory* está en NAS o disco cifrado, el `DROP DATABASE` + `CREATE DATABASE` para tests puede volverse catastrófico. No hay estrategia de *mock* o *container* para CI rápido.
+
+7. **Dependencia oculta de versión de mysqld** — El `mysqld` embebido podría no ser el mismo que el usado en producción Enterprise. Diferencias en optimizadores o *sql_mode* entre versiones pueden ocultar bugs en desarrollo.

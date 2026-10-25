@@ -1,0 +1,142 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <h3 class="panel-title"><i class="fa fa-shield"></i> {{.Title}}</h3>
+        <div class="panel-title btn-group pull-right">
+            <select id="periodSel" class="form-control input-sm" style="width:auto;display:inline-block">
+                {{$sel := .PeriodNow}}
+                {{range .Periods}}
+                <option value="{{.}}"{{if eq . $sel}} selected{{end}}>{{.}}</option>
+                {{end}}
+            </select>
+            <button type="button" class="btn btn-success btn-sm" id="btnVerify">
+                <i class="fa fa-link"></i> Verificar Bloque
+            </button>
+            <button type="button" class="btn btn-default btn-sm" id="btnVerifyAll" title="Recorre toda la cadena historica; con millones de registros es lento">
+                <i class="fa fa-history"></i> Verificar Todo
+            </button>
+            <a href="/reports/audit-log/export?from={{.From}}&to={{.To}}" class="btn btn-primary btn-sm">
+                <i class="fa fa-file-excel-o"></i> Exportar CSV
+            </a>
+        </div>
+    </div>
+    <div class="panel-body">
+
+        <div id="verifyResult" class="callout callout-success" style="display:none">
+            <h4><i class="fa fa-check-circle"></i> <span id="verifyText"></span></h4>
+        </div>
+        <div id="verifyFail" class="callout callout-danger" style="display:none">
+            <h4><i class="fa fa-exclamation-triangle"></i> <span id="verifyFailText"></span></h4>
+        </div>
+
+        <div class="row" style="margin-bottom:12px">
+            <div class="col-md-8">
+                <form method="GET" action="/reports/audit-log" class="form-inline">
+                    <div class="form-group">
+                        <label>Desde:</label>
+                        <input type="date" name="from" class="form-control" value="{{.From}}">
+                    </div>
+                    <div class="form-group">
+                        <label>Hasta:</label>
+                        <input type="date" name="to" class="form-control" value="{{.To}}">
+                    </div>
+                    <button type="submit" class="btn btn-primary"><i class="fa fa-search"></i> Buscar</button>
+                </form>
+            </div>
+            <div class="col-md-4 text-right">
+                <small class="text-muted"><i class="fa fa-lock"></i> Registro append-only con cadena SHA-256 segmentada en bloques mensuales: cualquier alteración rompe el bloque y el enlace con el mes anterior</small>
+            </div>
+        </div>
+
+        <table class="table table-bordered table-striped" id="auditTable">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Fecha</th>
+                    <th>Usuario</th>
+                    <th>Acción</th>
+                    <th>Módulo</th>
+                    <th>Ruta / Tabla</th>
+                    <th>Registro</th>
+                    <th>IP</th>
+                    <th>Hash</th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function() {
+    var from = '{{.From}}';
+    var to = '{{.To}}';
+
+    var actionBadge = {
+        create: '<span class="label label-success">crear</span>',
+        update: '<span class="label label-primary">editar</span>',
+        delete: '<span class="label label-danger">eliminar</span>'
+    };
+
+    $('#auditTable').DataTable({
+        processing: true,
+        pageLength: 50,
+        order: [[0, 'desc']],
+        ajax: '/reports/audit-log/data?from=' + from + '&to=' + to,
+        columns: [
+            { data: 'id' },
+            { data: 'created_at' },
+            { data: 'user_id' },
+            { data: 'action', render: function(d) {
+                return actionBadge[d] || '<span class="label label-default">' + d + '</span>';
+            }},
+            { data: 'module' },
+            { data: 'table_name' },
+            { data: 'record_id' },
+            { data: 'ip_address' },
+            { data: 'record_hash', render: function(d) {
+                return d ? '<code title="' + d + '">' + d.substring(0, 12) + '…</code>' : '';
+            }}
+        ]
+    });
+
+    function renderVerify(res) {
+        if (res.valid) {
+            $('#verifyResult').show().find('#verifyText').text(res.reason + ' (' + res.total + ' registros)');
+            $('#verifyFail').hide();
+        } else {
+            $('#verifyFail').show().find('#verifyFailText').text(res.reason);
+            $('#verifyResult').hide();
+        }
+    }
+
+    // Verifica un solo bloque (período): acotado, no recorre el histórico.
+    $('#btnVerify').click(function() {
+        var btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> Verificando…');
+        var label = '<i class="fa fa-link"></i> Verificar Bloque';
+        $.getJSON('/reports/audit-log/verify?period=' + $('#periodSel').val(), function(res) {
+            btn.prop('disabled', false).html(label);
+            renderVerify(res);
+        }).fail(function() {
+            btn.prop('disabled', false).html(label);
+            $('#verifyFail').show().find('#verifyFailText').text('Error al verificar la cadena');
+        });
+    });
+
+    // Verificación completa: explícita, porque con millones de registros es lenta.
+    $('#btnVerifyAll').click(function() {
+        if (!confirm('Se recorrerá TODA la cadena de auditoría. Con millones de registros puede tardar minutos. ¿Continuar?')) return;
+        var btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> Verificando…');
+        var label = '<i class="fa fa-history"></i> Verificar Todo';
+        $.getJSON('/reports/audit-log/verify?all=1', function(res) {
+            btn.prop('disabled', false).html(label);
+            renderVerify(res);
+        }).fail(function() {
+            btn.prop('disabled', false).html(label);
+            $('#verifyFail').show().find('#verifyFailText').text('Error al verificar la cadena');
+        });
+    });
+});
+</script>
+{{end}}

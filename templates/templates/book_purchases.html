@@ -1,0 +1,86 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>{{.Title}}</h4></div>
+    </div>
+    <div class="panel-body">
+        <form class="form-inline" id="repFilter" style="margin-bottom:15px">
+            <div class="form-group">
+                <label>Mes </label>
+                <select class="form-control" id="month">
+                    <option value="1" {{if eq .Month "1"}}selected{{end}}>Enero</option>
+                    <option value="2" {{if eq .Month "2"}}selected{{end}}>Febrero</option>
+                    <option value="3" {{if eq .Month "3"}}selected{{end}}>Marzo</option>
+                    <option value="4" {{if eq .Month "4"}}selected{{end}}>Abril</option>
+                    <option value="5" {{if eq .Month "5"}}selected{{end}}>Mayo</option>
+                    <option value="6" {{if eq .Month "6"}}selected{{end}}>Junio</option>
+                    <option value="7" {{if eq .Month "7"}}selected{{end}}>Julio</option>
+                    <option value="8" {{if eq .Month "8"}}selected{{end}}>Agosto</option>
+                    <option value="9" {{if eq .Month "9"}}selected{{end}}>Septiembre</option>
+                    <option value="10" {{if eq .Month "10"}}selected{{end}}>Octubre</option>
+                    <option value="11" {{if eq .Month "11"}}selected{{end}}>Noviembre</option>
+                    <option value="12" {{if eq .Month "12"}}selected{{end}}>Diciembre</option>
+                </select>
+            </div>
+            <div class="form-group" style="margin-left:5px">
+                <label>Año </label>
+                <input type="number" class="form-control" id="year" value="{{.Year}}" style="width:80px">
+            </div>
+            <button type="submit" class="btn btn-primary" style="margin-left:5px"><i class="fa fa-search"></i> Consultar</button>
+            <button type="button" class="btn btn-default" id="btnPrint"><i class="fa fa-print"></i> Imprimir</button>
+        </form>
+
+        <div class="print-area">
+        <table class="table table-striped table-bordered" id="repTable" width="100%">
+            <thead>
+                <tr>
+                    <th>Fecha</th><th>RIF Proveedor</th><th>Proveedor</th><th>N° Factura</th>
+                    <th>N° Control</th><th class="text-right">Base Imponible</th>
+                    <th class="text-right">IVA Crédito</th><th class="text-right">Exento</th>
+                    <th class="text-right">N° Retención</th>
+                </tr>
+            </thead>
+            <tfoot>
+                <tr>
+                    <th colspan="5" class="text-right">TOTALES</th>
+                    <th class="text-right" id="tBase">0.00</th>
+                    <th class="text-right" id="tVat">0.00</th>
+                    <th class="text-right" id="tExempt">0.00</th>
+                    <th></th>
+                </tr>
+            </tfoot>
+        </table>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#repFilter').on('submit', function (e) { e.preventDefault(); load(); });
+    $('#btnPrint').on('click', function () {
+        window.open('/reports/book-purchases/print?month=' + $('#month').val() + '&year=' + $('#year').val(), '_blank');
+    });
+    load();
+});
+function load() {
+    $.getJSON('/reports/book-purchases/data?month=' + $('#month').val() + '&year=' + $('#year').val(), function (d) {
+        var rows = d.data.map(function (r) {
+            return [r.date, r.rif, r.name, r.invoice_no, r.control_no,
+                parseFloat(r.base_amount).toFixed(2), parseFloat(r.vat_amount).toFixed(2),
+                parseFloat(r.exempt).toFixed(2), r.retention_no];
+        });
+        $('#repTable').DataTable({
+            destroy: true, data: rows,
+            columns: [{}, {}, {}, {}, {}, { className: 'text-right' }, { className: 'text-right' },
+                { className: 'text-right' }, {}],
+            order: [[0, 'asc']]
+        });
+        $('#tBase').text(parseFloat(d.total_base).toFixed(2));
+        $('#tVat').text(parseFloat(d.total_vat).toFixed(2));
+        $('#tExempt').text(parseFloat(d.total_exempt).toFixed(2));
+    });
+}
+</script>
+{{end}}

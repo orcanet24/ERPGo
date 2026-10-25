@@ -1,0 +1,50 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>{{.Title}}</h4></div>
+    </div>
+    <div class="panel-body">
+        <div class="form-inline" style="margin-bottom:15px">
+            <input type="text" class="form-control" id="stockSearch" placeholder="Buscar producto..." style="width:250px">
+            <button type="button" class="btn btn-default" onclick="window.print()"><i class="fa fa-print"></i> Imprimir</button>
+        </div>
+        <div class="print-area">
+        <table class="table table-striped table-bordered" id="stockTable" width="100%">
+            <thead>
+                <tr>
+                    <th>ID</th><th>Producto</th><th>Modelo</th><th>Categoría</th><th>Unidad</th>
+                    <th class="text-right">Precio</th><th class="text-right">Stock</th>
+                </tr>
+            </thead>
+            <tbody>
+            {{range .Items}}
+                <tr>
+                    <td>{{.ID}}</td>
+                    <td>{{.Name}}</td>
+                    <td>{{.Model}}</td>
+                    <td>{{.Category}}</td>
+                    <td>{{.Unit}}</td>
+                    <td class="text-right">{{.Price}}</td>
+                    <td class="text-right">
+                        {{if le .Stock 5.0}}<span class="label label-danger">{{.Stock}}</span>{{else}}{{.Stock}}{{end}}
+                    </td>
+                </tr>
+            {{end}}
+            </tbody>
+        </table>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#stockTable').DataTable({
+        order: [[1, 'asc']],
+        language: { url: '//cdn.datatables.net/plug-ins/1.13.6/i18n/es-ES.json' }
+    });
+    $('#stockSearch').on('keyup', function () { $('#stockTable').DataTable().search(this.value).draw(); });
+});
+</script>
+{{end}}

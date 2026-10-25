@@ -1,0 +1,103 @@
+{{define "content"}}
+{{/*
+  PLANTILLA: pantalla de <Módulo>.
+
+  COPIAR A: templates/<MODULO>.html
+
+  LAS DOS REGLAS QUE NO SE ROMPEN:
+
+  1. Los DOS bloques, "content" y "pagejs". Las 110 pantallas del repo tienen
+     los dos. Falta "pagejs" -> HTTP 500 al renderizar, y ningún test de
+     sintaxis lo detecta: solo se ve al combinar con el layout y ejecutarla,
+     que es lo que hace TestEveryTemplateRendersWithLayout.
+
+  2. NINGÚN COLOR EN ESTE HTML. Ni style="color:#fff", ni un <style> con un
+     #hex. El color pertenece a static/css/erpgow-tema.css como variable del
+     tema; aquí se referencian CLASES. Un color escrito aquí es una pantalla
+     que en tema oscuro se pinta sola y que nadie puede arreglar desde el CSS.
+     Lo vigilan TestNingunaPlantillaEscribeColorEnLinea y
+     TestNingunaPlantillaDeclaraColorEnSuPropioEstilo.
+
+  Clases: panel / panel-bd / panel-heading / panel-title / panel-body /
+  form-group / btn-primary / table / Los nombres vienen del tema del proyecto,
+  no de Bootstrap stock.
+*/}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>{{.Title}}</h4></div>
+    </div>
+    <div class="panel-body">
+
+        <div class="row">
+            <div class="col-md-4"><div class="form-group">
+                <label>Periodo</label>
+                <input type="text" name="periodo" id="periodo" class="form-control"
+                       value="{{.Periodo}}">
+            </div></div>
+            <div class="col-md-4" style="margin-top: 25px;">
+                {{/* Margen y ancho SÍ pueden ir en línea. Solo el color no. */}}
+                <button id="btnBuscar" class="btn btn-primary">Buscar</button>
+            </div>
+        </div>
+
+        <table class="table" id="tbl<MODULO>">
+            <thead>
+                <tr>
+                    <th>Codigo</th>
+                    <th>Descripcion</th>
+                    <th class="text-right">Cantidad</th>
+                    <th class="text-right">Importe</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+            <tfoot>
+                <tr>
+                    <th colspan="3" class="text-right">Total</th>
+                    {{/* El total se formatea con printf %.2f y la moneda de
+                         {{.Currency}}, que inyecta render(). Un total en crudo
+                         sale con tres decimales o con notación científica. */}}
+                    <th class="text-right" id="tdTotal">{{.Currency}} 0.00</th>
+                </tr>
+            </tfoot>
+        </table>
+
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+
+    function cargar(periodo) {
+        $('#tbl<MODULO> tbody').html('<tr><td colspan="4">Cargando...</td></tr>');
+        $.get('/<MODULO>/data', { periodo: periodo })
+            .done(function (r) {
+                var h = '';
+                $.each(r.rows, function (i, f) {
+                    h += '<tr>' +
+                        '<td>' + f.Code + '</td>' +
+                        '<td>' + f.Description + '</td>' +
+                        '<td class="text-right">' + f.Quantity + '</td>' +
+                        '<td class="text-right">' + f.Amount + '</td>' +
+                        '</tr>';
+                });
+                $('#tbl<MODULO> tbody').html(h);
+                // El total lo CALCULA el servidor. Recalcularlo aquí en
+                // JavaScript es la forma más fácil de que la pantalla y la
+                // base discrepen: son dos fórmulas en dos lenguajes.
+                $('#tdTotal').text('{{.Currency}} ' + r.total.toFixed(2));
+            })
+            .fail(function (x) {
+                $('#tbl<MODULO> tbody').html(
+                    '<tr><td colspan="4">No se pudo cargar</td></tr>');
+                toastr.error('No se pudo cargar la informacion');
+            });
+    }
+
+    $('#btnBuscar').on('click', function () { cargar($('#periodo').val()); });
+    cargar('{{.Periodo}}');
+
+});
+</script>
+{{end}}

@@ -1,0 +1,93 @@
+===============================================================================
+PASO 7: aiCatalogWhitelist  ->  interfaces/web/ai_schema_catalog.go
+===============================================================================
+
+QUÉ ES ESTE MAPA
+
+Es la frontera de seguridad de la IA. Una tabla que no está en
+aiCatalogWhitelist NO se le envía al modelo, aunque exista en la base. No es un
+catálogo: es un permiso.
+
+Y junto a él, la otra mitad: aiCatalogRelations dice cómo se unen dos tablas
+("une con invoice por invoice_id"). Esa información de negocio no está en
+MySQL en ninguna parte — nadie la puede deducir leyendo information_schema — y
+por eso se escribe a mano.
+
+QUÉ PASA SI SE OLVIDA
+
+La tabla existe en la base, la IA la ignora por completo, y el agente de
+contabilidad dice que esa tabla no existe. Peor: no hay error, no hay aviso, no
+hay exception. Solo una respuesta plausible y equivocada.
+
+Esto ya pasó. Las 13 tablas de costos llegaron sin registrar y el agente
+concluía que el módulo de costos no estaba implementado.
+
+SÍNTOMA EN EL TEST
+
+  TestMapaPorRolVieneRecortado falla con "no debe incluir".
+
+PLANTILLA: una línea por tabla
+
+La descripción NO es un nombre de tabla bonito. Es lo que el modelo no puede
+saber: qué significa un HeadType, cuándo se considera pagada una factura, por
+qué una tabla tiene dos cantidades. Si la descripción no dice eso, no aporta nada
+y el modelo adivina.
+
+-->
+	"<MODULO>_main":  "<Módulo>: cabecera. <qué es, qué guarda, qué significa cada estado>. PK id.",
+	"<MODULO>_line":  "<Módulo>: renglones: producto, cantidad, precio, importe. Une con <MODULO>_main por main_id.",
+
+
+===============================================================================
+PASO 8: aiDeptDeTabla  ->  interfaces/web/ai_schema_introspect.go
+===============================================================================
+
+QUÉ ES ESTE MAPA
+
+Asigna cada tabla de negocio a los departamentos que la usan. Las
+departamentos son CONSTANTES (DeptVentas, DeptCXC, DeptContab, DeptInv,
+DeptRRHH, DeptCompras, DeptIT), no cadenas de texto.
+
+Tabla fuera de este mapa: existe en la base pero SOLO la ve IT.
+
+QUÉ PASA SI SE OLVIDA
+
+Peor que el paso 7, porque es silencioso y parcial. El agente de un área
+funciona pero no ve la tabla que necesita para su trabajo, y se las apaña con
+otra. Sin error.
+
+SÍNTOMA EN EL TEST
+
+  TestNingunDepartamentoVeTablasHuerfanas falla y nombra las tablas.
+
+PLANTILLA: una línea por tabla
+
+Asigna VARIOS departamentos si hace falta, no uno solo. invoice la necesitan
+facturación, cobranza, contabilidad e inventario: si solo la ve contabilidad, el
+agente de cobranza no puede informar de la cartera. Un departamento de más es un
+poco de ruido; uno de menos es un agente que no puede trabajar.
+
+-->
+	"<MODULO>_main": {DeptContab, DeptInv},
+	"<MODULO>_line": {DeptContab, DeptInv},
+
+
+===============================================================================
+POR QUÉ LAS DOS, Y POR QUÉ EN ESTE ORDEN
+===============================================================================
+
+Las dos líneas van juntas siempre. Poner la tabla en la whitelist y olvidar el
+departamento es el fallo más común, porque la whitelist se ve (está en el mismo
+fichero que se acaba de abrir) y el departamento no.
+
+El orden importa por el síntoma: si ambos fallan, el error que se ve primero es
+"la IA no ve la tabla". Cuando se arregla la whitelist y no el departamento, el
+síntoma CAMIA a "el agente de contabilidad lo ve y el de cobranza no", que es
+mucho más difícil de reconocer como el mismo bug.
+
+PARA QUEDARSE TRANQUILO
+
+  go test ./interfaces/web/ -run TestNingunDepartamentoVeTablasHuerfanas -v -count=1
+  go test ./interfaces/web/ -run TestMapaPorRolVieneRecortado -v -count=1
+
+Los dos en verde, y no solo el primero.

@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ERPGo — Diccionario de Scripts</title>
+<style>
+:root{
+  --bg:#0f1419; --panel:#161d26; --panel2:#1c2632; --border:#2a3644;
+  --txt:#d8e1ea; --txt2:#8b9aab; --accent:#4da3ff; --accent2:#7ee787;
+  --warn:#e3b341; --danger:#ff7b72; --go:#00add8; --js:#f0db4f;
+  --py:#4b8bbe; --sql:#e38c00; --sh:#89e051;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--txt);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+header{background:var(--panel);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+header h1{font-size:16px;font-weight:600;color:var(--accent)}
+header .meta{font-size:11px;color:var(--txt2)}
+#busqueda{flex:1;min-width:200px;max-width:420px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 12px;color:var(--txt);font-size:13px;outline:none}
+#busqueda:focus{border-color:var(--accent)}
+#stats{display:flex;gap:10px;font-size:11px;color:var(--txt2)}
+#stats b{color:var(--accent2)}
+main{flex:1;display:flex;overflow:hidden}
+#arbol-panel{width:340px;min-width:220px;background:var(--panel);border-right:1px solid var(--border);overflow-y:auto;padding:8px 0}
+#detalle{flex:1;overflow-y:auto;padding:20px 26px}
+.tree-dir>.dir-row,.tree-file>.file-row{display:flex;align-items:center;gap:6px;padding:3px 10px;cursor:pointer;font-size:13px;white-space:nowrap;border-radius:4px;margin:0 6px}
+.dir-row:hover,.file-row:hover{background:var(--panel2)}
+.file-row.active{background:#1d3a5c;color:#fff}
+.chev{width:12px;font-size:10px;color:var(--txt2);transition:transform .15s;flex-shrink:0}
+.chev.open{transform:rotate(90deg)}
+.icon{flex-shrink:0}
+.badge{margin-left:auto;font-size:10px;color:var(--txt2);background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:0 6px;flex-shrink:0}
+.lang-go{color:var(--go)}.lang-js{color:var(--js)}.lang-python{color:var(--py)}
+.lang-sql{color:var(--sql)}.lang-batch,.lang-shell{color:var(--sh)}
+.children{display:none}
+.children.open{display:block}
+.det-header{border-bottom:1px solid var(--border);padding-bottom:14px;margin-bottom:16px}
+.det-ruta{font-size:11px;color:var(--txt2);font-family:Consolas,monospace;word-break:break-all}
+.det-nombre{font-size:22px;font-weight:700;margin:4px 0 8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.tag{font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;border:1px solid currentColor;text-transform:uppercase}
+.det-prop{color:var(--txt);font-size:14px;line-height:1.55;background:var(--panel);border-left:3px solid var(--accent);padding:10px 14px;border-radius:0 6px 6px 0;margin-top:8px}
+.det-metas{display:flex;gap:18px;margin-top:10px;font-size:12px;color:var(--txt2);flex-wrap:wrap}
+.det-metas b{color:var(--txt)}
+h2.sec{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin:22px 0 10px;display:flex;align-items:center;gap:8px}
+h2.sec .count{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:0 8px;font-size:11px;color:var(--txt2)}
+.fn-card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:8px}
+.fn-card summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.fn-card summary::-webkit-details-marker{display:none}
+.fn-nombre{font-family:Consolas,monospace;font-size:13px;font-weight:700;color:var(--accent2)}
+.fn-firma{font-family:Consolas,monospace;font-size:11px;color:var(--txt2);word-break:break-all}
+.fn-lin{margin-left:auto;font-size:10px;color:var(--txt2)}
+.fn-desc{margin-top:8px;font-size:13px;color:var(--txt);line-height:1.5}
+.fn-desc.sin{color:var(--txt2);font-style:italic}
+.tag-exp{color:var(--accent2)}.tag-priv{color:var(--warn)}.tag-met{color:var(--accent)}.tag-auto{color:#888}
+.sql-obj{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:4px 10px;margin:3px;font-size:12px;font-family:Consolas,monospace}
+.sql-obj .t{color:var(--sql);font-size:10px;font-weight:700}
+.clase-card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:8px}
+.empty{text-align:center;color:var(--txt2);padding:80px 20px;font-size:14px}
+.empty .big{font-size:40px;margin-bottom:12px}
+#btn-colapsar{background:var(--panel2);border:1px solid var(--border);color:var(--txt2);border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer}
+#btn-colapsar:hover{color:var(--txt);border-color:var(--accent)}
+.resaltado{background:#3d2e00;border-radius:3px;padding:0 2px}
+@media(max-width:800px){#arbol-panel{width:100%;position:absolute;inset:52px 0 0;z-index:5}main.con-detalles #arbol-panel{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>📚 ERPGo · Diccionario de Scripts</h1>
+  <span class="meta" id="meta-gen"></span>
+  <input id="busqueda" type="search" placeholder="Buscar archivo, función o descripción… (Ctrl+K)">
+  <div id="stats"></div>
+  <button id="btn-colapsar" onclick="colapsarTodo()">⇤ Colapsar todo</button>
+</header>
+<main id="main">
+  <div id="arbol-panel"><div id="arbol"></div></div>
+  <div id="detalle">
+    <div class="empty" id="vacio-inicio">
+      <div class="big">👈</div>
+      <p>Explora el árbol de archivos a la izquierda.</p>
+      <p>Haz clic en un <b>directorio</b> para desplegarlo y en un <b>archivo</b> para ver su descripción y cada una de sus funciones.</p>
+    </div>
+    <div id="detalle-contenido" style="display:none"></div>
+  </div>
+</main>
+<script src="datos.js"></script>
+<script>
+const esc = s => String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const ICONO_DIR = '<svg class="icon" width="15" height="15" viewBox="0 0 16 16" fill="#e3b341"><path d="M1 3.5A1.5 1.5 0 012.5 2h3.879a1.5 1.5 0 011.06.44l1.122 1.12H13.5A1.5 1.5 0 0115 5.08V12a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 011 12v-8.5z"/></svg>';
+const ICONO_FILE = l => {
+  const c={Go:"#00add8",JavaScript:"#f0db4f",Python:"#4b8bbe",SQL:"#e38c00",Batch:"#89e051",Shell:"#89e051",TypeScript:"#3178c6"}[l]||"#8b9aab";
+  return '<svg class="icon" width="14" height="14" viewBox="0 0 16 16" fill="'+c+'"><path d="M4 1.5A1.5 1.5 0 002.5 3v10A1.5 1.5 0 004 15h8a1.5 1.5 0 001.5-1.5V5.62a1.5 1.5 0 00-.44-1.06L9.94 1.44A1.5 1.5 0 008.88 1H4z"/></svg>';
+};
+
+function renderArbol(){
+  const cont = document.getElementById("arbol");
+  cont.appendChild(nodoDir(DATOS.arbol, true));
+}
+function nodoDir(n, abierto){
+  const div = document.createElement("div");
+  div.className = "tree-dir";
+  const row = document.createElement("div");
+  row.className = "dir-row";
+  row.innerHTML = '<span class="chev'+(abierto?" open":"")+'">▶</span>'+ICONO_DIR+'<b>'+esc(n.nombre)+'</b>';
+  const kids = document.createElement("div");
+  kids.className = "children"+(abierto?" open":"");
+  row.onclick = () => { kids.classList.toggle("open"); row.querySelector(".chev").classList.toggle("open"); };
+  div.appendChild(row); div.appendChild(kids);
+  (n.hijos||[]).forEach(h => h.tipo==="dir" ? kids.appendChild(nodoDir(h,false)) : kids.appendChild(nodoArchivo(h)));
+  return div;
+}
+function nodoArchivo(n){
+  const div = document.createElement("div");
+  div.className = "tree-file";
+  const row = document.createElement("div");
+  row.className = "file-row";
+  row.dataset.ruta = n.ruta;
+  row.dataset.buscar = (n.nombre+" "+n.lenguaje).toLowerCase();
+  row.innerHTML = ICONO_FILE(n.lenguaje)+'<span>'+esc(n.nombre)+'</span>'+(n.nfuncs?'<span class="badge">'+n.nfuncs+' fn</span>':'');
+  row.title = n.ruta;
+  row.onclick = () => {
+    document.querySelectorAll(".file-row.active").forEach(e=>e.classList.remove("active"));
+    row.classList.add("active");
+    mostrarDetalle(n.ruta);
+    if(window.innerWidth<=800) document.getElementById("main").classList.add("con-detalles");
+  };
+  div.appendChild(row);
+  return div;
+}
+
+function badgeLeng(l){
+  const cls = "lang-"+l.toLowerCase();
+  return '<span class="tag '+cls+'">'+esc(l)+'</span>';
+}
+function escapeHtml(s){return esc(s);}
+function resalta(texto, q){
+  if(!q) return esc(texto);
+  const i = texto.toLowerCase().indexOf(q.toLowerCase());
+  if(i<0) return esc(texto);
+  return esc(texto.slice(0,i))+'<span class="resaltado">'+esc(texto.slice(i,i+q.length))+'</span>'+esc(texto.slice(i+q.length));
+}
+
+function mostrarDetalle(ruta){
+  const a = DATOS.archivos[ruta];
+  const cont = document.getElementById("detalle-contenido");
+  document.getElementById("vacio-inicio").style.display = "none";
+  cont.style.display = "block";
+  if(!a){ cont.innerHTML = '<p class="empty">Sin datos para '+esc(ruta)+'</p>'; return; }
+  let h = '<div class="det-header">';
+  h += '<div class="det-ruta">'+esc(a.ruta)+'</div>';
+  h += '<div class="det-nombre">'+esc(a.nombre)+badgeLeng(a.lenguaje)+'</div>';
+  h += '<div class="det-prop">'+esc(a.proposito)+'</div>';
+  h += '<div class="det-metas">';
+  h += '<span><b>'+a.lineas+'</b> líneas</span>';
+  if(a.paquete) h += '<span>Paquete: <b>'+esc(a.paquete)+'</b></span>';
+  h += '<span><b>'+a.funcs.length+'</b> funciones</span>';
+  if(a.types&&a.types.length) h += '<span><b>'+a.types.length+'</b> tipos</span>';
+  if(a.classes&&a.classes.length) h += '<span><b>'+a.classes.length+'</b> clases</span>';
+  if(a.objs_sql&&a.objs_sql.length) h += '<span><b>'+a.objs_sql.length+'</b> objetos SQL</span>';
+  h += '</div></div>';
+
+  if(a.objs_sql && a.objs_sql.length){
+    h += '<h2 class="sec">Objetos SQL <span class="count">'+a.objs_sql.length+'</span></h2>';
+    h += a.objs_sql.map(o=>'<span class="sql-obj"><span class="t">'+esc(o.tipo)+'</span>'+esc(o.nombre)+'</span>').join("");
+  }
+  if(a.comando_extra && a.comando_extra.length){
+    h += '<h2 class="sec">Comandos principales</h2>';
+    h += a.comando_extra.map(c=>'<div class="fn-card"><code style="font-size:12px;color:var(--accent2)">'+esc(c)+'</code></div>').join("");
+  }
+  if(a.types && a.types.length){
+    h += '<h2 class="sec">Tipos / Structs <span class="count">'+a.types.length+'</span></h2>';
+    h += a.types.map(t=>'<div class="clase-card"><span class="fn-nombre">'+esc(t.nombre)+'</span> <span class="fn-firma">'+esc(t.tipo)+'</span>'+(t.descripcion?'<div class="fn-desc">'+esc(t.descripcion)+'</div>':'')+'</div>').join("");
+  }
+  if(a.classes && a.classes.length){
+    h += '<h2 class="sec">Clases <span class="count">'+a.classes.length+'</span></h2>';
+    h += a.classes.map(c=>'<div class="clase-card"><span class="fn-nombre">'+esc(c.nombre)+'</span>'+(c.descripcion?'<div class="fn-desc">'+esc(c.descripcion)+'</div>':'')+'</div>').join("");
+  }
+  if(a.funcs.length){
+    h += '<h2 class="sec">Funciones <span class="count">'+a.funcs.length+'</span></h2>';
+    const q = (document.getElementById("busqueda").value||"").trim();
+    const lista = a.funcs.slice().sort((x,y)=>x.linea-y.linea);
+    for(const f of lista){
+      const tags = [];
+      if(f.exportada===true) tags.push('<span class="tag tag-exp">exportada</span>');
+      else if(f.exportada===false) tags.push('<span class="tag tag-priv">privada</span>');
+      if(f.tipo||f.nivel) tags.push('<span class="tag tag-met">'+esc(f.tipo||f.nivel)+'</span>');
+      if(f.auto===true) tags.push('<span class="tag tag-auto">auto</span>');
+      h += '<details class="fn-card"><summary><span class="fn-nombre">'+esc(f.nombre)+'</span>'
+        + tags.join("")
+        + '<span class="fn-firma">'+esc(f.firma)+'</span>'
+        + '<span class="fn-lin">línea '+f.linea+'</span></summary>';
+      h += f.descripcion
+        ? '<div class="fn-desc">'+resalta(f.descripcion,q)+'</div>'
+        : '<div class="fn-desc sin">Sin descripción/documentación.</div>';
+      h += '</details>';
+    }
+  } else if(!a.objs_sql.length && !a.comando_extra.length){
+    h += '<p class="empty" style="padding:30px">Este archivo no contiene funciones identificables (puede ser datos o configuración).</p>';
+  }
+  cont.innerHTML = h;
+}
+
+function buscar(){
+  const q = (document.getElementById("busqueda").value||"").trim().toLowerCase();
+  const filas = document.querySelectorAll(".file-row");
+  if(!q){ filas.forEach(f=>f.parentElement.style.display=""); return; }
+  // expandir dirs que contengan coincidencias
+  document.querySelectorAll(".tree-dir").forEach(d=>{
+    const kids = d.querySelector(":scope > .children");
+    if(kids) kids.classList.add("open");
+    d.querySelectorAll(":scope > .children .chev").forEach(c=>c.classList.add("open"));
+  });
+  filas.forEach(f=>{
+    const ruta = f.dataset.ruta;
+    const a = DATOS.archivos[ruta]||{};
+    let hit = f.dataset.buscar.includes(q) || ruta.toLowerCase().includes(q);
+    if(!hit && a.funcs) hit = a.funcs.some(fn => fn.nombre.toLowerCase().includes(q) || (fn.descripcion||"").toLowerCase().includes(q));
+    if(!hit && a.proposito) hit = a.proposito.toLowerCase().includes(q);
+    f.parentElement.style.display = hit ? "" : "none";
+  });
+}
+document.getElementById("busqueda").addEventListener("input", buscar);
+document.addEventListener("keydown", e=>{
+  if((e.ctrlKey||e.metaKey) && e.key==="k"){ e.preventDefault(); document.getElementById("busqueda").focus(); }
+});
+function colapsarTodo(){
+  document.querySelectorAll(".children.open").forEach(c=>c.classList.remove("open"));
+  document.querySelectorAll(".chev.open").forEach(c=>c.classList.remove("open"));
+}
+
+document.getElementById("meta-gen").textContent = "Generado: "+DATOS.generado;
+document.getElementById("stats").innerHTML =
+  "<span><b>"+DATOS.totalArchivos+"</b> archivos</span><span><b>"+DATOS.totalFunciones.toLocaleString()+"</b> funciones</span>";
+renderArbol();
+</script>
+</body>
+</html>
