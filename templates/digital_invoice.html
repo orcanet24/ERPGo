@@ -24,12 +24,12 @@
         <p class="section_titles">Configuración del proveedor</p>
 
         <form id="diProviderForm" class="form_container">
-            <input type="hidden" name="addon_code" id="di_addon_code" value="{{if .AddonCode}}{{.AddonCode}}{{else}}unidigital{{end}}" />
+            <input type="hidden" name="provider_code" id="di_provider_code" value="{{if .ProviderCode}}{{.ProviderCode}}{{else}}unidigital{{end}}" />
 
             <div class="input_label">
                 <label class="label_name" for="di_name">Proveedor</label>
                 <select name="name" id="di_name" class="input_section" style="width:100%">
-                    <option value="Unidigital" {{if eq .AddonCode "unidigital"}}selected{{end}}>Unidigital (Corporación Unidigital 1220 C.A.)</option>
+                    <option value="Unidigital" {{if eq .ProviderCode "unidigital"}}selected{{end}}>Unidigital (Corporación Unidigital 1220 C.A.)</option>
                 </select>
                 <small class="erp-caption">
                     Solo un proveedor puede estar activo a la vez. Para cambiar, desactive el actual y active el nuevo.
@@ -145,7 +145,7 @@ $(function () {
         $.ajax({
             url: '/settings/digital-invoice/ping',
             type: 'POST',
-            data: { code: $('#di_addon_code').val(), base_url: $('#di_base_url').val(), bearer_token: $('#di_bearer_token').val(), serie_id: $('#di_serie_id').val() },
+            data: { code: $('#di_provider_code').val(), base_url: $('#di_base_url').val(), bearer_token: $('#di_bearer_token').val(), serie_id: $('#di_serie_id').val() },
             dataType: 'json',
             success: function (r) {
                 if (r.ok) {

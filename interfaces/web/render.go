@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -15,7 +14,6 @@ import (
 	"time"
 
 	"erpgow"
-	"github.com/orcanet/ergoaddon"
 )
 
 // assetVersion devuelve una huella corta del CSS y el JS de la aplicación,
@@ -248,6 +246,8 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 	// parámetro cambia SOLO cuando cambia el archivo, así que no invalida la
 	// caché en cada arranque.
 	data["AssetVer"] = s.assetVersion()
+	// GOti: el instructor demo. si es false, el JS ni se descarga (coste cero en prod).
+	data["GuiDemo"] = s.guiDemoFlag(r)
 	if data["Module"] == nil {
 		data["Module"] = ""
 	}
@@ -416,24 +416,6 @@ func (s *Server) permissionMap(r *http.Request, sess *SessionData) map[string]bo
 				perm[d] = true
 			}
 		}
-		if addonPerms, err := db.Query(`SELECT manifest_json FROM addons WHERE is_active = 1`); err == nil {
-			defer addonPerms.Close()
-			for addonPerms.Next() {
-				var raw string
-				if addonPerms.Scan(&raw) != nil {
-					continue
-				}
-				var manifest ergoaddon.Manifest
-				if json.Unmarshal([]byte(raw), &manifest) != nil {
-					continue
-				}
-				for _, declared := range manifest.Permissions {
-					if declared.Code != "" {
-						perm[declared.Code] = true
-					}
-				}
-			}
-		}
 		perm["_all"] = true
 		return perm
 	}
@@ -468,29 +450,6 @@ func (s *Server) permissionMap(r *http.Request, sess *SessionData) map[string]bo
 		}
 		rows.Close()
 
-		if addonPerms, err := db.Query(`SELECT arp.permission_code, a.manifest_json
-			FROM addon_role_permissions arp
-			JOIN sec_userrole ur ON ur.roleid = arp.role_id
-			JOIN addons a ON a.id = arp.addon_code AND a.is_active = 1
-			WHERE ur.user_id = ? AND arp.is_allowed = 1`, sess.UserID); err == nil {
-			for addonPerms.Next() {
-				var permission, raw string
-				if addonPerms.Scan(&permission, &raw) != nil || permission == "" {
-					continue
-				}
-				var manifest ergoaddon.Manifest
-				if json.Unmarshal([]byte(raw), &manifest) != nil {
-					continue
-				}
-				for _, declared := range manifest.Permissions {
-					if declared.Code == permission {
-						perm[permission] = true
-						break
-					}
-				}
-			}
-			addonPerms.Close()
-		}
 	}
 	return perm
 }

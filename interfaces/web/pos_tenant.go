@@ -83,15 +83,26 @@ func InvalidatePOSKeyCache(apiKey string) {
 // key dada (activa). Es la vía del servidor gRPC, que recibe la key en el
 // registro del terminal y no puede consultar una cabecera HTTP.
 func (s *Server) DBForAPIKey(apiKey string) (*sql.DB, error) {
+	code, err := s.TenantForAPIKey(apiKey)
+	if err != nil {
+		return nil, err
+	}
+	return s.dbForTenant(code), nil
+}
+
+// TenantForAPIKey devuelve el CÓDIGO de la empresa cuya tabla api_keys contiene
+// la key dada. Necesario donde importa la empresa además de la base (la cola
+// de facturación digital usa el código para su configuración por empresa).
+func (s *Server) TenantForAPIKey(apiKey string) (string, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
-		return nil, fmt.Errorf("api key vacía")
+		return "", fmt.Errorf("api key vacía")
 	}
 
 	posKeyCacheMu.Lock()
 	if e, ok := posKeyCache[apiKey]; ok && time.Now().Before(e.expires) {
 		posKeyCacheMu.Unlock()
-		return s.dbForTenant(e.tenant), nil
+		return e.tenant, nil
 	}
 	posKeyCacheMu.Unlock()
 
@@ -108,7 +119,7 @@ func (s *Server) DBForAPIKey(apiKey string) (*sql.DB, error) {
 		posKeyCacheMu.Lock()
 		posKeyCache[apiKey] = posKeyCacheEntry{tenant: code, expires: time.Now().Add(posKeyCacheTTL)}
 		posKeyCacheMu.Unlock()
-		return db, nil
+		return code, nil
 	}
-	return nil, fmt.Errorf("api key no válida en ninguna empresa")
+	return "", fmt.Errorf("api key no válida en ninguna empresa")
 }

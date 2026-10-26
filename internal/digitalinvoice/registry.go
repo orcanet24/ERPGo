@@ -9,15 +9,47 @@ import (
 )
 
 var (
-	muProveedor    sync.RWMutex
+	muProveedor     sync.RWMutex
 	proveedorActivo provider.DigitalInvoiceProvider
+
+	// proveedoresPorTenant mantiene UN proveedor en memoria por empresa.
+	// Es clave en multi-empresa: cada empresa usa la empresa de facturación
+	// digital que eligió, no la de la última que cambió de pantalla.
+	proveedoresPorTenant map[string]provider.DigitalInvoiceProvider
 )
 
-// RegistrarProvider establece el proveedor activo.
+// RegistrarProvider establece el proveedor activo (sin empresa asociada).
 func RegistrarProvider(p provider.DigitalInvoiceProvider) {
 	muProveedor.Lock()
 	defer muProveedor.Unlock()
 	proveedorActivo = p
+}
+
+// RegistrarPorTenant establece el proveedor activo de UNA empresa.
+func RegistrarPorTenant(tenant string, p provider.DigitalInvoiceProvider) {
+	muProveedor.Lock()
+	defer muProveedor.Unlock()
+	if proveedoresPorTenant == nil {
+		proveedoresPorTenant = map[string]provider.DigitalInvoiceProvider{}
+	}
+	proveedoresPorTenant[tenant] = p
+}
+
+// ProveedorPorTenant retorna el proveedor activo de una empresa, si ya se
+// registró. Sin registro no hay proveedor: quien lo necesite lo carga desde
+// digital_invoice_config.
+func ProveedorPorTenant(tenant string) provider.DigitalInvoiceProvider {
+	muProveedor.RLock()
+	defer muProveedor.RUnlock()
+	return proveedoresPorTenant[tenant]
+}
+
+// DesactivarPorTenant retira el proveedor activo de una empresa (por ejemplo,
+// cuando el admin deja su configuración en enabled=0).
+func DesactivarPorTenant(tenant string) {
+	muProveedor.Lock()
+	defer muProveedor.Unlock()
+	delete(proveedoresPorTenant, tenant)
 }
 
 // ProveedorActivo retorna el proveedor actual.

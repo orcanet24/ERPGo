@@ -51,24 +51,7 @@ func (s *Server) registerModuleRoutes() {
 	s.mux.HandleFunc("PUT /module/{id}", s.moduleUpdate)
 	s.mux.HandleFunc("POST /module/{id}/toggle", s.moduleToggle)
 	s.mux.HandleFunc("DELETE /module/{id}", s.moduleDelete)
-	// Addons de terceros
-	s.mux.HandleFunc("GET /module/addons/discover", s.addonDiscover)
-	s.mux.HandleFunc("GET /module/addons/list", s.addonList)
-	s.mux.HandleFunc("GET /module/addons/{code}", s.addonInfo)
-	s.mux.HandleFunc("POST /module/addons/{code}/install", s.addonInstall)
-	s.mux.HandleFunc("POST /module/addons/{code}/uninstall", s.addonUninstall)
-	s.mux.HandleFunc("POST /module/addons/{code}/update", s.addonUpdate)
-	// Aprobar capabilities antes de activar. La activación comprueba que no
-	// quede ninguna capability sin decidir, así que no hay camino que active
-	// por atrás: instalar y actualizar aplican la misma regla.
-	s.mux.HandleFunc("POST /module/addons/{code}/capabilities", s.addonSaveCapabilities)
-	s.mux.HandleFunc("POST /module/addons/{code}/activate", s.addonActivate)
-	// Envío pedido por una persona desde un módulo del ERP. El aviso automático
-	// de un evento no pasa por aquí: lo dispara el hook y no hay usuario que
-	// autorizar.
-	s.mux.HandleFunc("POST /api/notify/send", s.addonNotifySend)
-	// Proxy para UI de addons (captura todo /mod/*)
-	s.mux.HandleFunc("/mod/", s.addonProxy)
+	// Envío pedido por una persona desde un módulo del ERP.
 }
 func (s *Server) moduleList(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "module_list.html", map[string]interface{}{

@@ -39,8 +39,19 @@ import (
 //     una pantalla que nadie abre.
 
 // backupDir agrupa los respaldos de una empresa.
+//
+// `backup` es el directorio oficial (fuera del binario). `backups` sigue siendo
+// la carpeta heredada: databaseBackupList la mantiene para no perder los
+// respaldos antiguos, aunque los nuevos respaldos (y el ciclo automático) se
+// escriben en `backup`.
 func backupDir() string {
-	return filepath.Join("backups")
+	return "backup"
+}
+
+// legacyBackupDir es la carpeta histórica de respaldos (antes de la pantalla
+// nueva). Los archivos que ya están ahí se siguen mostrando en la lista.
+func legacyBackupDir() string {
+	return "backups"
 }
 
 func (s *Server) registerDatabaseSettingsRoutes() {
@@ -48,6 +59,8 @@ func (s *Server) registerDatabaseSettingsRoutes() {
 	s.mux.HandleFunc("POST /settings/database/check", s.databaseCheck)
 	s.mux.HandleFunc("POST /settings/database/backup", s.databaseBackup)
 	s.mux.HandleFunc("GET /settings/database/backups", s.databaseBackupList)
+	s.mux.HandleFunc("GET /settings/database/backup/status", s.databaseBackupStatus)
+	s.mux.HandleFunc("POST /settings/database/backup/run-all", s.databaseBackupRunAll)
 }
 
 func (s *Server) databaseSettingsPage(w http.ResponseWriter, r *http.Request) {
@@ -321,17 +334,25 @@ func (s *Server) databaseBackupList(w http.ResponseWriter, r *http.Request) {
 		When string  `json:"when"`
 	}
 	var list []item
-	if entries, err := os.ReadDir(backupDir()); err == nil {
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) || !strings.HasSuffix(e.Name(), ".zip") {
-				continue
+	dirs := []string{backupDir(), legacyBackupDir()}
+	vistos := map[string]bool{}
+	for _, dir := range dirs {
+		if entries, err := os.ReadDir(dir); err == nil {
+			for _, e := range entries {
+				if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) || !strings.HasSuffix(e.Name(), ".zip") {
+					continue
+				}
+				if vistos[e.Name()] {
+					continue
+				}
+				vistos[e.Name()] = true
+				it := item{File: e.Name()}
+				if info, err := e.Info(); err == nil {
+					it.MB = float64(info.Size()) / (1024 * 1024)
+					it.When = info.ModTime().Format("2006-01-02 15:04")
+				}
+				list = append(list, it)
 			}
-			it := item{File: e.Name()}
-			if info, err := e.Info(); err == nil {
-				it.MB = float64(info.Size()) / (1024 * 1024)
-				it.When = info.ModTime().Format("2006-01-02 15:04")
-			}
-			list = append(list, it)
 		}
 	}
 	writeJSON(w, map[string]interface{}{"data": list})

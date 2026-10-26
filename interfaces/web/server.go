@@ -86,6 +86,13 @@ type Server struct {
 	// Vive sobre la BD de control con pool fijo, backpressure y spill a disco:
 	// el requisito es que la app no se quede sin memoria con muchas tareas.
 	queue *queue.Queue
+
+	// backupStop apaga el ciclo de respaldos automáticos al cerrar el ERP.
+	// Vale nil cuando los respaldos automáticos están deshabilitados.
+	backupStop chan struct{}
+
+	// diStop apaga el runner de facturación digital al cerrar el ERP.
+	diStop chan struct{}
 }
 
 // AppSettings caches per-request common template data sources.
@@ -186,10 +193,6 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	// que controlStore lo reutilice en vez de abrir una segunda conexión.
 	s.controlDB = db
 
-	// Canal de venta de los addons: el POS gRPC puede vetar una venta a través
-	// de los addons activos sin compartir transacción ni base de datos.
-	s.installAddonSaleGuard()
-
 	// Sesiones persistentes: se conectan a la BD de control, que a su vez se
 	// abre de forma perezosa. La sesión vive allí porque es la identidad de
 	// QUIÉN está conectado, y esa pregunta se responde antes de saber en qué
@@ -213,6 +216,10 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 		log.Printf("AVISO: no se pudo preparar el tenant maestro: %v", err)
 	}
 	s.EnsureDefaultTenant()
+	// La empresa de práctica (DEMO) se auto-provisiona y queda SIEMPRE
+	// disponible para cualquier usuario. El admin puede desactivarla con
+	// POST /guia/demo-marcar (code=demo, demo=0).
+	s.ensureDemoTenant()
 
 	// Motor de tareas en segundo plano (cola con pool fijo y spill a disco).
 	// Un fallo al abrirlo no impide arrancar la app: solo desactiva el trabajo
@@ -232,6 +239,14 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	if _, err := s.startOrchestrator(s.activeTenant); err != nil {
 		log.Printf("orquestador de escrituras no disponible: %v", err)
 	}
+
+	// Respaldo automático diario (comprimido y verificado por el binario
+	// mismo): BACKUP_ENABLED/BACKUP_INTERVAL_HOURS/BACKUP_DIR en .env.
+	s.startBackupScheduler()
+
+	// Runner de facturación digital: emite las ventas sincronizadas y offline
+	// al proveedor que la empresa tenga activo (digital_invoice_config).
+	s.startDigitalInvoiceRunner()
 
 	// Static files — served from the disk copy when present (live edits in
 	// development) and from the embedded filesystem otherwise (single binary).
@@ -412,14 +427,10 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	s.registerCustomerClassRoutes()
 	// Gestor de Menús (drag & drop para reordenar y mover)
 	s.registerMenuManagerRoutes()
+	// GOti: instructor de la empresa DEMO (no responde en empresas de producción)
+	s.registerGuiaRoutes()
 	s.registerModuleRoutes()
-	s.registerAddonHostRoutes()
 	s.registerModuleCore()
-	// Ruta de administración de addons y registro del ítem de menú.
-	s.mux.HandleFunc("GET /module/addons/admin", s.addonAdminList)
-	s.mux.HandleFunc("GET /module/addons/admin/data", s.addonAdminData)
-	s.mux.HandleFunc("POST /module/addons/{code}/permissions", s.addonSavePermissions)
-	s.registerAddonAdminMenu()
 	s.registerPermissionRoutes()
 
 	return s

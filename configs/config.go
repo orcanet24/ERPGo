@@ -33,6 +33,12 @@ type Config struct {
 	ServerHost  string
 	GRPCPort    string
 	GZipEnabled bool // Compresión gzip en respuestas textuales (activada en producción)
+
+	// Respaldo automático del ERP: activado por defecto ya que el sistema
+	// fiscal no debe depender de alguien que apriete un botón.
+	BackupEnabled        bool
+	BackupIntervalHours  int    // BACKUP_INTERVAL_HOURS (default 24)
+	BackupDir            string // BACKUP_DIR (default "backup", carpeta junto al binario)
 	// Credenciales de provisión: se usan SOLO al crear/eliminar empresas
 	// (CREATE DATABASE, CREATE USER, DROP DATABASE). NO para operación diaria.
 	// Si está vacío, se usa DBUser/DBPassword para todo.
@@ -72,6 +78,7 @@ func Load() (*Config, error) {
 	if v, ok := os.LookupEnv("DB_AUTO_START"); ok {
 		autoStart = EsVerdadero(v)
 	}
+	backupInterval, _ := strconv.Atoi(getEnv("BACKUP_INTERVAL_HOURS", "24"))
 
 	return &Config{
 		DBDriver:            getEnv("DB_DRIVER", "mysql"),
@@ -104,12 +111,16 @@ func Load() (*Config, error) {
 		AppURL:      getEnv("APP_URL", "http://localhost:8080"),
 		AppEnv:      getEnv("APP_ENV", "development"),
 		UploadPath:  getEnv("UPLOAD_PATH", "./uploads"),
-		GZipEnabled: EsVerdadero(getEnv("GZIP_ENABLED", "1")),
-
-		// Logger configurable desde .env
+		GZipEnabled: EsVerdadero(getEnv("GZIP_ENABLED", "1")),		// Logger configurable desde .env
 		LogEnabled: EsVerdadero(getEnv("LOG_ENABLED", "0")),
-		LogLevel:   getEnv("LOG_LEVEL", "info"),
-		LogFile:    getEnv("LOG_FILE", "logs/erpgow.log"),
+		LogLevel:  getEnv("LOG_LEVEL", "info"),
+		LogFile:   getEnv("LOG_FILE", "logs/erpgow.log"),
+
+		// Respaldo automático: activado por defecto, cada día (24h),
+		// comprimido (ZIP) en la carpeta backup/ junto al binario.
+		BackupEnabled: EsVerdadero(getEnv("BACKUP_ENABLED", "1")),
+		BackupIntervalHours: backupInterval,
+		BackupDir:  getEnv("BACKUP_DIR", "backup"),
 	}, nil
 }
 

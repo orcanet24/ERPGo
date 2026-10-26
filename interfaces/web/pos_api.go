@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
-	"github.com/orcanet/ergoaddon"
 )
 
 func (s *Server) registerPOSAPIRoutes() {
@@ -347,20 +346,7 @@ func (s *Server) posAPICheckout(w http.ResponseWriter, r *http.Request) {
 		totalUSD = math.Round((total/tasaBCV)*100) / 100
 	}
 
-	// Política externa de venta (addons): solo puede vetar, con motivo. El
-	// stock, la numeración y el asiento siguen siendo del núcleo.
-	tenantCode := s.posTenantCode(r)
-	guardItems := make([]ergoaddon.GuardItem, 0, len(items))
-	for _, it := range items {
-		guardItems = append(guardItems, ergoaddon.GuardItem{
-			ProductID: it.ProductID,
-			Quantity:  it.Qty,
-		})
-	}
-	if blocks := s.addonSaleBlocks(r.Context(), controlDB, tenantCode, terminalID, guardItems); len(blocks) > 0 {
-		writeSaleBlocked(w, blocks)
-		return
-	}
+	// Política de venta: solo el núcleo puede vetar (stock, numeración, asiento).
 
 	tx, err := controlDB.Begin()
 	if err != nil {
@@ -495,14 +481,10 @@ func (s *Server) posAPICheckout(w http.ResponseWriter, r *http.Request) {
 	go s.aiAudit(nil, "POS-SYSTEM", "pos_sale", "invoice", "invoice", ref,
 		fmt.Sprintf("total:%.2f,items:%d", total, len(items)), nil)
 
-	// El evento sale DESPUÉS del commit: nadie avisa al cliente de una factura
-	// que todavía podía revertirse. Si el addon está caído, se pierde el aviso,
-	// no la venta.
-	go s.dispatchAddonEvent(controlDB, tenantCode, addonEvtInvoiceIssued, map[string]interface{}{
-		"invoice_id":  invoiceID,
-		"total":       total,
-		"terminal_id": terminalID,
-	})
+	// El checkout en línea pasa por la MISMA cola de facturación digital que
+	// las ventas offline: una sola fila digital_invoice_log y un runner que
+	// emite al proveedor activo de la empresa, con reintentos.
+	go s.diEnqueueVenta(controlDB, s.posTenantCode(r), ref)
 
 	writeJSON(w, map[string]interface{}{
 		"invoice_id": invoiceID,

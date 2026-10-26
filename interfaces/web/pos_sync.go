@@ -30,6 +30,11 @@ import (
 // string como clave de contexto es una colisión esperando a ocurrir.
 type posSyncDBKey struct{}
 
+// posSyncTenantKey guarda el CÓDIGO de la empresa resuelto por la API key.
+// Lo necesita la cola de facturación digital: su configuración es por empresa
+// y el solo handle de la base no dice a qué código pertenece.
+type posSyncTenantKey struct{}
+
 // POS sync server instance (initialized in registerPOSSyncRoutes)
 var posSyncServer *pos.SyncServer
 
@@ -73,6 +78,7 @@ func (s *Server) registerPOSSyncRoutes() {
 	s.mux.HandleFunc("POST /api/pos/sync/sale", s.posSyncKeyMiddleware(s.handlePOSSyncSale))
 	s.mux.HandleFunc("GET /api/pos/products", s.posSyncKeyMiddleware(s.handlePOSProducts))
 	s.mux.HandleFunc("GET /api/pos/customers", s.posSyncKeyMiddleware(s.handlePOSCustomers))
+	s.mux.HandleFunc("POST /api/pos/customers", s.posSyncKeyMiddleware(s.handlePOSCustomersSync))
 	s.mux.HandleFunc("POST /api/pos/validate-key", s.handlePOSValidateKey)
 	s.mux.HandleFunc("GET /api/pos/sync/status", s.posSyncKeyMiddleware(s.handlePOSSyncStatus))
 	// Bloques fiscales offline por caja (reserva, consumo, estado)
@@ -138,6 +144,9 @@ func (s *Server) posSyncKeyMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		ctx := context.WithValue(r.Context(), posSyncDBKey{}, db)
+		if tenant, terr := s.TenantForAPIKey(apiKey); terr == nil && tenant != "" {
+			ctx = context.WithValue(ctx, posSyncTenantKey{}, tenant)
+		}
 		next(w, r.WithContext(ctx))
 	}
 }
@@ -175,6 +184,18 @@ func (s *Server) handlePOSSyncSale(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// La venta sincronizada se apunta a la cola de facturación digital: el
+	// runner la emisará al proveedor que la empresa tenga activo. Es asincrónico
+	// a propósito: si Unidigital está caído o sin conexión, el ERP igual
+	// confirma la sincronización a la caja y la cola reintenta sola.
+	if resp != nil && resp.Success && resp.RemoteID != "" {
+		dbSync, _ := s.posSyncDB(r)
+		tenant, _ := r.Context().Value(posSyncTenantKey{}).(string)
+		if dbSync != nil && tenant != "" {
+			go s.diEnqueueVenta(dbSync, tenant, resp.RemoteID)
+		}
 	}
 
 	writeJSON(w, resp)
@@ -256,4 +277,74 @@ func (s *Server) handlePOSSyncStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, resp)
+}
+
+// posClienteSync es un cliente que el terminal creó OFFLINE en su SQLite y
+// manda al reponerse la conexión.
+type posClienteSync struct {
+	LocalID string `json:"local_id"`          // id del cliente en el terminal
+	RIF     string `json:"rif"`               // cédula/RIF; el reductor de duplicados
+	Nombre  string `json:"name"`              // nombre
+	Telefono string `json:"phone"`            // móvil opcional
+}
+
+// posClienteSyncResp es la resolución de UN cliente: o se creó, o la caja ya
+// no necesita crearlo porque la empresa lo tiene (merged): en ese caso el
+// terminal guarda el customer_id real y su factura se procesa normal.
+type posClienteSyncResp struct {
+	LocalID    string `json:"local_id"`
+	CustomerID int64  `json:"customer_id"`
+	Merged     bool   `json:"merged"`
+	Created    bool   `json:"created"`
+}
+
+// handlePOSCustomersSync sube clientes creados por el terminal con
+// deduplicación por RIF. Si dos cajas crearon el mismo cliente sin red, el
+// primero que sincroniza lo crea y las demás reciben merged=true: su
+// 'local' pasa a referir el customer_id real del ERP y nada se duplica.
+func (s *Server) handlePOSCustomersSync(w http.ResponseWriter, r *http.Request) {
+	db, ok := r.Context().Value(posSyncDBKey{}).(*sql.DB)
+	if !ok || db == nil {
+		jsonError(w, "Base no resuelta", http.StatusInternalServerError)
+		return
+	}
+	var req struct {
+		Customers []posClienteSync `json:"customers"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "JSON inválido: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	resp := []posClienteSyncResp{}
+	for _, c := range req.Customers {
+		rif := strings.ToUpper(strings.TrimSpace(c.RIF))
+		if rif == "" {
+			rif = "V000000000" // mismo placeholder del findOrCreateCustomer de SyncSale
+		}
+		var customerID int64
+		err := db.QueryRow(`SELECT customer_id FROM customer_information WHERE rif = ? LIMIT 1`, rif).Scan(&customerID)
+		switch {
+		case err == nil:
+			// Ya existe: la terminal que lo creó adopta el id real. Nada que
+			// escribir: los datos del terminal no sobreescriben los del ERP.
+			resp = append(resp, posClienteSyncResp{LocalID: c.LocalID, CustomerID: customerID, Merged: true})
+		case err == sql.ErrNoRows:
+			if res, ierr := db.Exec(`INSERT INTO customer_information (customer_name, rif, address2, status, customer_type)
+				VALUES (?, ?, '', 1, 1)`, c.Nombre, rif); ierr == nil {
+				if id, ierr := res.LastInsertId(); ierr == nil {
+					resp = append(resp, posClienteSyncResp{LocalID: c.LocalID, CustomerID: id, Created: true})
+					continue
+				}
+			}
+			// Carrera entre dos cajas haciendo el mismo insert: releer.
+			if e2 := db.QueryRow(`SELECT customer_id FROM customer_information WHERE rif = ? LIMIT 1`, rif).Scan(&customerID); e2 == nil {
+				resp = append(resp, posClienteSyncResp{LocalID: c.LocalID, CustomerID: customerID, Merged: true})
+			}
+		default:
+			// Error de BD con este cliente: se reporta local y el terminal reintenta.
+			resp = append(resp, posClienteSyncResp{LocalID: c.LocalID})
+		}
+	}
+	writeJSON(w, map[string]interface{}{"results": resp})
 }

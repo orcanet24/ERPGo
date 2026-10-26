@@ -250,6 +250,17 @@ func (s *Server) Close() error {
 	// escritor se para en orden.
 	stopOrchestrators()
 
+	// El ciclo de respaldos automáticos apagan antes de cerrar las bases:
+	// no debe quedar escribiendo sobre un MySQL ya desconectado.
+	if s.backupStop != nil {
+		close(s.backupStop)
+		s.backupStop = nil
+	}
+
+	// El runner de facturación digital igual: una emisión a medio vuelo no
+	// debe chocar con una base que se cierra. Lo pendiente queda en cola.
+	s.diDesactivarRunner()
+
 	s.controlMu.Lock()
 	if s.controlDB != nil {
 		if err := s.controlDB.Close(); err != nil {
@@ -711,6 +722,34 @@ func (s *Server) ListTenantsForUser(username string) ([]Tenant, error) {
 		t.IsMember = true
 		list = append(list, t)
 	}
+	rows.Close()
+
+	// La EMPRESA DEMO de práctica se añade SIEMPRE al final si está activa:
+	// es el escenario de GOti y de práctica libre, disponible para cualquier
+	// usuario aunque no sea miembro. Si el admin la desactivó, no aparece.
+	if s.TenantExistsInControl(tenantDemoCode) && s.tenantEsDemo(tenantDemoCode) {
+		yaEsta := false
+		for _, t := range list {
+			if t.Code == tenantDemoCode {
+				yaEsta = true
+				break
+			}
+		}
+		if !yaEsta {
+			var legal sql.NullString
+			_ = ctl.QueryRow(`SELECT legal_name FROM tenants WHERE code = ?`, tenantDemoCode).Scan(&legal)
+			nombre := legal.String
+			if nombre == "" {
+				nombre = tenantDemoLabel
+			}
+			list = append(list, Tenant{
+				Code:      tenantDemoCode,
+				LegalName: nombre,
+				Status:    1,
+				IsMember:  true,
+			})
+		}
+	}
 	return list, nil
 }
 
@@ -756,6 +795,12 @@ func (s *Server) TenantCodes() []string {
 // CanAccessTenant indica si un usuario es miembro de una empresa. Se usa al
 // cambiar de empresa: sin esto, cambiar el tenant_code en la cookie sería
 // escalamiento de privilegios entre empresas.
+//
+// Excepción: la EMPRESA DEMO de práctica es accesible para cualquier usuario
+// autenticado (is_demo=1). Sus datos viven en una base aparte, y es el
+// escenario de GOti: práctica libre sin tocar empresas reales. Un admin puede
+// desactivarla (is_demo=0) y entonces vuelve a ser una empresa "de membresía
+// normal" — cerrada para quien no esté inscrito.
 func (s *Server) CanAccessTenant(username, code string) bool {
 	ctl, err := s.controlStore()
 	if err != nil {
@@ -765,7 +810,13 @@ func (s *Server) CanAccessTenant(username, code string) bool {
 	var n int
 	_ = ctl.QueryRow(`SELECT COUNT(*) FROM tenant_users WHERE tenant_code = ? AND username = ? AND status = 1`,
 		code, username).Scan(&n)
-	return n > 0
+	if n > 0 {
+		return true
+	}
+	// La demo es de acceso universal SOLO si el administrador no la desactivó.
+	var demo int
+	err = ctl.QueryRow(`SELECT IFNULL(is_demo,0) FROM tenants WHERE code = ? AND status = 1`, code).Scan(&demo)
+	return err == nil && demo == 1 && s.tenantEsDemo(code)
 }
 
 // ---------- Contexto de tenant por request ----------
