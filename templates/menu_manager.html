@@ -11,6 +11,15 @@
             Arrastre los menús para reordenarlos dentro de su grupo o moverlos a otro grupo.
             Los cambios se guardan automáticamente al soltar.
         </div>
+
+        <div id="restore-panel" style="border:1px solid #ddd;border-radius:4px;padding:10px;margin-bottom:14px;background:#fcfcfc;">
+            <strong><i class="fa fa-history"></i> Restauración</strong>
+            <button type="button" class="btn btn-xs btn-default" id="diSnapshot">Guardar punto manual</button>
+            <button type="button" class="btn btn-xs btn-warning" id="diRestorePanel">Mostrar historial</button>
+            <button type="button" class="btn btn-xs btn-danger" id="diFactory">Restaurar de fábrica</button>
+            <div id="restore-list" style="margin-top:10px;display:none;"></div>
+        </div>
+
         <div id="menu-tree" class="menu-tree"></div>
         <div id="save-status" class="text-center" style="margin-top:10px;"></div>
     </div>
@@ -279,6 +288,84 @@
         };
         xhr.send();
     }
+
+    // ---------- Restauración ----------
+
+    function jsonPost(url, body, okMsg, cb) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', url, true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== 4) return;
+            var resp;
+            try { resp = JSON.parse(xhr.responseText); } catch(e) { resp = { error: 'Respuesta inválida del servidor' }; }
+            if (resp.status == 1) {
+                showStatus('✓ ' + (resp.msg || okMsg), 'success');
+                if (cb) cb(resp);
+            } else {
+                showStatus('✗ ' + (resp.error || 'Error'), 'danger');
+            }
+        };
+        xhr.send(JSON.stringify(body || {}));
+    }
+
+    // Historial de puntos: el SNAPSHOT ANTES de cada cambio ya existe server-side;
+    // aquí los listamos para restaurar con un clic.
+    function loadHistory() {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '/config/menu/history', true);
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== 4) return;
+            var resp;
+            try { resp = JSON.parse(xhr.responseText); } catch(e) { showStatus('✗ Historial no disponible (JSON inválido)', 'danger'); return; }
+            var list = document.getElementById('restore-list');
+            if (!resp.backups || resp.backups.length === 0) {
+                list.innerHTML = '<em>Aún no hay copias guardadas. Entre y arrastre algo, o pulse "Guardar punto manual".</em>';
+                return;
+            }
+            var html = '<table class="table table-condensed" style="margin:0;"><tr><th>Fecha</th><th>Tipo</th><th>Menús</th><th></th></tr>';
+            for (var i = 0; i < resp.backups.length; i++) {
+                var b = resp.backups[i];
+                html += '<tr>'
+                    + '<td>' + b.created_at + '</td>'
+                    + '<td>' + (b.source === 'manual' ? 'Manual' : 'Auto') + '</td>'
+                    + '<td>' + b.menus + '</td>'
+                    + '<td><button type="button" class="btn btn-xs btn-default" data-backup="' + b.id + '">Restaurar</button></td>'
+                    + '</tr>';
+            }
+            html += '</table><em>Restaurar solo cambia posiciones/estado; nada se borra. La situación de AHORA se copia automáticamente antes de restaurar, por si también se arrepiente.</em>';
+            list.innerHTML = html;
+            var btns = list.querySelectorAll('button[data-backup]');
+            for (var j = 0; j < btns.length; j++) {
+                btns[j].addEventListener('click', function() {
+                    if (!confirm('¿Restaurar los menús a este punto? La situación actual se guardará antes, por si quiere volver atrás.')) return;
+                    jsonPost('/config/menu/restore', { snapshot_id: parseInt(this.getAttribute('data-backup')) }, 'Menús restaurados', function() { loadMenus(); });
+                });
+            }
+        };
+        xhr.send();
+    }
+
+    document.getElementById('diSnapshot').addEventListener('click', function() {
+        jsonPost('/config/menu/snapshot', {}, 'Punto de restauración guardado');
+    });
+
+    document.getElementById('diRestorePanel').addEventListener('click', function() {
+        var list = document.getElementById('restore-list');
+        if (list.style.display === 'none') {
+            list.style.display = 'block';
+            list.innerHTML = '<em>Cargando historial…</em>';
+            loadHistory();
+        } else {
+            list.style.display = 'none';
+        }
+    });
+
+    document.getElementById('diFactory').addEventListener('click', function() {
+        if (!confirm('¿Restaurar el ORDEN DE FÁBRICA del menú? Vuelve a las posiciones originales del producto. La situación actual se guardará antes, por si quiere recuperar su orden personalizado.')) return;
+        jsonPost('/config/menu/restore', { factory: true }, 'Menús restaurados a fábrica', function() { loadMenus(); });
+    });
 
     loadMenus();
 })();
