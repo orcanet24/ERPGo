@@ -794,6 +794,33 @@ textarea.form-control {
     color: var(--erp-text);
 }
 
+/* CHECKS Y RADIOS NATIVOS Y VISIBLES, EN TODA LA PANTALLA.
+   El skin de custom.min.css dibuja el cuadro con ::before y deja el input
+   real en opacity:0: si ese box pseudo se queda a medio pintar (o el WebDriver
+   del usuario tapa el área), el check parecía muerto y no se podía ni marcar.
+   Aquí devolvemos el checkbox/radio NATIVO del navegador: visible, clicable y
+   funcional en todas las vistas (settings, fiscales, permisos, backups...).
+   El clic sobre cualquier parte del label sigue marcando (label + input). */
+.checkbox input[type="checkbox"],
+.radio input[type="radio"],
+.checkbox-inline input[type="checkbox"],
+.radio-inline input[type="radio"] {
+    opacity: 1 !important;
+    position: static !important;
+    width: auto !important;
+    height: auto !important;
+    margin: 0 6px 0 0 !important;
+    vertical-align: middle;
+    -webkit-appearance: auto;
+    appearance: auto;
+}
+.checkbox label::before,
+.checkbox label::after,
+.radio label::before,
+.radio label::after {
+    display: none !important;
+}
+
 /* select2 pinta su propia caja: sin esto el desplegable salía
    blanco con texto gris claro en el modo oscuro. */
 .select2-container--default .select2-selection--single,

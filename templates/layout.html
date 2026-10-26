@@ -61,18 +61,9 @@
 
 {{define "sidebar"}}
 <div class="sidebar">
-    <!-- Sidebar user panel -->
-
-    <div class="user-panel text-center">
-        <div class="image">
-            <img src="{{if .UserImage}}{{.UserImage}}{{else}}/static/img/icons/default.jpg{{end}}" class="img-circle" alt="User Image">
-        </div>
-        <div class="info">
-            <p>{{.Fullname}}</p>
-            <a href="#"><i class="fa fa-circle text-success"></i>
-                {{.UserLevel}}</a>
-        </div>
-    </div>
+    <!-- El user-panel con foto se retiró: no existe carga de foto de usuario en
+         el perfil, así que la caja mostraba siempre el default.jpg y no era útil.
+         El usuario sigue identificado por su nombre en el header. -->
 
     <!-- sidebar menu -->
     <div class="sidebar-filter">
