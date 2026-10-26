@@ -285,11 +285,17 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 		// fecha de modificación y por tanto no hay ETag— se reenvía el archivo, que
 		// son unas decenas de KB con gzip.
 		//
-		// La alternativa que conserva la cache de un año es versionar la URL
-		// (?v=<hash> en cada <link>): entonces el cambio de versión cambia la URL y
-		// el `immutable` deja de ser un problema. Queda como mejora pendiente, no
-		// como excusa para seguir sirviendo CSS caducado.
-		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+		// RENDIMIENTO DE NAVEGACIÓN (2026-10-26): el estático ahora se cachede
+		// DUOS vías. Las URLs versionadas (?v=<hash> que pone el render) reciben
+		// `immutable` de un año: el navegador NO vuelve a pedir 45 archivos en cada
+		// cambio de vista, que era la lentitud que se sentía por internet. Sin `?v=`
+		// (rutas escritas a mano en desarrollo) se queda el `no-cache` de siempre,
+		// que nunca sirve un asset caducado.
+		if r.URL.Query().Get("v") != "" {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+		}
 		// ETag aún sirve para 304 en disco (desarrollo), pero para embebidos
 		// el cache-control ya cubre. Lo mantenemos por compatibilidad.
 		setStaticETag(w, staticRoot, r.URL.Path)
@@ -647,18 +653,25 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 func (s *Server) cacheDefaultMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		if s.config != nil && s.config.AppEnv == "development" {
-			start := time.Now()
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		elapsed := time.Since(start)
+
+		// DIAGNÓSTICO DE LENTITUD (2026-10-26): en desarrollo se loguea TODO;
+		// en producción sólo las rutas que tardan más de 500 ms — con eso el
+		// dueño ve en el log del servicio qué vistas son lentas (y por qué
+		// cambiar la arquitectura de lenguaje no sería el remedio: esto mide
+		// render+BD por request, no la velocidad de Go).
+		if s.config == nil || s.config.AppEnv == "development" {
 			username := "anónimo"
 			if sess := s.sessionFromRequest(r); sess != nil {
 				username = sess.Username
 			}
-			fmt.Printf("[HTTP] → %s %s (usuario: %s, remote: %s)\n", r.Method, r.URL.Path, username, r.RemoteAddr)
-			next.ServeHTTP(w, r)
-			elapsed := time.Since(start)
-			fmt.Printf("[HTTP] ← %s %s → %v\n", r.Method, r.URL.Path, elapsed)
+			fmt.Printf("[HTTP] ← %s %s → %v (usuario: %s)\n", r.Method, r.URL.Path, elapsed, username)
 			return
 		}
-		next.ServeHTTP(w, r)
+		if elapsed > 500*time.Millisecond {
+			log.Printf("LENTO: %s %s → %v", r.Method, r.URL.Path, elapsed)
+		}
 	})
 }

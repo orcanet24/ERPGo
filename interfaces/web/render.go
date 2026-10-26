@@ -32,20 +32,26 @@ import (
 var assetVersionOnce sync.Once
 var assetVersionValue string
 
+// assetVersion es el hash de TODO el árbol estático embebido (calculado una
+// sola vez al primer render). Con él, cada <link>/<script> lleva ?v=<hash> y
+// el navegador puede guardar CSS/JS un año: el hash cambia SOLO cuando cambia
+// un archivo, con lo que la invalidación es exacta. Antes versionaba solo 5
+// archivos y la mayoría del layout cargaba sin ?v= → 45 peticiones
+// re-descargadas en cada cambio de vista; era parte de la lentitud que se
+// sentía por internet.
 func (s *Server) assetVersion() string {
 	assetVersionOnce.Do(func() {
 		h := sha256.New()
-		for _, name := range []string{
-			"static/css/erpgow-tema.css",
-			"static/css/erpgow-refined.css",
-			"static/js/viewpref.js",
-			"static/js/csrf.js",
-			"static/js/appearance.js",
-		} {
-			if b, err := fs.ReadFile(erpgow.Static(), name); err == nil {
+		_ = fs.WalkDir(erpgow.Static(), ".", func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			if b, err := fs.ReadFile(erpgow.Static(), path); err == nil {
+				h.Write([]byte(path))
 				h.Write(b)
 			}
-		}
+			return nil
+		})
 		assetVersionValue = hex.EncodeToString(h.Sum(nil))[:10]
 	})
 	return assetVersionValue
@@ -480,15 +486,6 @@ func (s *Server) hasPermission(r *http.Request, directory, action string) bool {
 			continue
 		}
 		if err := db.QueryRow(query, sess.UserID, directory).Scan(&ok); err == nil && ok.Int64 == 1 {
-			return true
-		}
-		var allowed int
-		err := db.QueryRow(`SELECT arp.is_allowed FROM addon_role_permissions arp
-			JOIN sec_userrole ur ON ur.roleid = arp.role_id
-			JOIN addons a ON a.id = arp.addon_code AND a.is_active = 1
-			WHERE ur.user_id = ? AND arp.permission_code = ? AND arp.is_allowed = 1 LIMIT 1`,
-			sess.UserID, directory).Scan(&allowed)
-		if err == nil && allowed == 1 {
 			return true
 		}
 	}
