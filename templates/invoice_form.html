@@ -148,9 +148,23 @@
                     <label>Nombre <span class="text-danger">*</span></label>
                     <input type="text" class="form-control" id="inv_cust_name">
                 </div>
-                <div class="form-group">
-                    <label>RIF / Cédula <small class="text-muted">(obligatorio para crédito fiscal)</small></label>
-                    <input type="text" class="form-control" id="inv_cust_rif" placeholder="Ej: V12345678">
+                <div class="row">
+                    <div class="col-xs-5">
+                        <div class="form-group">
+                            <label>Tipo</label>
+                            <select id="inv_cust_riftipo" class="form-control">
+                                <option value="rif" selected>RIF</option>
+                                <option value="cedula">Cédula</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-xs-7">
+                        <div class="form-group">
+                            <label>RIF / Cédula <small class="text-muted">(obligatorio para crédito fiscal)</small></label>
+                            <input type="text" class="form-control" id="inv_cust_rif" placeholder="Ej: V12345678">
+                            <small id="inv_cust_rifhelp" class="text-muted" style="font-size:11px;"></small>
+                        </div>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>Teléfono</label>
@@ -274,6 +288,51 @@ $(function () {
 
     // quick customer button → modal
     $('#btnNewCustomerInvoice').on('click', function () { $('#newCustomerModal').modal('show'); });
+
+    // ---------- RIF/Cédula en la modal rápida: validación viva + SENIAT ----------
+    var RIF_PESOS = [3, 2, 7, 6, 5, 4, 3, 2], RIF_LETRA = { V: 4, E: 8, J: 12, P: 16, G: 20 };
+    function validaRifModal() {
+        var rif = ($('#inv_cust_rif').val() || '').toUpperCase().replace(/[.\- ]/g, '');
+        var $h = $('#inv_cust_rifhelp');
+        if (!rif) { $h.text(''); return true; }
+        var tipo = $('#inv_cust_riftipo').val() || 'rif';
+        if (rif[0] === 'J' || rif[0] === 'G') tipo = 'rif';
+        if (tipo === 'cedula') {
+            if (!'VE'.includes(rif[0])) { $h.text('La cédula inicia con V o E').addClass('text-danger'); return false; }
+            var dig = rif.slice(1);
+            if (!/^\d+$/.test(dig)) { $h.text('Solo dígitos después de la letra').addClass('text-danger'); return false; }
+            if (dig.length < 3 || dig.length > 8) { $h.text('Cédula: de 3 a 8 dígitos, sin rellenar ceros').addClass('text-danger'); return false; }
+            $h.text('✓ Cédula ok').removeClass('text-danger'); return true;
+        }
+        if (rif.length !== 10 || !(rif[0] in RIF_LETRA)) { $h.text('RIF: letra + 8 dígitos + verificador (J123456789)').addClass('text-danger'); return false; }
+        var sum = RIF_LETRA[rif[0]] || 0;
+        for (var i = 0; i < 8; i++) sum += (parseInt(rif[i + 1], 10) || 0) * RIF_PESOS[i];
+        var dv = 11 - (sum % 11); if (dv >= 10) dv = 0;
+        if (dv !== parseInt(rif[9], 10)) { $h.text('Dígito verificador inválido (esperado: ' + dv + ')').addClass('text-danger'); return false; }
+        $h.text('✓ RIF válido').removeClass('text-danger'); return true;
+    }
+    $('#inv_cust_rif').on('input change', validaRifModal);
+    $('#inv_cust_riftipo').on('change', function () {
+        $('#inv_cust_rif').attr('placeholder', $(this).val() === 'cedula' ? 'V12345678' : 'J123456789');
+        validaRifModal();
+    });
+    // SENIAT al salir del campo: llena el nombre SI ESTÁ VACÍO; si no hay
+    // datos, UNA alerta simple (falla de conexión, captcha o inexistente).
+    $('#inv_cust_rif').on('blur', function () {
+        var rif = ($(this).val() || '').toUpperCase().replace(/[.\- ]/g, '');
+        if (!rif) return;
+        $.getJSON('/customer/seniat-lookup', { rif: rif }, function (r) {
+            if (!r || !r.enabled) return; // apagado en Ajustes Fiscales
+            if (r.found) {
+                if (!$('#inv_cust_name').val()) $('#inv_cust_name').val(r.name);
+            } else {
+                toastr.warning(r.error || 'No se encontraron datos fiscales en la web del SENIAT');
+            }
+        }).fail(function () {
+            toastr.warning('No se encontraron datos fiscales en la web del SENIAT (puede ser por fallas de conexión)');
+        });
+    });
+
     $('#inv_cust_save').on('click', function () {
         var name = $.trim($('#inv_cust_name').val());
         if (!name) { toastr.warning('El nombre es obligatorio'); return; }
@@ -282,6 +341,7 @@ $(function () {
         $.post('/customer/quick', {
             customer_name: name,
             customer_rif: $('#inv_cust_rif').val(),
+            rif_tipo: $('#inv_cust_riftipo').val(),
             customer_mobile: $('#inv_cust_mobile').val(),
             customer_address: $('#inv_cust_address').val()
         }, function (r) {

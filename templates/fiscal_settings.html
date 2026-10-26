@@ -38,6 +38,24 @@
                                 <label>Pie de página fiscal (impreso en facturas)</label>
                                 <input type="text" class="form-control" name="fiscal_footnote" value="{{.FS.FiscalFootnote}}">
                             </div>
+
+                            <hr>
+
+                            <div class="checkbox">
+                                <label>
+                                    <input type="checkbox" name="seniat_autofill" value="1" {{if .FS.SENIATAutofill}}checked{{end}}>
+                                    Buscar datos del contribuyente (RIF o cédula) en la web del SENIAT y autollenar el cliente
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label>Comando OCR del captcha (opcional)</label>
+                                <input type="text" class="form-control" name="seniat_ocr_cmd" value="{{.FS.SENIATOcrCmd}}" placeholder="Por defecto: ddddocr (python3) en el servidor">
+                                <small class="erp-caption">
+                                    Lectura del captcha del SENIAT con el modelo ddddocr, si está instalado en el servidor.
+                                    Puede apuntar a otro comando (la imagen entra por stdin, el código sale por stdout).
+                                    Si nunca encuentra datos, el sistema solo avisa; el cliente se crea a mano.
+                                </small>
+                            </div>
                             <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
             <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
             </form>
@@ -96,6 +114,7 @@ $(function () {
         var data = $(this).serialize();
         if (!$('[name=igtf_enabled]').prop('checked')) data += '&igtf_enabled=0';
         if (!$('[name=walkin_rif_required]').prop('checked')) data += '&walkin_rif_required=0';
+        if (!$('[name=seniat_autofill]').prop('checked')) data += '&seniat_autofill=0';
         $.post('/settings/fiscal/save', data, function (r) {
             if (r.status == 1) toastr.success(r.msg); else toastr.error(r.error);
         });

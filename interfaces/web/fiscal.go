@@ -75,6 +75,57 @@ func NormalizeRIF(rif string) string {
 	return strings.ToUpper(strings.NewReplacer(".", "", "-", "", " ", "").Replace(strings.TrimSpace(rif)))
 }
 
+// ValidateDocumento valida un documento de cliente según el TIPO que el usuario
+// declaró en el selector de la pantalla:
+//
+//   - "rif": RIF completo de 10 con dígito verificador (módulo 11). Es la
+//     norma para J/G (jurídicas) y para V/E con firma personal YA asignada.
+//   - "cedula": cédula de identidad con letra V/E (o P): SOLO letra + dígitos,
+//     SIN verificador y SIN exigir 10 caracteres — una cédula puede tener de
+//     3 a 8 dígitos. NO se rellena con ceros: el cero final falso es corrupto
+//     para el SENIAT.
+//
+// J y G nunca pueden ser cédula: la letra manda sobre el selector.
+func ValidateDocumento(rif, tipo string) (bool, string) {
+	rif = NormalizeRIF(rif)
+	if rif == "" {
+		return true, "" // el RIF es opcional en clientes contados
+	}
+	letra := ""
+	if len(rif) > 0 {
+		letra = string(rif[0])
+	}
+	if tipo == "" {
+		// Sin selector: J/G son RIF; V/E forzosamente RIF completo (comportamiento
+		// anterior, estricto).
+		tipo = "rif"
+	}
+	if tipo != "cedula" {
+		tipo = "rif"
+	}
+	// La letra manda: jurídicas siempre RIF completo aunque el selector diga cédula.
+	if letra == "J" || letra == "G" {
+		tipo = "rif"
+	}
+	if tipo == "rif" {
+		return ValidateRIF(rif)
+	}
+	// Cédula: letra V/E/P + solo dígitos, largo realista (3 a 8 dígitos).
+	if letra != "V" && letra != "E" {
+		return false, "una cédula debe iniciar con V o E (si es firma personal, corríjalo a RIF)"
+	}
+	digitos := rif[1:]
+	if len(digitos) < 3 || len(digitos) > 8 {
+		return false, "la cédula debe tener de 3 a 8 dígitos sin rellenar ceros"
+	}
+	for i := 0; i < len(digitos); i++ {
+		if digitos[i] < '0' || digitos[i] > '9' {
+			return false, "la cédula solo lleva dígitos después de la letra"
+		}
+	}
+	return true, ""
+}
+
 // ----------------------------------------------------------------------------
 // Parámetros fiscales (fiscal_setting)
 // ----------------------------------------------------------------------------
@@ -85,6 +136,11 @@ type fiscalSettings struct {
 	IGTFRate       float64
 	WalkinRIFReq   bool
 	FiscalFootnote string
+	// Consulta del contribuyente en la web del SENIAT (autollenado del
+	// cliente en la factura y en el cliente nuevo).
+	SENIATAutofill bool
+	// Comando OCR del captcha (opcional; vacío = ddddocr por defecto).
+	SENIATOcrCmd string
 }
 
 func (s *Server) loadFiscalSettings(r *http.Request) fiscalSettings {
@@ -110,6 +166,10 @@ func (s *Server) loadFiscalSettings(r *http.Request) fiscalSettings {
 			fs.WalkinRIFReq = v == "1"
 		case "fiscal_footnote":
 			fs.FiscalFootnote = v
+		case "seniat_autofill":
+			fs.SENIATAutofill = v == "1"
+		case "seniat_ocr_cmd":
+			fs.SENIATOcrCmd = v
 		}
 	}
 	return fs

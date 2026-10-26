@@ -24,7 +24,7 @@ func (s *Server) registerCustomerRoutes() {
 	s.mux.HandleFunc("GET /customer/ledger/{id}/data", s.customerLedgerData)
 	s.mux.HandleFunc("POST /customer/previous-balance/{id}", s.customerPreviousBalance)
 	s.mux.HandleFunc("GET /customer/search", s.customerSearch)
-	// quick create from POS/invoice
+	s.mux.HandleFunc("GET /customer/seniat-lookup", s.seniatLookup) // consulta SENIAT para el autollenado
 	s.mux.HandleFunc("POST /customer/quick", s.customerQuickCreate)
 }
 
@@ -139,11 +139,12 @@ func (s *Server) customerSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "El nombre es obligatorio", 400)
 		return
 	}
-	// FISCAL: RIF validado (módulo 11)
+	// FISCAL: RIF o cédula, según el selector de la pantalla (la letra J/G
+	// manda: jurídica siempre RIF completo).
 	rif := NormalizeRIF(r.FormValue("rif"))
 	if rif != "" {
-		if ok, msg := ValidateRIF(rif); !ok {
-			jsonError(w, "RIF inválido: "+msg, 400)
+		if ok, msg := ValidateDocumento(rif, r.FormValue("rif_tipo")); !ok {
+			jsonError(w, msg, 400)
 			return
 		}
 	}
@@ -460,11 +461,12 @@ func (s *Server) customerQuickCreate(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "El nombre es obligatorio", 400)
 		return
 	}
-	// FISCAL: RIF opcional en cliente contado; si viene, se valida
+	// FISCAL: RIF opcional en cliente contado; si viene, se valida según el
+	// selector (RIF completo o cédula suelta).
 	rif := NormalizeRIF(r.FormValue("customer_rif"))
 	if rif != "" {
-		if ok, msg := ValidateRIF(rif); !ok {
-			jsonError(w, "RIF inválido: "+msg, 400)
+		if ok, msg := ValidateDocumento(rif, r.FormValue("rif_tipo")); !ok {
+			jsonError(w, msg, 400)
 			return
 		}
 	}

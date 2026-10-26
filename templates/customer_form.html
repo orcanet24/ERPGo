@@ -15,8 +15,18 @@
                 </div>
                 <div class="col-md-3">
                     <div class="form-group">
-                        <label>RIF <small class="text-muted">(obligatorio para crédito fiscal)</small></label>
-                        <input type="text" class="form-control" name="rif" id="rifInput" placeholder="J-12345678-9" value="{{if .C}}{{.C.RIF.String}}{{end}}">
+                        <label>Tipo de documento</label>
+                        <select name="rif_tipo" id="rifTipo" class="form-control">
+                            <option value="rif" selected>RIF (completo, con verificador)</option>
+                            <option value="cedula">Cédula (V/E, sin rellenar ceros)</option>
+                        </select>
+                        <small class="erp-caption">J y G son siempre RIF. V y E pueden ser cédula o firma personal (RIF asignado).</small>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label>RIF / Cédula <small class="text-muted">(obligatorio para crédito fiscal)</small></label>
+                        <input type="text" class="form-control" name="rif" id="rifInput" placeholder="J-12345678-9 o V-12345678" value="{{if .C}}{{.C.RIF.String}}{{end}}">
                         <small id="rifHelp" class="help-block erp-footnote">Se valida automáticamente (dígito verificador)</small>
                     </div>
                 </div>
@@ -120,6 +130,18 @@ $(function () {
     function validateRIFLive(rif) {
         rif = (rif || '').toUpperCase().replace(/[.\- ]/g, '');
         if (!rif) return { ok: true, msg: '' };
+        // La LETRA manda sobre el selector: J/G son siempre RIF completo (una
+        // jurídica no puede ser cédula). Con cédula declarada, V/E no requieren
+        // 10 caracteres ni dígito verificador: no se rellena con ceros.
+        var tipo = $('#rifTipo').val() || 'rif';
+        if (rif[0] === 'J' || rif[0] === 'G') tipo = 'rif';
+        if (tipo === 'cedula') {
+            if (!'VE'.includes(rif[0])) return { ok: false, msg: 'Una cédula inicia con V o E (firma personal = RIF)'};
+            var dig = rif.slice(1);
+            if (!/^\d+$/.test(dig)) return { ok: false, msg: 'La cédula solo lleva dígitos después de la letra' };
+            if (dig.length < 3 || dig.length > 8) return { ok: false, msg: 'La cédula tiene de 3 a 8 dígitos (sin rellenar ceros)' };
+            return { ok: true, msg: '✓ Cédula válida (sin verificador)' };
+        }
         if (rif.length !== 10) return { ok: false, msg: 'El RIF debe tener 10 caracteres (ej: J123456789)' };
         if (!'JVGECPR'.includes(rif[0])) return { ok: false, msg: 'Debe iniciar con J, V, G, E, P, R o C' };
         var letraVal = {V:4, E:8, J:12, P:16, G:20};
@@ -144,6 +166,32 @@ $(function () {
         // oscuro, y con el fondo oscuro quedaba casi ilegible.
         $h.removeClass('erp-value-ok erp-value-danger').addClass(r.ok ? 'erp-value-ok' : 'erp-value-danger');
     }).trigger('input');
+
+    $('#rifTipo').on('change', function () {
+        $('#rifInput').attr('placeholder', $(this).val() === 'cedula' ? 'V-12345678' : 'J-12345678-9');
+        $('#rifInput').trigger('input');
+    });
+
+    // SENIAT: al salir del campo, si el admin activó la consulta, trae la
+    // razón social real y la rellena (solo si el nombre está vacío: jamás
+    // pisa lo que el operador escribió). Si no hay datos: UNA alerta simple.
+    $('#rifInput').on('blur', function () {
+        var rif = ($(this).val() || '').toUpperCase().replace(/[.\- ]/g, '');
+        if (!rif) return;
+        $.getJSON('/customer/seniat-lookup', { rif: rif }, function (r) {
+            if (!r || !r.enabled) return; // consulta apagada en Ajustes Fiscales: silencio
+            if (r.found) {
+                if (!$('input[name=customer_name]').val()) {
+                    $('input[name=customer_name]').val(r.name);
+                    $('#rifHelp').text('✓ Datos del SENIAT: ' + (r.condicion || r.name));
+                }
+            } else {
+                toastr.warning(r.error || 'No se encontraron datos fiscales en la web del SENIAT');
+            }
+        }).fail(function () {
+            toastr.warning('No se encontraron datos fiscales en la web del SENIAT (puede ser por fallas de conexión)');
+        });
+    });
     $('#customerForm').on('submit', function (e) {
         var r = validateRIFLive($('#rifInput').val());
         if (!r.ok) { e.preventDefault(); toastr.error(r.msg); return false; }
