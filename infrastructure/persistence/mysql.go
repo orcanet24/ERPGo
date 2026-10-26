@@ -207,7 +207,14 @@ func ConectarServidorMySQL(c ConfigMySQL) (*sql.DB, error) {
 	// quedarse con un handle que el servidor ya no reconoce, que es un
 	// fallo que aparece de repente y cuesta muchísimo reproducir.
 	db.SetConnMaxLifetime(time.Hour)
-	db.SetConnMaxIdleTime(10 * time.Minute)
+	// MaxIdleTime por debajo del wait_timeout del servidor (hostings lo ponen
+	// corto, 30–60 s). SI el servidor mata la conexión primero, al siguiente
+	// uso el driver la descubre muerta y registra dos líneas que PARECEN error:
+	// "closing bad idle connection" / "broken pipe". No lo son — repone la
+	// conexión sola y todo sigue — pero asustan. Cerrando inactivas del lado
+	// cliente ANTES de que el servidor las mate, ese cierre es silencioso y el
+	// ruido desaparece sin ocultar ni un error real.
+	db.SetConnMaxIdleTime(20 * time.Second)
 
 	if err := probar(db); err != nil {
 		db.Close()
