@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"erpgow/configs"
 	"erpgow/infrastructure/persistence"
@@ -33,6 +34,15 @@ func NewWizard() *Wizard {
 func (w *Wizard) Run() error {
 	w.printBanner()
 
+	// DISCLAIMER LEGAL. Antes de cualquier operación el instalador lee y
+	// acepta las condiciones de uso: es la jornada donde Orcanet1724 C.A
+	// fija, de buena fe y por escrito, qué es el sistema (gratuito), qué NO es
+	// (un responsable de los datos que el cliente procesa) y qué queda
+	// reservado (autoria, distribución). Si no acepta, no se toca nada.
+	if !w.aceptarDisclaimer() {
+		return fmt.Errorf("instalación cancelada: no se aceptaron los términos de uso")
+	}
+
 	if _, err := os.Stat(".env"); err == nil {
 		cfg, loadErr := configs.Load()
 		if loadErr != nil {
@@ -41,6 +51,50 @@ func (w *Wizard) Run() error {
 		return w.runMaintenance(cfg)
 	}
 	return w.runFreshInstall()
+}
+
+// aceptarDisclaimer muestra el convenio de uso y exige aceptación expresa.
+// Es una condición, no un aviso: sin un «si» claro el wizard no instala nada.
+func (w *Wizard) aceptarDisclaimer() bool {
+	fmt.Println("┌────────────────────────────────────────────────────────────┐")
+	fmt.Println("│        CONVENIO DE USO Y LIMITACIÓN DE RESPONSABILIDAD     │")
+	fmt.Println("└────────────────────────────────────────────────────────────┘")
+	fmt.Println()
+	fmt.Println("  1. ERPGo, POSGo y sus herramientas asociadas SON GRATUITAS.")
+	fmt.Println("     Orcanet1724 C.A no cobra licencia por el software: sus únicas")
+	fmt.Println("     fuentes de ingreso son la venta de hosting, las adecuaciones")
+	fmt.Println("     a medida del sistema para cada empresa y la venta de")
+	fmt.Println("     inferencia de IA, servicios que se contratan aparte.")
+	fmt.Println()
+	fmt.Println("  2. Orcanet1724 C.A se abstiene de, y NO se responsabiliza por,")
+	fmt.Println("     irregularidades, errores u omisiones que provengan del USO del")
+	fmt.Println("     sistema. La información fiscal (RIF, facturas, retenciones,")
+	fmt.Println("     reportes SENIAT/VAT y demás obligaciones tributarias y legales")
+	fmt.Println("     es procesada, validada y presentada bajo la UNICA")
+	fmt.Println("     responsabilidad del usuario/empresa que usa el sistema.")
+	fmt.Println("     Orcanet1724 C.A es solo el FACILITADOR de un medio tecnológico")
+	fmt.Println("     gratuito y de buena fe para el desarrollo del comercio")
+	fmt.Println("     venezolano, y en nada se compromete con la exactitud legal,")
+	fmt.Println("     contable o tributaria de los datos que cada usuario procese.")
+	fmt.Println()
+	fmt.Println("  3. Software sin costo NO es software sin titularidad. Orcanet1724")
+	fmt.Println("     C.A SOLO se reserva el derecho de AUTORÍA y DISTRIBUCIÓN")
+	fmt.Println("     ÚNICA del software ERPGo, POSGo y afines.”")
+	fmt.Println()
+	fmt.Println("  4. PROHIBIDO VENDER O REDISTRIBUIR este software a título")
+	fmt.Println("     personal o de empresa. Ser representante o facilitador de")
+	fmt.Println("     soporte técnico de las aplicaciones es un estatus que ORCANET")
+	fmt.Println("     C.A otorga CASO POR CASO a personas naturales o jurídicas")
+	fmt.Println("     AUTORIZADOS que hayan demostrado capacidad técnica y compromiso")
+	fmt.Println("     con el comercio atendido — bajo normas estricta de buen servicio")
+	fmt.Println("     y atención al comercio que deposita su fe en el técnico.")
+	fmt.Println("     La premisa es que todos ganen: el comercio, el técnico y el")
+	fmt.Println("     ecosistema ERPGo.")
+	fmt.Println()
+	fmt.Println("  Este texto no sustituye un contrato firmado; es la condición")
+	fmt.Println("  técnica de uso del software como está escrito en el código mismo.")
+	fmt.Println()
+	return w.askYesNo("¿ACEPTA y reconoce las condiciones anteriores para continuar la instalación?")
 }
 
 func validarNombreEmpresa(codigo string) error {
@@ -368,6 +422,18 @@ func (w *Wizard) runFreshInstall() error {
 
 	fmt.Println("✓ Super administrador creado y .env guardado")
 
+	// EMPRESA DEMO de práctica: pregunta explícita de instalación. Si se
+	// activa, exige su propia base (la misma mecánica de la empresa real);
+	// si se declina, queda fuera — sin empresa fantasma que enmascare datos.
+	if w.askYesNo("¿Activar la empresa DEMO de práctica (entrenamiento)? Recomendado: sí. Necesitará su propia base de datos") {
+		if err := w.createDemoTenant(&configs.Config{
+			DBHost: dbHost, DBPort: dbPort, DBUser: dbUser, DBPassword: dbPass,
+			DBName: mainDBName, DBMasterTenantCode: masterCode, JWTSecret: jwtSecret,
+		}); err != nil {
+			fmt.Printf("   DEMO no activada: %v (continúe la instalación; puede activarla después con --setup, opción 3)\n", err)
+		}
+	}
+
 	// Finalizar
 	fmt.Println()
 	fmt.Println("═══════════════════════════════════════════════════════════════")
@@ -393,7 +459,8 @@ func (w *Wizard) runMaintenance(cfg *configs.Config) error {
 	fmt.Println()
 	fmt.Println("  1. Aplicar migraciones a todas las bases registradas")
 	fmt.Println("  2. Crear una empresa adicional")
-	fmt.Println("  3. Salir")
+	fmt.Println("  3. Activar la empresa DEMO de práctica (requiere su propia BD)")
+	fmt.Println("  4. Salir")
 	fmt.Println()
 
 	switch choice := w.askInput("Opción", false); choice {
@@ -401,7 +468,9 @@ func (w *Wizard) runMaintenance(cfg *configs.Config) error {
 		return w.migrateRegisteredCompanies(cfg)
 	case "2":
 		return w.createCompany(cfg)
-	case "3", "":
+	case "3":
+		return w.createDemoTenant(cfg)
+	case "4", "":
 		return nil
 	default:
 		return fmt.Errorf("opción de mantenimiento desconocida: %q", choice)
@@ -639,6 +708,126 @@ func (w *Wizard) createCompany(cfg *configs.Config) error {
 	}
 	fmt.Printf("Empresa %q creada: código=%s, base=%s, admin=%s\n", name, code, dbName, username)
 	return nil
+}
+
+// createDemoTenant activa la empresa DEMO de práctica.
+//
+// La demo NO es una empresa más: es el aula del sistema (entrenamiento, guía
+// de prueba, validación de una acción sin riesgo) y por eso:
+//   - requiere SU PROPIA BASE de datos — servirse de la maestra pondría sus
+//     datos junto a los de la empresa operativa, exactamente lo que una
+//     demo NO puede hacer —,
+//   - no pide datos de empresa: usa identidad de práctica y datos ejemplo,
+//   - no crea usuarios: todo usuario autenticado entra por la excepción
+//     is_demo del catálogo (CanAccessTenant),
+//   - el runtime la marca con NOTA DEMO en cada vista y reporte.
+func (w *Wizard) createDemoTenant(cfg *configs.Config) error {
+	master, err := w.openMasterDB(cfg)
+	if err != nil {
+		return fmt.Errorf("abriendo catálogo maestro: %w", err)
+	}
+	defer master.Close()
+
+	// Columnas que el catálogo moderno espera (idempotente: si ya están, el
+	// ALTER duplicado se descarta).
+	asegurarColumna(master, "tenants", "is_demo", "TINYINT(1) NOT NULL DEFAULT 0")
+	asegurarColumna(master, "tenants", "db_name", "VARCHAR(64) NOT NULL DEFAULT ''")
+	asegurarColumna(master, "tenants", "db_user", "VARCHAR(128) NOT NULL DEFAULT ''")
+	asegurarColumna(master, "tenants", "db_password_enc", "VARBINARY(512) DEFAULT ''")
+
+	var existe int
+	if err := master.QueryRow(`SELECT COUNT(*) FROM tenants WHERE code='demo'`).Scan(&existe); err != nil {
+		return fmt.Errorf("comprobando la demo en el catálogo: %w", err)
+	}
+	if existe != 0 {
+		if _, err := master.Exec(`UPDATE tenants SET is_demo=1, status=1 WHERE code='demo'`); err != nil {
+			return fmt.Errorf("reactivando la demo: %w", err)
+		}
+		fmt.Println("La empresa DEMO ya existía y fue reactivada.")
+		return nil
+	}
+
+	fmt.Println()
+	fmt.Println("  La empresa DEMO de práctica necesita SU PROPIA BASE de datos:")
+	fmt.Println("  en el panel del hosting cree la base con su usuario y permisos,")
+	fmt.Println("  y colóquelas aquí sus datos exactos. ERPGo NO crea bases.")
+	dbHost := w.askInput(fmt.Sprintf("Host MySQL [Enter = %s]", cfg.DBHost), false)
+	if dbHost == "" {
+		dbHost = cfg.DBHost
+	}
+	dbPort := w.askInt("Puerto MySQL", cfg.DBPort)
+	dbName := strings.TrimSpace(w.askInput(fmt.Sprintf("Nombre de la base de la DEMO [Enter = %s]", "erpgo_demo"), false))
+	if dbName == "" {
+		dbName = "erpgo_demo"
+	}
+	dbUser := strings.TrimSpace(w.askInput(fmt.Sprintf("Usuario de la base [Enter = %s]", cfg.DBUser), false))
+	if dbUser == "" {
+		dbUser = cfg.DBUser
+	}
+	dbPass := w.askInput("Contraseña de la base", true)
+	if dbPass == "" {
+		dbPass = cfg.DBPassword
+	}
+
+	dbCfg := persistence.ConfigMySQL{Host: dbHost, Port: dbPort, Usuario: dbUser, Clave: dbPass, Nombre: dbName}
+	db, err := persistence.OpenMySQL(dbCfg)
+	if err != nil {
+		return fmt.Errorf("no se pudo conectar a la base de la DEMO (%s@%s:%d/%s): %v\n"+
+			"  Cree la base en el panel del hosting y verifique permisos completos", dbName, dbUser, dbPort, dbHost, err)
+	}
+	defer db.Close()
+	if err := persistence.RunMigrationsForMySQL(db, dbCfg); err != nil {
+		return fmt.Errorf("migrando la DEMO: %w", err)
+	}
+
+	// Siembra de práctica: identidad de ejemplo (nunca datos de una empresa
+	// real), ejercicio fiscal abierto y catálogos que las migraciones ya
+	// dejaron. Sin usuarios: el acceso es por la excepción is_demo.
+	if _, err := db.Exec(`INSERT INTO company_information (company_id, company_name, vat_no, status) VALUES ('1', 'Empresa DEMO (práctica)', 'D-00000000-0', 1)
+		ON DUPLICATE KEY UPDATE company_name=VALUES(company_name), vat_no=VALUES(vat_no), status=1`); err != nil {
+		return fmt.Errorf("sembrando identidad de la DEMO: %w", err)
+	}
+	anio := time.Now().Year()
+	if _, err := db.Exec(`INSERT INTO financial_year (yearName, startDate, endDate, isCloseReq, status, created_by)
+		VALUES (?, ?, ?, 0, 1, 1)
+		ON DUPLICATE KEY UPDATE status=1`,
+		fmt.Sprintf("%d", anio), fmt.Sprintf("%d-01-01", anio), fmt.Sprintf("%d-12-31", anio)); err != nil {
+		logNoFatal("ejercicio fiscal de la DEMO", err)
+	}
+
+	dbPassEnc, err := security.Encrypt(dbPass, security.DeriveKey(cfg.JWTSecret))
+	if err != nil {
+		return fmt.Errorf("encriptando credenciales de la DEMO: %w", err)
+	}
+	if _, err := master.Exec(`INSERT INTO tenants (code, legal_name, rif, status, created_at, is_demo, db_user, db_password_enc, db_name)
+		VALUES ('demo', 'Empresa DEMO (práctica)', 'D-00000000-0', 1, NOW(), 1, ?, ?, ?)`,
+		dbUser, []byte(dbPassEnc), dbName); err != nil {
+		return fmt.Errorf("registrando la DEMO en el catálogo: %w", err)
+	}
+	if _, err := master.Exec(`INSERT INTO tenant_provision_log (tenant_code, action, detail, created_at)
+		VALUES ('demo', 'demo', ?, NOW())`,
+		fmt.Sprintf("base=%s usuario_bd=%s host=%s:%d", dbName, dbUser, dbHost, dbPort)); err != nil {
+		logNoFatal("bitácora de aprovisionamiento de la DEMO", err)
+	}
+	fmt.Printf("Empresa DEMO activada: base=%s, accesible para todos los usuarios en el selector\n", dbName)
+	return nil
+}
+
+// asegurarColumna ejecuta un ALTER ... ADD COLUMN y descarta el error cuando
+// la columna ya existe. Es el patrón portable del esquema de control: sin
+// «IF NOT EXISTS» en MySQL estándar, instalar en un catálogo nuevo y en uno
+// viejo debe salir por el mismo camino.
+func asegurarColumna(master *sql.DB, tabla, columna, definicion string) {
+	if _, err := master.Exec(fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s", tabla, columna, definicion)); err != nil {
+		// si falló por duplicado, la columna ya está: silencio. Cualquier otro
+		// fallo quedará visible en la operación que la use.
+		return
+	}
+}
+
+// logNoFatal anota una siembra secundaria que no debe abortar la activación.
+func logNoFatal(contexto string, err error) {
+	fmt.Printf(" aviso: %s: %v (sigue sin esto)\n", contexto, err)
 }
 
 // existenEmpresasIguales busca una empresa registrada con el mismo nombre

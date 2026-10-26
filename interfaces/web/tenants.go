@@ -701,14 +701,61 @@ func (s *Server) grantAdminRoleToOwner(ctl *sql.DB, username string) error {
 
 // ---------- Consultas del catálogo ----------
 
+// esUsuarioMaster pregunta si un usuario tiene el rol de nivel master en el
+// catálogo de control. Es quien decide si al cambiarse de empresa ve TODAS o
+// solo las suyas: el superadministrador es el dueño del sistema completo y el
+// selector no debe ocultarle empresas que él mismo creó.
+func (s *Server) esUsuarioMaster(username string) bool {
+	ctl, err := s.controlStore()
+	if err != nil {
+		return false
+	}
+	var n int
+	_ = ctl.QueryRow(`SELECT COUNT(*)
+		FROM sec_userrole ur
+		JOIN user_login ul ON ul.user_id = ur.user_id AND ul.status = 1
+		JOIN sec_role r ON r.id = ur.roleid
+		WHERE ul.username = ? AND r.level = 'master'`, username).Scan(&n)
+	return n > 0
+}
+
 // ListTenantsForUser devuelve las empresas a las que pertenece un usuario,
 // con la bandera IsMember ya resuelta. La sesión puede pedir el selector de
 // empresa solo con esta lista.
+//
+// Un usuario MASTER ve todas las empresas registradas: la regla de membresía
+// es para operadores. Sin esto, el superadministrador que crea una empresa
+// nueva desde el asistente de consola no la ve en /switch-tenant — porque la
+// membresía (tenant_users) la tuvo el admin que él asignó, no él mismo — y
+// la empresa queda inaccesible desde la web: el fallo reportado con
+// TECNOTEXTIL, que existía registrada pero sin puerta.
 func (s *Server) ListTenantsForUser(username string) ([]Tenant, error) {
 	ctl, err := s.controlStore()
 	if err != nil {
 		// Sin catálogo de control, se degrada a una sola empresa implícita.
 		return []Tenant{{Code: "default", LegalName: "Mi Empresa", IsMember: true}}, nil
+	}
+	var list []Tenant
+	if s.esUsuarioMaster(username) {
+		rows, err := ctl.Query(`SELECT code, legal_name, rif, status, created_at
+			FROM tenants
+			WHERE status = 1
+			ORDER BY legal_name`)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var t Tenant
+			var rif, created sql.NullString
+			if err := rows.Scan(&t.Code, &t.LegalName, &rif, &t.Status, &created); err != nil {
+				continue
+			}
+			t.RIF = rif.String
+			t.CreatedAt = created.String
+			t.IsMember = true
+			list = append(list, t)
+		}
+		rows.Close()
 	}
 	rows, err := ctl.Query(`SELECT t.code, t.legal_name, t.rif, t.status, t.created_at
 		FROM tenants t
@@ -719,7 +766,10 @@ func (s *Server) ListTenantsForUser(username string) ([]Tenant, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var list []Tenant
+	vistos := map[string]bool{}
+	for _, t := range list {
+		vistos[t.Code] = true
+	}
 	for rows.Next() {
 		var t Tenant
 		var rif, created sql.NullString
@@ -729,6 +779,9 @@ func (s *Server) ListTenantsForUser(username string) ([]Tenant, error) {
 		t.RIF = rif.String
 		t.CreatedAt = created.String
 		t.IsMember = true
+		if vistos[t.Code] {
+			continue
+		}
 		list = append(list, t)
 	}
 	rows.Close()
@@ -811,6 +864,10 @@ func (s *Server) TenantCodes() []string {
 // desactivarla (is_demo=0) y entonces vuelve a ser una empresa "de membresía
 // normal" — cerrada para quien no esté inscrito.
 func (s *Server) CanAccessTenant(username, code string) bool {
+	// El rol master abre todas las empresas: es el dueño del sistema.
+	if s.esUsuarioMaster(username) {
+		return true
+	}
 	ctl, err := s.controlStore()
 	if err != nil {
 		// Sin catálogo, solo se permite la empresa implícita.

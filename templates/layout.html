@@ -172,6 +172,13 @@
 {{end}}
 
 {{define "messages"}}
+{{if .IsDemoTenant}}
+<div class="alert alert-warning" style="border-radius:0;margin:0;text-align:center;font-weight:bold">
+    ⚠ NOTA DEMO — Usted está trabajando en la empresa de PRÁCTICA. Todo lo que
+    se registre aquí es un ejemplo y los documentos NO son válidos ante el
+    SENIAT ni ante terceros.
+</div>
+{{end}}
 {{if .FactoryPassword}}
 <div class="alert alert-danger" style="border-radius:0;margin:0 0 12px 0">
     <strong>Cambie su contraseña.</strong>

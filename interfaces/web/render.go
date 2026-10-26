@@ -287,6 +287,9 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 		data["UserImage"] = userImageURL(sess.Image)
 		data["Perm"] = s.permissionMap(r, sess)
 		data["CSRFToken"] = s.ensureCSRFToken(sess)
+		// NOTA DEMO: si la empresa activa es la de práctica, todas las vistas
+		// —incluye reportes, que comparten layout— llevan el aviso en banda.
+		data["IsDemoTenant"] = s.tenantEsDemo(s.tenantCodeOrDefault())
 	} else {
 		data["Perm"] = map[string]bool{}
 	}
