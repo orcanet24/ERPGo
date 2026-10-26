@@ -61,13 +61,17 @@ El cliente descarga el nuevo binario y listo. Las migraciones corren solas. Los 
 
 ## Inicio rápido (3 pasos)
 
-1. Ejecuta `erpgow.exe`
-2. Abre `http://localhost:8080`
-3. Entra con las credenciales configuradas en tu instalación
+1. Ten MySQL o MariaDB instalado y arrancado como servicio del servidor
+2. Ejecuta `erpgow.exe --setup` (o copia el binario con su `.env` ya configurado)
+3. Abre `http://localhost:8080`
 
-**Eso es todo.** El servidor arranca, detecta si hay MySQL en el puerto 3306,
-si no lo encuentra arranca el MySQL incluido en el puerto 3307 (para no chocar
-con Laragon/XAMPP), aplica las migraciones embebidas, siembra la empresa por
+**El motor de base de datos NO viene con ERPGo.** El servidor debe tener su
+propio MySQL o MariaDB instalado y corriendo antes de arrancar el ERP: el binario
+no instala, no inicializa ni arranca ningún motor, solo se conecta al que existe
+según `DB_HOST` y `DB_PORT` (3306 por defecto). Si no encuentra el servidor, se
+detiene con un mensaje claro y no toca nada del sistema.
+
+Una vez conectado, aplica las migraciones embebidas, siembra la empresa por
 defecto y queda listo para vender.
 
 ---
@@ -84,7 +88,7 @@ defecto y queda listo para vender.
 ## Requisitos
 
 - Windows 10/11 (64 bits)
-- MySQL 8.0+ (opcional, puede usar el incluido)
+- MySQL 8.0+ o MariaDB 10.6+ instalado y arrancado como servicio (obligatorio; no se incluye)
 - 4 GB RAM mínimo
 
 ---

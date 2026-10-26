@@ -27,11 +27,11 @@ import (
 
 	"erpgow/configs"
 	"erpgow/infrastructure/persistence"
+	"erpgow/interfaces/web"
 	"erpgow/internal/logger"
 	"erpgow/internal/pos"
 	"erpgow/internal/service"
 	"erpgow/internal/setup"
-	"erpgow/interfaces/web"
 )
 
 // resolvePath finds a directory relative to the executable or working dir.
@@ -88,7 +88,7 @@ func main() {
 		fmt.Println("ERPGo - Setup Wizard")
 		fmt.Println("=====================")
 		fmt.Println()
-		
+
 		wizard := setup.NewWizard()
 		if err := wizard.Run(); err != nil {
 			log.Fatalf("Setup failed: %v", err)
@@ -142,62 +142,30 @@ func main() {
 		log.Fatalf("Failed to create data directory: %v", err)
 	}
 
-	// MySQL PROPIO O MySQL DE LA EMPRESA.
+	// EL MOTOR DE BASE DE DATOS ES DEL SERVIDOR, NO DEL ERP.
 	//
-	// Aquí está la portabilidad de la que se habla: el programa mira si hay un
-	// servidor escuchando en el puerto configurado y, si no hay, arranca el
-	// mysqld que tiene al lado. Un contador que copia el programa y lo abre ya
-	// tiene base de datos; no hay que instalar MySQL ni acordarse de encender
-	// nada.
+	// Decisión firme: ERPGo NO instala, NO inicializa y NO arranca el motor de
+	// base de datos. Antes este bloque, al no encontrar un servidor escuchando
+	// en DB_PORT, ejecutaba `mysqld --initialize-insecure` con un directorio de
+	// datos propio y levantaba un MySQL desde el binario del ERP, para apagarlo
+	// al terminar. Eso creaba una instalación de base de datos a espaldas de
+	// quien administra la máquina y fue justo lo que rompió servidores que ya
+	// estaban sanos.
 	//
-	// El puerto del servidor incluido es el 3307 y no el 3306 a propósito: si la
-	// máquina ya tenía un MySQL (Laragon, XAMPP, el de la empresa), los dos
-	// conviven. Y si ya hay algo escuchando en el 3307, no se arranca nada: ese
-	// es el de la empresa y apagarlo para poner el nuestro sería un daño.
-	//
-	// Con DB_AUTO_START=0 esto no arranca nada y solo avisa. Es lo que lleva la
-	// edición Enterprise, donde el MySQL es un servicio del servidor y lo
-	// maneja quien lo administra, no el ERP.
-	var incluido *persistence.EmbeddedMySQL
+	// El motor es infraestructura: se instala y se arranca como servicio del
+	// sistema (systemd en Linux, servicio de Windows en Windows). El ERP solo se
+	// conecta. Si no responde, se detiene aquí con un mensaje que dice qué
+	// revisar, sin tocar absolutamente nada del sistema operativo.
 	if !persistence.EsServidorMySQLArriba(cfg.DBHost, cfg.DBPort) {
-		if !cfg.DBAutoStart {
-			log.Fatalf(
-				"No hay ningún servidor MySQL escuchando en %s:%d y DB_AUTO_START=0.\n"+
-					"  - Arráncale el servicio MySQL y vuelve a abrir el programa, o\n"+
-					"  - pon DB_AUTO_START=1 para que el ERP use el MySQL que va con él, o\n"+
-					"  - apunta DB_HOST y DB_PORT al servidor de la empresa.",
-				cfg.DBHost, cfg.DBPort)
-		}
-		incluido, err = persistence.NewEmbeddedMySQL(persistence.OpcionesMySQL{
-			Host:               cfg.DBHost,
-			Puerto:             cfg.DBPort,
-			Usuario:            cfg.EffectiveRootUser(),
-			Clave:              cfg.EffectiveRootPassword(),
-			BaseDir:            cfg.DBMySQLHome,
-			DataDir:            cfg.DBMySQLData,
-			InnoDBBufferPoolMB: cfg.DBMySQLBufferPoolMB,
-		})
-		if err != nil {
-			log.Fatalf("No hay servidor MySQL y tampoco se puede usar el incluido: %v\n"+
-				"  Instale MySQL 8, o ajuste DB_HOST/DB_PORT en el .env para apuntar a un\n"+
-				"  servidor que ya exista.", err)
-		}
-		fmt.Printf("MySQL incluido: arrancando en %s:%d (datos en %s)\n",
-			cfg.DBHost, cfg.DBPort, incluido.Opciones().DataDir)
-		if err := incluido.Start(context.Background()); err != nil {
-			log.Fatalf("No se pudo arrancar el MySQL incluido: %v", err)
-		}
-		// El apagado va con defer y NO es condicional a que todo haya ido bien:
-		// si el arranque falla a medias, el mysqld que se levantó tampoco se
-		// puede quedar ahí, porque el siguiente intento encontraría el puerto
-		// ocupado y creería que hay un servidor. Pararlo siempre que lo
-		// arrancáramos nosotros es lo que evita ese falso positivo.
-		defer func() {
-			if incluido.IniciadoPorNosotros() {
-				incluido.Stop()
-			}
-		}()
-		fmt.Printf("MySQL incluido: listo\n")
+		log.Fatalf(
+			"No hay ningún servidor MySQL/MariaDB escuchando en %s:%d.\n"+
+				"  ERPGo no instala el motor de base de datos: debe existir ANTES de arrancar.\n"+
+				"  - Instale MySQL o MariaDB como servicio del sistema (Linux: paquete del\n"+
+				"    sistema; Windows: instalador oficial) y arránquelo.\n"+
+				"  - Compruebe que DB_HOST y DB_PORT en el .env son los del servidor\n"+
+				"    (ambos motores usan 3306 por defecto).\n"+
+				"  - Si la base está en otra máquina, abra el puerto y habilite el usuario remoto.",
+			cfg.DBHost, cfg.DBPort)
 	}
 
 	fmt.Printf("Database: MySQL en %s:%d (base de control: %s)\n",

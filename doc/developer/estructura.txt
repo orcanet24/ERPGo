@@ -12,8 +12,7 @@ DATOS GLOBALES
   Aristas import ..... 25 (dependencias internas reales)
   Puerto HTTP ........ 8080   (SERVER_PORT)
   Puerto gRPC POS .... 9095   (GRPC_PORT)
-  MySQL externo ...... 3306   (si existe en el host)
-  MySQL embebido ..... 3307   (si no hay 3306)
+  MySQL/MariaDB ...... 3306   (motor del servidor; el ERP no lo instala)
 
 --------------------------------------------------------------------------------
  1. PUNTOS DE ENTRADA (cmd/) — por aquí se entra al programa
@@ -188,7 +187,7 @@ DATOS GLOBALES
 --------------------------------------------------------------------------------
   database.go              → conexión y pool.
   mysql.go                 → primitivas MySQL.
-  embedded_mysql.go        → MySQL embebido en 3307 si no hay 3306.
+  localizar_mysql.go       → localiza el binario mysql instalado (para mysqldump).
   mysql_migrations.go      → runner idempotente con ledger de migraciones.
   mysqldump.go             → volcados de respaldo.
   plantilla.go             → clonación del esquema base (para tests/tenants).

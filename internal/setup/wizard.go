@@ -208,62 +208,67 @@ func (w *Wizard) runFreshInstall() error {
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Println()
 
-	// [1/6] Instalar o conectar a MySQL
+	// [1/6] Conexión a un MySQL/MariaDB que YA EXISTE.
+	//
+	// DECISIÓN FIRME: este binario NO instala el motor de base de datos.
+	//
+	// Antes el asistente ofrecía «¿Desea instalar MariaDB ahora?» y, si se
+	// aceptaba, ejecutaba `apt-get install mariadb-server` / `yum` / `dnf` o
+	// descargaba un MSI: cambiaba paquetes, servicios, el datadir y el usuario
+	// root del sistema operativo anfitrión desde dentro de una aplicación de
+	// negocio. Eso rompió instalaciones que ya estaban sanas, y el motor no es
+	// asunto del ERP: es infraestructura y la administra quien administra el
+	// servidor. Aquí solo se comprueba que responda y se piden credenciales;
+	// si no hay motor, se dice con claridad y se sale SIN TOCAR NADA.
 	fmt.Println("[1/6] Base de datos MySQL/MariaDB")
 	fmt.Println()
-	installDB := w.askYesNo("¿Desea instalar MariaDB ahora?")
+	fmt.Println("  Requisito: esta máquina (o el servidor que se indique) debe tener")
+	fmt.Println("  MySQL o MariaDB instalado y arrancado ANTES de ejecutar este")
+	fmt.Println("  asistente. ERPGo no instala el motor: solo se conecta al que existe.")
+	fmt.Println()
 
 	var dbHost, dbUser, dbPass, dbName string
 	var dbPort int
-	if installDB {
-		dbHost = "127.0.0.1"
-		dbPort = w.askInt("Puerto MySQL", DefaultPorts.MySQL)
-		dbName = w.askInput("Nombre de la base maestra (DB_NAME)", false)
-		dbUser = "root"
-		dbPass = w.askInput("Contraseña root MariaDB", true)
 
-		fmt.Println()
-		fmt.Println("Instalando MariaDB...")
-		instalador := NewMariaDBInstaller("./mariadb", dbPort, dbPass)
-		if err := instalador.Install(); err != nil {
-			return fmt.Errorf("error instalando MariaDB: %w", err)
-		}
-		if err := instalador.StartService(); err != nil {
-			return fmt.Errorf("error iniciando MariaDB: %w", err)
-		}
-		if !persistence.EsServidorMySQLArriba(dbHost, dbPort) {
-			return fmt.Errorf("MariaDB se instaló, pero no responde en %s:%d; corrige el servicio y vuelve a ejecutar --setup", dbHost, dbPort)
-		}
-		fmt.Println("✓ MariaDB instalado y corriendo")
-	} else {
-		fmt.Println()
-		fmt.Println("Configuración de conexión a MySQL existente:")
-		dbHost = w.askInput("Host", false)
-		dbPort = w.askInt("Puerto MySQL", 3306)
-		dbName = w.askInput("Nombre de la base maestra (DB_NAME)", false)
-		dbUser = w.askInput("Usuario", false)
+	dbHost = w.askInput("Host MySQL/MariaDB (Enter = 127.0.0.1)", false)
+	dbPort = w.askInt("Puerto MySQL/MariaDB", DefaultPorts.MySQL)
+	dbName = w.askInput("Nombre de la base maestra (DB_NAME)", false)
+
+	// El reintento se queda DENTRO de esta pregunta. Antes, un fallo de
+	// credenciales volvía a ejecutar todo el asistente desde el principio
+	// (recursión sobre runFreshInstall) y se perdía lo ya respondido.
+	for {
+		dbUser = w.askInput("Usuario MySQL/MariaDB", false)
 		dbPass = w.askInput("Contraseña", true)
 
 		fmt.Println()
-		fmt.Println("Verificando conexión a MySQL...")
-		testCfg := persistence.ConfigMySQL{
+		fmt.Println("Verificando conexión a MySQL/MariaDB...")
+		testDB, err := persistence.ConectarServidorMySQL(persistence.ConfigMySQL{
 			Host:    dbHost,
 			Port:    dbPort,
 			Usuario: dbUser,
 			Clave:   dbPass,
+		})
+		if err == nil {
+			err = testDB.Ping()
+			_ = testDB.Close()
 		}
-		testDB, err := persistence.ConectarServidorMySQL(testCfg)
-		if err != nil {
-			fmt.Printf("   ✗ No se pudo conectar: %v\n", err)
-			if w.askYesNo("   ¿Desea reintentar?") {
-				return w.runFreshInstall()
-			}
-			return fmt.Errorf("conexión fallida")
+		if err == nil {
+			fmt.Println("   ✓ Conexión exitosa")
+			break
 		}
-		if err := testDB.Close(); err != nil {
-			return fmt.Errorf("cerrando conexión de comprobación: %w", err)
+
+		fmt.Printf("   ✗ No se pudo conectar: %v\n", err)
+		fmt.Println("     Revise que el servicio MySQL/MariaDB esté arrancado, que el")
+		fmt.Println("     puerto sea el correcto y que el usuario tenga permiso sobre la base.")
+		if !w.askYesNo("   ¿Desea reintentar con otros datos de conexión?") {
+			return fmt.Errorf("conexión a MySQL/MariaDB fallida: el motor debe estar instalado y accesible antes de instalar ERPGo")
 		}
-		fmt.Println("   ✓ Conexión exitosa")
+		// Tras un fallo se vuelven a pedir también host, puerto y base: el error
+		// más común es justamente el puerto (3307 en hostings) o un host remoto.
+		dbHost = w.askInput("Host MySQL/MariaDB (Enter = 127.0.0.1)", false)
+		dbPort = w.askInt("Puerto MySQL/MariaDB", DefaultPorts.MySQL)
+		dbName = w.askInput("Nombre de la base maestra (DB_NAME)", false)
 	}
 
 	if err := validarNombreEmpresa(dbName); err != nil {
@@ -419,9 +424,8 @@ func (w *Wizard) runFreshInstall() error {
 		DBName: mainDBName, DBMasterTenantCode: masterCode,
 		DBRootUser: dbUser, DBRootPassword: dbPass,
 		DBProvisionUser: dbUser, DBProvisionPassword: dbPass,
-		DBSQLitePath: "data/empresas/default.sqlite3", DBMySQLBufferPoolMB: 256,
-		DBAutoStart: false,
-		ServerHost:  "127.0.0.1", ServerPort: strconv.Itoa(serverPort), GRPCPort: strconv.Itoa(grpcPort),
+		DBSQLitePath: "data/empresas/default.sqlite3",
+		ServerHost:   "127.0.0.1", ServerPort: strconv.Itoa(serverPort), GRPCPort: strconv.Itoa(grpcPort),
 		JWTSecret: jwtSecret, JWTExpiry: 24,
 		AppName: "ERPGo", AppURL: fmt.Sprintf("http://localhost:%d", serverPort),
 		AppEnv: "production", UploadPath: "./uploads",

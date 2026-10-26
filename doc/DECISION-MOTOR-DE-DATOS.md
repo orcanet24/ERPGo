@@ -38,34 +38,45 @@ ahorro es administrativo (un `CREATE DATABASE` en vez de varios) y el coste es
 que el aislamiento deje de ser una propiedad estructural y pase a depender de que
 nadie se equivoque.
 
-#### Cómo queda instalado
+#### Cómo queda instalado (REVISADO: el motor ya no se instala ni se arranca)
 
-**PyME (una máquina).** El ERP arranca su propio MySQL. Al abrir el programa:
+> **Esta parte SUSTITUYE al diseño del «MySQL incluido».** Aquel diseño —buscar
+> un `mysqld`, inicializar un datadir con `--initialize-insecure`, arrancarlo en
+> el 3307 y apagarlo al salir— **se eliminó del producto**. Dos motivos:
+>
+> 1. El asistente llegó a ejecutar `apt-get install mariadb-server` / `yum` /
+>    `dnf` / un MSI desde el binario. Eso modifica paquetes, servicios y el
+>    datadir del sistema operativo anfitrión desde una aplicación de negocio, y
+>    en producción rompió servidores que ya estaban sanos.
+> 2. Aun sin instalar paquetes, inicializar y levantar un motor propio crea una
+>    instalación de base de datos a espaldas de quien administra la máquina.
+>
+> **Regla vigente: el servidor debe tener su propio MySQL o MariaDB instalado y
+> arrancado como servicio. ERPGo solo se conecta.** No instala, no inicializa, no
+> arranca y no apaga ningún motor. Si no responde en `DB_HOST:DB_PORT`, el
+> arranque se detiene con un mensaje que explica el requisito y no toca nada del
+> sistema.
 
-1. Si ya hay un servidor escuchando en `DB_HOST:DB_PORT`, se usa ese y **no se
-   toca**. Ese puede ser el MySQL de otra aplicación, y apagarlo para poner el
-   nuestro sería el daño que todo este diseño evita.
-2. Si no hay ninguno y `DB_AUTO_START=1`, se busca un `mysqld` (carpeta `mysql\`
-   al lado del programa → PATH → XAMPP → Laragon), se inicializa el directorio de
-   datos si hace falta (`--initialize-insecure`), se arranca en el puerto
-   configurado —**3307, no el 3306**— y se espera a que responda.
-3. Se fija la clave de `root` por SQL y se crean las bases: la de control
-   (`erpgo`) y una por empresa (`erpgo_<codigo>`).
-4. Al salir, `SHUTDOWN` limpio: InnoDB termina lo que tenga pendiente en vez de
-   dejar el redo log a medias.
+1. El motor (MySQL 8+ o MariaDB 10.6+) se instala como paquete o servicio del
+   sistema operativo y queda arrancado. Puerto estándar: **3306**.
+2. `--setup` pide host, puerto, usuario y contraseña, **comprueba la conexión** y
+   solo entonces escribe el `.env`. Si la conexión falla, permite reintentar sin
+   volver a empezar.
+3. El ERP crea la base de control (`erpgo`) y una por empresa
+   (`erpgo_<codigo>`) con el usuario de provisión. Ese usuario necesita
+   `CREATE DATABASE`, `CREATE USER` y los permisos sobre `erpgo_%`; si no los
+   tiene, el error de MySQL se muestra tal cual en vez de disfrazarse.
+4. El ERP **no** apaga el motor al terminar: no es suyo.
 
-El 3307 es deliberado. El 3306 se deja libre a propósito: si la máquina ya tiene
-un MySQL (Laragon, XAMPP, el de la empresa), los dos conviven sin apagar nada.
-
-**Enterprise (un servidor).** `DB_AUTO_START=0` y `DB_HOST` apunta al servidor de
-la empresa. El código es **el mismo**: la decisión se toma una vez, al configurar,
-y no se ramifica por el motor en cada consulta.
+`DB_AUTO_START`, `DB_MYSQL_HOME`, `DB_MYSQL_DATA` y
+`DB_MYSQL_BUFFER_POOL_MB` ya no existen; si quedan en un `.env` viejo, se
+ignoran.
 
 **Por qué el MySQL no va dentro del `.exe`.** Un servidor de base de datos son
 ~200 MB de código nativo que hay que mantener, actualizar y firmar aparte.
 Empaquetarlo en el binario no lo hace más portátil, solo más grande y más viejo.
-Lo que se hace es dirigir el **proceso** (`embedded_mysql.go`): localizar,
-inicializar, arrancar, esperar y apagar. El ERP dirige el MySQL; no lo contiene.
+Y arrancarlo desde el ERP mezcla dos responsabilidades que deben estar separadas:
+la aplicación no es el administrador de la infraestructura.
 
 **SQLite queda en el repositorio** como el proyecto anterior: `database.go`,
 `sqlite_convert.go` y el camino legacy siguen ahí, y se pueden volver a usar

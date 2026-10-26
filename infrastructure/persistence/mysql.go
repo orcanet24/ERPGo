@@ -25,19 +25,12 @@ import (
 // líneas y 8 funciones). Ir a MySQL **borra** esa traducción; ir a PostgreSQL
 // obligaría a escribir OTRA traducción, en sentido contrario.
 
-// Defaults. Se pueden cambiar todos por entorno: el MySQL incluido en el
-// instalador va en un puerto propio para no chocar con uno del sistema.
+// Defaults. Se pueden cambiar todos por entorno.
 const (
 	MySQLHostPorDefecto = "127.0.0.1"
 	MySQLPortPorDefecto = "3306"
 	MySQLUsuarioDefecto = "root"
 	MySQLNombreDefecto  = "erpgo"
-
-	// Puerto sugerido para el MySQL incluido en el instalador. NO es el
-	// 3306 del sistema a propósito: si la máquina ya tiene un MySQL propio
-	// (un developers con Laragon, XAMPP o WAMP, por ejemplo), ambos pueden
-	// convivir sin que haya que apagar nada.
-	MySQLPortIncluido = 3307
 
 	// Nombre de la base de control: el catálogo de empresas.
 	// Las bases de cada empresa son `erpgo_<codigo>`.
@@ -174,10 +167,10 @@ func OpenMySQL(c ConfigMySQL) (*sql.DB, error) {
 
 // ConectarServidorMySQL abre una conexión al SERVIDOR, sin base seleccionada.
 //
-// Existe aparte de OpenMySQL porque hay tareas que no pueden usar una base: crear
-// una base (no se crea una base dentro de una base), apagar el servidor y
-// arrancar el MySQL incluido. En las tres hace falta hablar con el servidor, y
-// no con los datos de una empresa.
+// Existe aparte de OpenMySQL porque hay tareas que no pueden usar una base:
+// crear una base (no se crea una base dentro de una base) y comprobar el
+// servidor cuando todavía no hay una base a la que conectarse. En las dos hace
+// falta hablar con el servidor, y no con los datos de una empresa.
 //
 // Es la misma apertura con la comprobación del nombre cambiada por la
 // tolerancia a que falte: un nombre de base es obligatorio para trabajar con

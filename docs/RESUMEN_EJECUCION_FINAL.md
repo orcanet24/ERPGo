@@ -67,7 +67,6 @@ docker-compose up -d
 | `internal/setup/wizard.go` | Wizard interactivo principal |
 | `internal/setup/schema_check.go` | Compara schema vs real, genera ALTERs |
 | `internal/setup/backup.go` | Respaldo antes de operaciones destructivas |
-| `internal/setup/mariadb.go` | Instalador MariaDB para Windows/Linux |
 | `interfaces/web/health.go` | Endpoint /health para Docker |
 | `cmd/server/main.go` | Entry point con flag --setup |
 
@@ -90,9 +89,11 @@ Si un puerto está ocupado:
 ## Flujo de Instalación Nueva
 
 ```
-[1/6] ¿Instalar MariaDB?
-      → Sí: Instala MariaDB en ./mariadb, inicia servicio
-      → No: Pide host:puerto de MySQL existente
+[1/6] Conexión a MySQL/MariaDB existente
+      → Requisito: el motor YA debe estar instalado y arrancado
+      → Pide host, puerto, base, usuario y contraseña
+      → Verifica la conexión; si falla, permite reintentar o cancela
+      (ERPGo no instala MySQL ni MariaDB: ver internal/setup/wizard.go)
       
 [2/6] Validar puertos (8080, 3307, 9095)
       → Si hay conflicto: mostrar alternativas y reintentar

@@ -8,9 +8,9 @@
 
 | Paso | Qué hace | Si falla |
 |---|---|---|
-| **1** Configuración | Si no hay `.env`, lo genera apuntando al MySQL que va con el programa (puerto 3307, sin clave). Si ya hay, **no lo toca** | — |
+| **1** Configuración | Si no hay `.env`, lo genera apuntando al MySQL/MariaDB **que el servidor ya tiene** (puerto 3306). Si ya hay, **no lo toca** | — |
 | **2** Puerto | Busca el primer puerto libre entre 8080 y 8099, detiene el ERP anterior, compila y comprueba que hay Go | Dice que falta Go, con la versión |
-| **3** Base de datos | `erpgow.exe --migrate`: arranca el MySQL incluido si no hay ninguno escuchando, crea la base de control, aplica las 17 migraciones (428 sentencias) y sale | Explica las dos causas habituales: clave que no es la de `DB_PASSWORD`, o puerto ocupado por algo que no es MySQL |
+| **3** Base de datos | `erpgow.exe --migrate`: **se conecta** al MySQL/MariaDB del servidor (no lo instala ni lo arranca), crea la base de control, aplica las migraciones y sale | Explica las causas habituales: el motor no está arrancado, la clave no es la de `DB_PASSWORD`, el puerto no es el correcto, o el usuario no tiene permiso `CREATE DATABASE` |
 | **4** Servidor | Abre el navegador en el puerto elegido y arranca el ERP | — |
 
 El puerto se pasa por **el entorno**, no escribiendo en el `.env`: así el
@@ -91,6 +91,7 @@ Y con el servidor ya en pie, el login por HTTP:
 2. Doble clic en `instalar.bat`.
 3. Entrar en `http://localhost:8080` con `admin` / `Admin@2026` y **cambiar esa
    clave en el primer minuto**.
-4. Si el cliente ya tenía MySQL, poner sus datos en el `.env` **antes** de
-   ejecutar el instalador. Con `DB_AUTO_START=0`, el programa no arranca ningún
-   servidor: usa el de la empresa y solo lo abre.
+4. El cliente **debe** tener MySQL o MariaDB instalado y arrancado como servicio
+   antes de este paso. Poner host, puerto, usuario y contraseña en el `.env`
+   (`--setup` los pide y comprueba la conexión). El programa nunca instala ni
+   arranca el motor: solo se conecta al que existe.

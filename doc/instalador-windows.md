@@ -1,10 +1,17 @@
 # Instaladores Windows para ERPGo y POS
 
 > **Objetivo:** crear instaladores Windows (Inno Setup) que:
-> - Instalen ERPGo completo (MySQL, Web, Contabilidad) o solo POS Terminal
-> - Soliciten credenciales MySQL y configuración
+> - Instalen ERPGo completo (Web, Contabilidad) o solo POS Terminal
+> - Soliciten credenciales de un MySQL/MariaDB que YA EXISTE y configuración
 > - Validen cada aspecto antes de continuar
-> - Creen servicios Windows (MySQL + ERPGo web)
+> - Creen el servicio Windows de ERPGo web
+>
+> **Regla del proyecto: ERPGo NO instala MySQL ni MariaDB.** El motor de base de
+> datos es infraestructura del servidor anfitrión y debe estar instalado y
+> arrancado antes de ejecutar `--setup`. Ni el binario ni el instalador ejecutan
+> `apt-get`, `yum`, `dnf`, `choco`, `winget` ni descargan MSI de ningún motor de
+> base de datos. Si el motor no responde, la instalación se detiene y se explica
+> el requisito: nunca se modifica el sistema operativo anfitrión.
 > - Creen accesos directos en escritorio
 > - Permitan instalación silenciosa
 > 
@@ -22,7 +29,7 @@
     ├── erpgo.exe           ← Web + contabilidad + servicio
     └── pos_client.exe      ← Terminal POS standalone
   /installer/inno/         ← Scripts Inno Setup
-    ├── ERPGo_Full.iss     ← Instalador ERPGo completo (MySQL + Web)
+    ├── ERPGo_Full.iss     ← Instalador ERPGo completo (Web + Contabilidad)
     └── POS_Terminal.iss   ← Instalador POS terminal (solo cliente)
   /config/                  ← Archivos de configuración base
   /scripts/                 ← Scripts de setup, validación, SQL
@@ -147,7 +154,7 @@ Name: "{group}\{#MyAppName} (Uninstall)"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "http://127.0.0.1:8080"; Tasks: desktopicon
 
 [Run]
-; 1. Detectar o instalar MySQL
+; 1. Validar que MySQL/MariaDB ya exista (el instalador NO lo instala)
 Filename: "{tmp}\validate_env.bat"; Description: "Validando entorno..."; Flags: waituntilterminated; StatusMsg: "Validando entorno..."
 
 ; 2. Instalar servicio ERPGo
@@ -184,7 +191,7 @@ begin
     MsgBox('Instalación completada!' + #13#10 + #13#10 +
            'Servicios instalados:' + #13#10 +
            '  - ERPGo Web Service (puerto 8080)' + #13#10 +
-           '  - MySQL Server' + #13#10 + #13#10 +
+           '  - Base de datos requerida: MySQL/MariaDB (ya instalada por el cliente)' + #13#10 + #13#10 +
            'A continuación se abrirá el navegador para la configuración inicial.',
            mb_Info, MB_OK);
   end;
@@ -203,14 +210,19 @@ echo ========================================
 echo Validando entorno para ERPGo
 echo ========================================
 
-REM 1. Verificar que MySQL está instalado (búsqueda de servicio)
+REM 1. Verificar que MySQL/MariaDB ya está instalado (búsqueda de servicio)
 sc query MySQL >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
-    echo [!] MySQL no encontrado. Se usará la instalación bundled...
-    goto :install_mysql
+    sc query MariaDB >nul 2>&1
+)
+if %ERRORLEVEL% NEQ 0 (
+    echo [!] No se encontró MySQL ni MariaDB.
+    echo     ERPGo NO instala el motor de base de datos.
+    echo     Instale MySQL o MariaDB en este servidor y vuelva a ejecutar.
+    goto :error
 )
 
-echo [OK] MySQL encontrado como servicio
+echo [OK] MySQL/MariaDB encontrado como servicio
 
 REM 2. Verificar que MySQL responde
 mysql -u root -e "SELECT 1" >nul 2>&1
@@ -231,13 +243,6 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 goto :success
-
-:install_mysql
-echo [*] Iniciando instalación de MySQL Server...
-; Aquí iría la lógica para instalar MySQL bundled o descargar
-; Por ahora, fallar con mensaje claro
-echo [!] MySQL bundled no implementado. Instale MySQL manualmente.
-exit /b 1
 
 :error
 echo.
@@ -576,7 +581,7 @@ func RunFirstRun() {
 | Espacio en disco | ≥ 2 GB libres | Error |
 | Windows versión | ≥ Windows 10 / Server 2016 | Advertencia |
 | RAM | ≥ 4 GB (advertencia) | Advertencia |
-| MySQL Service | `sc query MySQL` OK | Instalar si no existe |
+| MySQL/MariaDB Service | `sc query MySQL` o `sc query MariaDB` OK | Error (el cliente debe instalarlo) |
 | Puerto 8080 libre | `netstat -an | findstr :8080` | Error si ocupado |
 
 ### Post-instalación (validar después)
@@ -645,7 +650,7 @@ Antes de publicar, verificar:
 - [ ] Script Inno Setup compila sin errores: `ISCC.exe ERPGo_Full.iss`
 - [ ] Installer.exe generado en `dist/`
 - [ ] Instalación en VM limpia de Windows 10/11
-- [ ] MySQL instalado (o detectado) y corriendo
+- [ ] MySQL/MariaDB YA instalado y corriendo (el instalador no lo instala)
 - [ ] Servicio ERPGo creado: `sc query ERPGo`
 - [ ] Servicio ERPGo iniciado automaticamente
 - [ ] `http://127.0.0.1:8080` responde en navegador
@@ -717,7 +722,7 @@ ERPGo/
 | Problema | Causa | Solución |
 |----------|-------|----------|
 | "Access denied" instalando servicio | No ejecutar como Admin | Ejecutar instalador como Administrador |
-| MySQL no instala | No se descargó MySQL installer | Descargar MySQL MSI y empaquetar en installer |
+| MySQL/MariaDB no responde | El motor no está instalado o el servicio está parado | Instalarlo fuera de ERPGo y arrancarlo antes de `--setup` (no se empaqueta) |
 | Puerto 8080 ocupado | Otra app usando puerto | Cambiar puerto en config o liberar puerto |
 | Servicio no inicia | Error en código Go | Revisar logs de Windows Event Viewer |
 | Instalación silenciosa falla | Error no manejado en setup | Ver logs `/LOG=` o `%temp%` |
@@ -730,7 +735,7 @@ ERPGo/
 1. **Crear el servicio Windows en Go** usando `kardianos/service`
 2. **Escribir los scripts Inno Setup** con los detalles arriba
 3. **Compilar y probar** en VMs limpias
-4. **Agregar soporte para MySQL bundled** si se requiere auto-instalación
+4. **Mantener fuera del instalador el motor de base de datos**: MySQL/MariaDB lo provee el cliente
 5. **Implementar first-run wizard** en Go
 6. **Documentar para usuario final** (esta guía en /doc/)
 7. **Pruebas de integración** con POS → ERPGo completa

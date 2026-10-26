@@ -13,21 +13,17 @@ import (
 )
 
 type Config struct {
-	DBDriver            string
-	DBHost              string
-	DBPort              int
-	DBUser              string
-	DBPassword          string
-	DBName              string
-	DBMasterTenantCode  string
-	DBRootUser          string
-	DBRootPassword      string
-	DBSQLitePath        string
-	DBTenantPrefix      string
-	DBAutoStart         bool
-	DBMySQLHome         string
-	DBMySQLData         string
-	DBMySQLBufferPoolMB int
+	DBDriver           string
+	DBHost             string
+	DBPort             int
+	DBUser             string
+	DBPassword         string
+	DBName             string
+	DBMasterTenantCode string
+	DBRootUser         string
+	DBRootPassword     string
+	DBSQLitePath       string
+	DBTenantPrefix     string
 
 	ServerPort  string
 	ServerHost  string
@@ -36,9 +32,9 @@ type Config struct {
 
 	// Respaldo automático del ERP: activado por defecto ya que el sistema
 	// fiscal no debe depender de alguien que apriete un botón.
-	BackupEnabled        bool
-	BackupIntervalHours  int    // BACKUP_INTERVAL_HOURS (default 24)
-	BackupDir            string // BACKUP_DIR (default "backup", carpeta junto al binario)
+	BackupEnabled       bool
+	BackupIntervalHours int    // BACKUP_INTERVAL_HOURS (default 24)
+	BackupDir           string // BACKUP_DIR (default "backup", carpeta junto al binario)
 	// Credenciales de provisión: se usan SOLO al crear/eliminar empresas
 	// (CREATE DATABASE, CREATE USER, DROP DATABASE). NO para operación diaria.
 	// Si está vacío, se usa DBUser/DBPassword para todo.
@@ -71,13 +67,11 @@ func Load() (*Config, error) {
 	_ = godotenv.Load(".env")
 
 	jwtExpiry, _ := strconv.Atoi(getEnv("JWT_EXPIRY_HOURS", "24"))
-	puerto, _ := strconv.Atoi(getEnv("DB_PORT", "3307"))
-	bufferPool, _ := strconv.Atoi(getEnv("DB_MYSQL_BUFFER_POOL_MB", "256"))
-
-	autoStart := true
-	if v, ok := os.LookupEnv("DB_AUTO_START"); ok {
-		autoStart = EsVerdadero(v)
-	}
+	// 3306 es el puerto estándar de MySQL y MariaDB. Antes el valor por
+	// defecto era 3307 porque el ERP llevaba su propio motor en ese puerto;
+	// al eliminarse ese motor, el defecto vuelve a ser el del servidor real
+	// que el cliente debe tener instalado.
+	puerto, _ := strconv.Atoi(getEnv("DB_PORT", "3306"))
 	backupInterval, _ := strconv.Atoi(getEnv("BACKUP_INTERVAL_HOURS", "24"))
 
 	return &Config{
@@ -92,10 +86,6 @@ func Load() (*Config, error) {
 		DBRootPassword:      getEnv("DB_ROOT_PASSWORD", ""),
 		DBTenantPrefix:      getEnv("DB_TENANT_PREFIX", ""),
 		DBSQLitePath:        getEnv("DB_SQLITE_PATH", "data/empresas/default.sqlite3"),
-		DBAutoStart:         autoStart,
-		DBMySQLHome:         getEnv("DB_MYSQL_HOME", ""),
-		DBMySQLData:         getEnv("DB_MYSQL_DATA", ""),
-		DBMySQLBufferPoolMB: bufferPool,
 		ServerPort:          getEnv("SERVER_PORT", "8080"),
 		GRPCPort:            getEnv("GRPC_PORT", "9095"),
 		DBProvisionUser:     getEnv("DB_PROVISION_USER", ""),
@@ -111,16 +101,16 @@ func Load() (*Config, error) {
 		AppURL:      getEnv("APP_URL", "http://localhost:8080"),
 		AppEnv:      getEnv("APP_ENV", "development"),
 		UploadPath:  getEnv("UPLOAD_PATH", "./uploads"),
-		GZipEnabled: EsVerdadero(getEnv("GZIP_ENABLED", "1")),		// Logger configurable desde .env
-		LogEnabled: EsVerdadero(getEnv("LOG_ENABLED", "0")),
-		LogLevel:  getEnv("LOG_LEVEL", "info"),
-		LogFile:   getEnv("LOG_FILE", "logs/erpgow.log"),
+		GZipEnabled: EsVerdadero(getEnv("GZIP_ENABLED", "1")), // Logger configurable desde .env
+		LogEnabled:  EsVerdadero(getEnv("LOG_ENABLED", "0")),
+		LogLevel:    getEnv("LOG_LEVEL", "info"),
+		LogFile:     getEnv("LOG_FILE", "logs/erpgow.log"),
 
 		// Respaldo automático: activado por defecto, cada día (24h),
 		// comprimido (ZIP) en la carpeta backup/ junto al binario.
-		BackupEnabled: EsVerdadero(getEnv("BACKUP_ENABLED", "1")),
+		BackupEnabled:       EsVerdadero(getEnv("BACKUP_ENABLED", "1")),
 		BackupIntervalHours: backupInterval,
-		BackupDir:  getEnv("BACKUP_DIR", "backup"),
+		BackupDir:           getEnv("BACKUP_DIR", "backup"),
 	}, nil
 }
 
@@ -222,14 +212,6 @@ func (c *Config) WriteEnvFile() error {
 	b.WriteString(fmt.Sprintf("DB_ROOT_PASSWORD=%s\n", c.DBRootPassword))
 	b.WriteString(fmt.Sprintf("DB_TENANT_PREFIX=%s\n", c.DBTenantPrefix))
 	b.WriteString(fmt.Sprintf("DB_SQLITE_PATH=%s\n", c.DBSQLitePath))
-	if c.DBAutoStart {
-		b.WriteString("DB_AUTO_START=true\n")
-	} else {
-		b.WriteString("DB_AUTO_START=false\n")
-	}
-	b.WriteString(fmt.Sprintf("DB_MYSQL_HOME=%s\n", c.DBMySQLHome))
-	b.WriteString(fmt.Sprintf("DB_MYSQL_DATA=%s\n", c.DBMySQLData))
-	b.WriteString(fmt.Sprintf("DB_MYSQL_BUFFER_POOL_MB=%d\n\n", c.DBMySQLBufferPoolMB))
 
 	b.WriteString("# --- Web Server ---\n")
 	b.WriteString(fmt.Sprintf("SERVER_HOST=%s\n", c.ServerHost))

@@ -15,7 +15,7 @@ var DefaultPorts = struct {
 	GRPC  int
 }{
 	ERP:   8080,
-	MySQL: 3307,
+	MySQL: 3306, // puerto estándar del MySQL/MariaDB que el servidor ya tiene
 	GRPC:  9095,
 }
 
