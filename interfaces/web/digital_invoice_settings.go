@@ -65,6 +65,20 @@ func (s *Server) digitalInvoicePage(w http.ResponseWriter, r *http.Request) {
 		active = true
 	}
 
+	// Catálogo al template: el select de imprentas se arma del código, no
+	// del HTML. Cada imprenta nueva en diProveedorCatalogo aparece sola y no
+	// hay que tocar la pantalla.
+	var catalogo []map[string]interface{}
+	for _, p := range diProveedorCatalogo {
+		codigo, _ := p["code"].(string)
+		nombre, _ := p["name"].(string)
+		catalogo = append(catalogo, map[string]interface{}{
+			"code":   codigo,
+			"name":   nombre,
+			"active": codigo == providerCode && active,
+		})
+	}
+
 	s.render(w, r, "digital_invoice.html", map[string]interface{}{
 		"Title":        "Facturación Digital",
 		"Config":       cfg,
@@ -72,6 +86,7 @@ func (s *Server) digitalInvoicePage(w http.ResponseWriter, r *http.Request) {
 		"Active":       active,
 		"ProviderName": provName,
 		"Tenant":       tenant,
+		"Catalogo":     catalogo,
 	})
 }
 

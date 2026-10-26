@@ -29,10 +29,16 @@
             <div class="input_label">
                 <label class="label_name" for="di_name">Proveedor</label>
                 <select name="name" id="di_name" class="input_section" style="width:100%">
-                    <option value="Unidigital" {{if eq .ProviderCode "unidigital"}}selected{{end}}>Unidigital (Corporación Unidigital 1220 C.A.)</option>
+                    {{if .Catalogo}}
+                    {{range .Catalogo}}
+                    <option value="{{.name}}" {{if eq $.ProviderCode .code}}selected{{end}}>{{.name}}</option>
+                    {{end}}
+                    {{else}}
+                    <option value="Unidigital">Unidigital (Corporación Unidigital 1220 C.A.)</option>
+                    {{end}}
                 </select>
                 <small class="erp-caption">
-                    Solo un proveedor puede estar activo a la vez. Para cambiar, desactive el actual y active el nuevo.
+                    La ley permite UNA imprenta digital activa por empresa. Al activar una nueva, la anterior se desactiva automáticamente y verás la alerta.
                 </small>
             </div>
 
@@ -129,14 +135,18 @@ $(function () {
             dataType: 'json',
             success: function (r) {
                 if (r.status === 1) {
-                    toastr.success(r.msg || 'Configuración guardada');
-                    setTimeout(function () { location.reload(); }, 700);
+                    if (r.deactivated && r.deactivated.length > 0) {
+                        toastr.warning(r.msg || 'Proveedor activado', 'Atención: quedó activada una sola imprenta digital', { timeOut: 10000 });
+                    } else {
+                        toastr.success(r.msg || 'Configuración guardada');
+                    }
+                    setTimeout(function () { location.reload(); }, 1200);
                 } else {
-                    toastr.error(r.message || 'Error al guardar');
+                    toastr.error(r.error || 'Error al guardar');
                 }
             },
             error: function (x) {
-                toastr.error(x.responseJSON ? x.responseJSON.message : 'Error al guardar');
+                toastr.error(x.responseJSON ? (x.responseJSON.error || x.responseJSON.message) : 'Error al guardar');
             }
         });
     });
