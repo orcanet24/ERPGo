@@ -2,3 +2,9 @@
 /server
 .external/
 __pycache__/
+# Secretos y estado local: jamás al repositorio
+.env
+.dev.vars
+config/empresas/
+backup/
+logs/

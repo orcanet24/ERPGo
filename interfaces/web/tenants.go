@@ -12,7 +12,9 @@ import (
 	"regexp"
 	"strings"
 
+	"erpgow/configs"
 	"erpgow/infrastructure/persistence"
+	"erpgow/internal/security"
 )
 
 // ---------- Registro de empresas (multi-tenant sobre MySQL) ----------
@@ -323,20 +325,62 @@ func (s *Server) openTenantDB(code string) (*sql.DB, error) {
 	}
 	nombre := s.tenantDBName(code)
 
-	// Resolver credenciales: primero intentar las de la empresa (más seguro),
-	// luego fallback a las credenciales globales (empresas antiguas sin migración).
-	// Si la empresa registró su NOMBRE de base —hosting compartido— ese manda
-	// sobre el nombre derivado, porque el hosting no perdona prefijos.
+	// Resolver la conexión con la precedencia acordada por el dueño del
+	// sistema: ARCHIVO POR EMPRESA → CATÁLOGO (credenciales encriptadas) →
+	// credenciales globales del .env. Cada paso solo interviene si el
+	// anterior no resolvió, y el origen queda en el log (y en el error_final)
+	// para que un «Access denied» del hosting siempre se pueda atribuir.
 	usuario := s.config.DBUser
 	clave := s.config.DBPassword
+	fuente := "credenciales globales (.env)"
 
-	if creds := s.getTenantCredentials(code); creds != nil {
-		usuario = creds.DBUser
-		clave = creds.DBPasswordPlain
-		if creds.DBName != "" {
-			nombre = creds.DBName
+	// 1) config/empresas/<código>.env: la pata que el administrador puede
+	// mirar y arreglar a mano sin tocar la base maestra. La clave va cifrada;
+	// si está en claro es una emergencia manual y se usa tal cual.
+	if fc, ferr := configs.LoadTenantConfigFile(code); ferr != nil {
+		log.Printf("tenant %q: no se pudo leer el archivo de conexión: %v — sigue el catálogo", code, ferr)
+	} else if fc != nil {
+		claveResuelta := ""
+		switch {
+		case fc.PasswordEnc != "":
+			if plain, derr := security.Decrypt(fc.PasswordEnc, security.DeriveKey(s.config.JWTSecret)); derr != nil {
+				log.Printf("tenant %q: clave del archivo no descencripta (%v) — sigue el catálogo", code, derr)
+			} else {
+				claveResuelta = plain
+			}
+		case fc.PasswordMan != "":
+			claveResuelta = fc.PasswordMan
+		}
+		if claveResuelta != "" || fc.DBUser != "" || fc.DBName != "" {
+			if fc.Host != "" && (fc.Host != s.config.DBHost || (fc.Port != 0 && fc.Port != s.config.DBPort)) {
+				log.Printf("tenant %q: su archivo declara %s:%d distinto del servidor configurado %s:%d — el runtime SIEMPRE usa el host del .env", code, fc.Host, fc.Port, s.config.DBHost, s.config.DBPort)
+			}
+			if claveResuelta != "" {
+				clave = claveResuelta
+			}
+			if fc.DBUser != "" {
+				usuario = fc.DBUser
+			}
+			if fc.DBName != "" {
+				nombre = fc.DBName
+			}
+			fuente = "archivo por empresa"
 		}
 	}
+
+	// 2) Credenciales por empresa en el catálogo (empresas creadas antes del
+	// archivo, o cuyo archivo desapareció).
+	if fuente == "credenciales globales (.env)" {
+		if creds := s.getTenantCredentials(code); creds != nil {
+			usuario = creds.DBUser
+			clave = creds.DBPasswordPlain
+			if creds.DBName != "" {
+				nombre = creds.DBName
+			}
+			fuente = "catálogo (credenciales de empresa)"
+		}
+	}
+	log.Printf("tenant %q: conexión vía %s (usuario=%q, base=%q)", code, fuente, usuario, nombre)
 
 	// NO crear la base automáticamente. Si la empresa existe en el catálogo
 	// pero su base no, es un error de infraestructura que debe resolverse

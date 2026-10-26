@@ -709,8 +709,36 @@ func (w *Wizard) createCompany(cfg *configs.Config) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("confirmando registro de empresa: %w", err)
 	}
+	// Archivo de conexión por empresa: config/empresas/<código>.env — la
+	// segunda pata del esquema (además del catálogo). Si falla la escritura
+	// no aborta: el catálogo ya guardó todo y es la fuente primaria.
+	escribirArchivoEmpresa(cfg, code, configs.KindEmpresa, dbHost, dbPort, dbName, dbUser, dbPass)
+
 	fmt.Printf("Empresa %q creada: código=%s, base=%s, admin=%s\n", name, code, dbName, username)
 	return nil
+}
+
+// escribirArchivoEmpresa deja el archivo de conexión de UNA empresa en
+// config/empresas/<código>.env, cifrado con el secreto JWT vigente. Es la
+// alternativa ordenada por el dueño del sistema a engordar el .env por cada
+// empresa: cada archivo dice QUÉ empresa es y QUÉ es (demo/empresa), y el
+// runtime lo prefiere sobre el catálogo cuando existe.
+// No fatal: si el disco falla (permisos, ruta), el catálogo sigue siendo la
+// fuente principal y el wizard avisa.
+func escribirArchivoEmpresa(cfg *configs.Config, code, kind, dbHost string, dbPort int, dbName, dbUser, dbPass string) {
+	err := configs.SaveTenantConfigFile(configs.TenantConn{
+		Code:   code,
+		Kind:   kind,
+		Host:   dbHost,
+		Port:   dbPort,
+		DBName: dbName,
+		DBUser: dbUser,
+	}, dbPass, cfg.JWTSecret)
+	if err != nil {
+		fmt.Printf("   aviso: no se pudo escribir config/empresas/%s.env (%v) — el catálogo mantiene las credenciales\n", code, err)
+		return
+	}
+	fmt.Printf("   archivo de conexión guardado: config/empresas/%s.env (clave cifrada)\n", code)
 }
 
 // createDemoTenant activa la empresa DEMO de práctica.
@@ -812,6 +840,9 @@ func (w *Wizard) createDemoTenant(cfg *configs.Config) error {
 		fmt.Sprintf("base=%s usuario_bd=%s host=%s:%d", dbName, dbUser, dbHost, dbPort)); err != nil {
 		logNoFatal("bitácora de aprovisionamiento de la DEMO", err)
 	}
+	// Archivo de conexión de la DEMO: la pata editable junto al binario.
+	escribirArchivoEmpresa(cfg, "demo", configs.KindDemo, dbHost, dbPort, dbName, dbUser, dbPass)
+
 	fmt.Printf("Empresa DEMO activada: base=%s, accesible para todos los usuarios en el selector\n", dbName)
 	return nil
 }
@@ -920,6 +951,10 @@ func (w *Wizard) actualizarCredencialesEmpresa(cfg *configs.Config) error {
 		}
 		fmt.Println("  Aviso: se conservó la clave ya guardada. Si el problema era la clave, repita con ella escrita.")
 	}
+	// El archivo de conexión debe quedar alineado con el catálogo tras la
+	// actualización (cuando hay clave nueva va cifrada con el secreto actual).
+	escribirArchivoEmpresa(cfg, code, configs.KindEmpresa, cfg.DBHost, cfg.DBPort, dbName, dbUser, dbPass)
+
 	fmt.Printf("Credenciales de %q guardadas: base=%s, usuario=%s. Entra de nuevo a la empresa para verificar.\n", code, dbName, dbUser)
 	return nil
 }
