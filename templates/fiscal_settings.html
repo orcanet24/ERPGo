@@ -39,39 +39,6 @@
                                 <input type="text" class="form-control" name="fiscal_footnote" value="{{.FS.FiscalFootnote}}">
                             </div>
 
-                            <hr>
-
-                            <div class="checkbox">
-                                <label>
-                                    <input type="checkbox" name="seniat_autofill" value="1" {{if .FS.SENIATAutofill}}checked{{end}}>
-                                    Buscar datos del contribuyente (RIF o cédula) en la web del SENIAT y autollenar el cliente
-                                </label>
-                            </div>
-                            <div class="form-group">
-                                <label>Comando OCR del captcha (opcional)</label>
-                                <input type="text" class="form-control" name="seniat_ocr_cmd" value="{{.FS.SENIATOcrCmd}}" placeholder="Por defecto: ddddocr (python3) en el servidor">
-                                <small class="erp-caption">
-                                    Lectura del captcha del SENIAT con el modelo ddddocr, si está instalado en el servidor.
-                                    Puede apuntar a otro comando (la imagen entra por stdin, el código sale por stdout).
-                                    Si nunca encuentra datos, el sistema solo avisa; el cliente se crea a mano.
-                                </small>
-                            </div>
-                            <div class="form-group">
-                                <label>Probar la consulta al SENIAT</label>
-                                <div class="input-group">
-                                    <input type="text" class="form-control" id="seniatTestRif" value="{{if .Company.VatNo}}{{.Company.VatNo}}{{else}}J294570968{{end}}" placeholder="RIF o cédula de prueba">
-                                    <span class="input-group-btn">
-                                        <button type="button" class="btn btn-default" id="seniatTestBtn"><i class="fa fa-flask"></i> Probar</button>
-                                    </span>
-                                </div>
-                                <div id="seniatTestOut" style="display:none;margin-top:8px"></div>
-                                <small class="erp-caption">
-                                    Ejecuta la consulta REAL desde el servidor y dice exactamente qué falla:
-                                    comando OCR, bloqueo del SENIAT o captcha. Use el RIF de su propia empresa.
-                                    Si el error dice <code>No module named 'ddddocr'</code>, en el servidor:
-                                    <code>python3 -m pip install ddddocr</code>.
-                                </small>
-                            </div>
                             <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
             <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
             </form>
@@ -125,26 +92,11 @@
 {{define "pagejs"}}
 <script>
 $(function () {
-    // Prueba de consulta SENIAT: muestra el detalle exacto del fallo.
-    $('#seniatTestBtn').on('click', function () {
-        var out = $('#seniatTestOut').show().html('<i class="fa fa-spinner fa-spin"></i> Consultando la web del SENIAT (hasta 3 intentos de captcha)…');
-        $.getJSON('/settings/fiscal/seniat-test', { rif: $('#seniatTestRif').val() }, function (r) {
-            if (r.ok) {
-                out.html('<div class="alert alert-success" style="margin:0"><i class="fa fa-check"></i> <strong>Consulta exitosa.</strong> El SENIAT respondió con datos: la conexión y el OCR funcionan.</div>');
-            } else {
-                out.html('<div class="alert alert-danger" style="margin:0"><i class="fa fa-times"></i> <strong>La consulta falló:</strong><br>' + $('<div>').text(r.detail || 'sin detalle').html() + '<br><small>Comando OCR: <code>' + $('<div>').text(r.ocr || '').html() + '</code></small></div>');
-            }
-        }).fail(function (x) {
-            out.html('<div class="alert alert-danger" style="margin:0">No se pudo ejecutar la prueba: ' + (x.responseText || x.status) + '</div>');
-        });
-    });
-
     $('#fsForm').on('submit', function (e) {
         e.preventDefault();
         var data = $(this).serialize();
         if (!$('[name=igtf_enabled]').prop('checked')) data += '&igtf_enabled=0';
         if (!$('[name=walkin_rif_required]').prop('checked')) data += '&walkin_rif_required=0';
-        if (!$('[name=seniat_autofill]').prop('checked')) data += '&seniat_autofill=0';
         $.post('/settings/fiscal/save', data, function (r) {
             if (r.status == 1) toastr.success(r.msg); else toastr.error(r.error);
         });

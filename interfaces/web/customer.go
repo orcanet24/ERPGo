@@ -24,7 +24,6 @@ func (s *Server) registerCustomerRoutes() {
 	s.mux.HandleFunc("GET /customer/ledger/{id}/data", s.customerLedgerData)
 	s.mux.HandleFunc("POST /customer/previous-balance/{id}", s.customerPreviousBalance)
 	s.mux.HandleFunc("GET /customer/search", s.customerSearch)
-	s.mux.HandleFunc("GET /customer/seniat-lookup", s.seniatLookup) // consulta SENIAT para el autollenado
 	s.mux.HandleFunc("POST /customer/quick", s.customerQuickCreate)
 }
 

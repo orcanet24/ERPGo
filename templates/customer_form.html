@@ -172,26 +172,6 @@ $(function () {
         $('#rifInput').trigger('input');
     });
 
-    // SENIAT: al salir del campo, si el admin activó la consulta, trae la
-    // razón social real y la rellena (solo si el nombre está vacío: jamás
-    // pisa lo que el operador escribió). Si no hay datos: UNA alerta simple.
-    $('#rifInput').on('blur', function () {
-        var rif = ($(this).val() || '').toUpperCase().replace(/[.\- ]/g, '');
-        if (!rif) return;
-        $.getJSON('/customer/seniat-lookup', { rif: rif }, function (r) {
-            if (!r || !r.enabled) return; // consulta apagada en Ajustes Fiscales: silencio
-            if (r.found) {
-                if (!$('input[name=customer_name]').val()) {
-                    $('input[name=customer_name]').val(r.name);
-                    $('#rifHelp').text('✓ Datos del SENIAT: ' + (r.condicion || r.name));
-                }
-            } else {
-                toastr.warning(r.error || 'No se encontraron datos fiscales en la web del SENIAT');
-            }
-        }).fail(function () {
-            toastr.warning('No se encontraron datos fiscales en la web del SENIAT (puede ser por fallas de conexión)');
-        });
-    });
     $('#customerForm').on('submit', function (e) {
         var r = validateRIFLive($('#rifInput').val());
         if (!r.ok) { e.preventDefault(); toastr.error(r.msg); return false; }

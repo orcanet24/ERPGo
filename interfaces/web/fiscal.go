@@ -136,11 +136,6 @@ type fiscalSettings struct {
 	IGTFRate       float64
 	WalkinRIFReq   bool
 	FiscalFootnote string
-	// Consulta del contribuyente en la web del SENIAT (autollenado del
-	// cliente en la factura y en el cliente nuevo).
-	SENIATAutofill bool
-	// Comando OCR del captcha (opcional; vacío = ddddocr por defecto).
-	SENIATOcrCmd string
 }
 
 func (s *Server) loadFiscalSettings(r *http.Request) fiscalSettings {
@@ -166,10 +161,6 @@ func (s *Server) loadFiscalSettings(r *http.Request) fiscalSettings {
 			fs.WalkinRIFReq = v == "1"
 		case "fiscal_footnote":
 			fs.FiscalFootnote = v
-		case "seniat_autofill":
-			fs.SENIATAutofill = v == "1"
-		case "seniat_ocr_cmd":
-			fs.SENIATOcrCmd = v
 		}
 	}
 	return fs

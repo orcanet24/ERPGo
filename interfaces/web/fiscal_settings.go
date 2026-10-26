@@ -14,10 +14,6 @@ func (s *Server) registerFiscalSettingsRoutes() {
 	s.mux.HandleFunc("GET /settings/fiscal", s.fiscalSettingsPage)
 	s.mux.HandleFunc("POST /settings/fiscal/save", s.fiscalSettingsSave)
 	s.mux.HandleFunc("POST /settings/fiscal/series/save", s.fiscalSeriesSave)
-	// Prueba real de la consulta al SENIAT: corre el flujo completo y devuelve
-	// el fallo EXACTO (OCR ausente, 403 del WAF, captcha ilegible). Bajo
-	// /settings → solo master, como el resto de la pantalla.
-	s.mux.HandleFunc("GET /settings/fiscal/seniat-test", s.seniatTest)
 }
 
 type fiscalSeriesRow struct {
@@ -73,17 +69,6 @@ func (s *Server) fiscalSettingsSave(w http.ResponseWriter, r *http.Request) {
 	_ = s.setFiscalSetting(r, "walkin_rif_required", walkin)
 	if foot != "" {
 		_ = s.setFiscalSetting(r, "fiscal_footnote", foot)
-	}
-	// Consulta del contribuyente en el SENIAT (autollenado de clientes).
-	seniatOn := "0"
-	if r.FormValue("seniat_autofill") == "1" {
-		seniatOn = "1"
-	}
-	_ = s.setFiscalSetting(r, "seniat_autofill", seniatOn)
-	err := s.setFiscalSetting(r, "seniat_ocr_cmd", strings.TrimSpace(r.FormValue("seniat_ocr_cmd")))
-	if err != nil {
-		jsonError(w, "No se pudo guardar el comando OCR: "+err.Error(), 500)
-		return
 	}
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Ajustes fiscales guardados", "redirect": saveRedirect(r, "/fiscal_settings")})
 }
