@@ -37,6 +37,9 @@ func (s *Server) registerDigitalInvoiceRoutes() {
 	s.mux.HandleFunc("POST /settings/digital-invoice/save", s.digitalInvoiceSave)
 	s.mux.HandleFunc("POST /settings/digital-invoice/activate", s.digitalInvoiceActivate)
 	s.mux.HandleFunc("POST /settings/digital-invoice/ping", s.digitalInvoicePing)
+	// Relación de documentos emitidos en contingencia (POS sin red), anexo de
+	// la notificación que exige el art. 16 de la Providencia SNAT/2024/000102.
+	s.mux.HandleFunc("GET /settings/digital-invoice/contingencia.csv", s.contingenciaCSV)
 }
 
 // requireDigitalInvoiceAdmin verifica que el usuario sea master o admin.
@@ -79,6 +82,10 @@ func (s *Server) digitalInvoicePage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Documentos de contingencia: pendientes primero, con su estado de
+	// transmisión. Es la operación real del POS cuando se cae la red.
+	contFilas, contPend, contFall := s.contingenciaResumen(r)
+
 	s.render(w, r, "digital_invoice.html", map[string]interface{}{
 		"Title":        "Facturación Digital",
 		"Config":       cfg,
@@ -87,6 +94,9 @@ func (s *Server) digitalInvoicePage(w http.ResponseWriter, r *http.Request) {
 		"ProviderName": provName,
 		"Tenant":       tenant,
 		"Catalogo":     catalogo,
+		"Contingencia": contFilas,
+		"ContPend":     contPend,
+		"ContFall":     contFall,
 	})
 }
 
@@ -127,9 +137,9 @@ func (s *Server) digitalInvoiceData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]interface{}{
-		"company":  s.currentDBPath(),
-		"provider": provName,
-		"configs":  configs,
+		"company":   s.currentDBPath(),
+		"provider":  provName,
+		"configs":   configs,
 		"available": diProveedorCatalogo,
 	})
 }

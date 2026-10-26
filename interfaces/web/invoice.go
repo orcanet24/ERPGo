@@ -755,6 +755,13 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Facturación digital: la factura registrada entra a la cola de emisión.
+	// Un borrador no se emite. Antes solo el POS encolaba, así que las ventas
+	// hechas desde el ERP nunca llegaban a la imprenta digital.
+	if isDraft != "yes" {
+		go s.diEnqueueVenta(s.dbFor(r), s.tenantOf(r), fmt.Sprintf("%d", invoiceNo))
+	}
+
 	writeJSON(w, map[string]interface{}{
 		"status": 1, "msg": "Factura registrada", "invoice_id": invoiceNo,
 		"control_no": doc.ControlNo, "igtf": igtfAmount,

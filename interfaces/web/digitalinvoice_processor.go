@@ -54,20 +54,26 @@ func (s *Server) diEnqueueVenta(db *sql.DB, tenant, invoiceID string) {
 		return
 	}
 
-	// Datos del documento desde la base de la EMPRESA: control_no, serie,
-	// fecha, rif y total. Con ellos basta el registro pending; los detalles
-	// los lee el runner al momento de emitir (la fila no bloquea la venta).
-	var controlNo sql.NullInt64
-	var serie, fecha, rif string
+	// Datos del documento desde la base de la EMPRESA. El correlativo numérico
+	// va en `invoice`; `control_no` es TEXTO ("00-00000001" en línea,
+	// "CONT-T01-000123" en contingencia).
+	//
+	// ANTES se leía `control_no` en un sql.NullInt64 y por eso NINGUNA factura
+	// del POS se encolaba: el scan fallaba con "converting string to int64",
+	// el error solo se logueaba y la venta quedaba cobrada sin transmitir
+	// nunca. El número que el proveedor necesita como correlativo es el de la
+	// factura, no el control.
+	var correlativo, serie, rif string
 	var total float64
-	err = db.QueryRow(`SELECT control_no, series, date, COALESCE(customer_rif,''), total_amount
-		FROM invoice WHERE invoice = ? LIMIT 1`, invoiceID).Scan(&controlNo, &serie, &fecha, &rif, &total)
+	err = db.QueryRow(`SELECT COALESCE(invoice, 0), COALESCE(series,''), COALESCE(customer_rif,''), total_amount
+		FROM invoice WHERE invoice = ? LIMIT 1`, invoiceID).Scan(&correlativo, &serie, &rif, &total)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			log.Printf("facturación digital: lectura de factura %s/%s: %v", tenant, invoiceID, err)
 		}
 		return
 	}
+	nroDoc := enteroDeTexto(correlativo)
 
 	// Fila pending; si ya existe la misma exploración, no se duplica.
 	var existing int
@@ -80,10 +86,28 @@ func (s *Server) diEnqueueVenta(db *sql.DB, tenant, invoiceID string) {
 		(invoice_id, company_id, addon_code, strong_id, nro_documento, tipo_documento, serie, status)
 		VALUES (?, ?, ?, NULL, ?, 'FA', ?, 'pending')
 		ON DUPLICATE KEY UPDATE ultimo_intento=NULL, status='pending'`,
-		invoiceID, tenant, "", controlNo.Int64, serie)
+		invoiceID, tenant, "", nroDoc, serie)
 	if err != nil && !diIsDupKey(err) {
 		log.Printf("facturación digital: encolando %s/%s: %v", tenant, invoiceID, err)
 	}
+}
+
+// enteroDeTexto saca el valor numérico de un identificador de factura
+// ("0000123" → 123). Los dígitos se acumulan solo hasta 18 para no desbordar.
+func enteroDeTexto(s string) int64 {
+	var n int64
+	digitos := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			continue
+		}
+		n = n*10 + int64(r-'0')
+		digitos++
+		if digitos == 18 {
+			break
+		}
+	}
+	return n
 }
 
 // diIsDupKey identifica el insert concurrente de la misma factura.

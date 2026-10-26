@@ -3,8 +3,9 @@
     <div class="section_head">
         <p class="heading">Facturación Digital (SENIAT)</p>
         <p class="erp-caption">
-            Gaceta Oficial 43.484 (21 oct 2026) — no obligatorio usar impresora fiscal.
-            Configure aquí su proveedor de facturación digital autorizado.
+            Providencia SNAT/2024/000102 (G.O. 43.032 del 19-dic-2024): la factura
+            digital sustituye al comprobante en las operaciones autorizadas.
+            Configure aquí su imprenta digital autorizada.
         </p>
     </div>
 
@@ -109,6 +110,51 @@
             <strong>Importante:</strong> Cada proveedor requiere sus propias credenciales (Bearer Token, Serie).
             Póngase en contacto con la imprenta digital para obtenerlas. Solo se permite un proveedor activo a la vez.
         </p>
+    </div>
+
+    <!-- Documentos de contingencia: lo que las cajas vendieron sin red -->
+    <div class="update_ai_setting_section" style="margin-top:20px">
+        <p class="section_titles">Documentos de contingencia (POS sin red)</p>
+        <p class="erp-caption">
+            Cuando una caja vende sin conexión, el documento sale con numeración de contingencia
+            y queda en cola hasta que la imprenta digital lo emita. La norma (Providencia
+            SNAT/2024/000102, art. 16) exige registrar esos comprobantes, resguardar el soporte
+            físico y notificar por escrito a la Gerencia Regional de Tributos Internos y a la
+            imprenta digital con una relación detallada: el botón descarga esa relación.
+        </p>
+        <p style="margin:8px 0">
+            <strong>{{.ContPend}}</strong> pendientes de transmitir ·
+            <strong>{{.ContFall}}</strong> rechazadas
+            <a class="btn btn-default btn-sm" style="margin-left:12px" href="/settings/digital-invoice/contingencia.csv">
+                <i class="fa fa-download"></i> Descargar relación (CSV)
+            </a>
+        </p>
+        {{if .Contingencia}}
+        <table class="table table-condensed" style="font-size:12px">
+            <thead>
+                <tr><th>Factura</th><th>Fecha</th><th>Referencia</th><th>RIF</th><th>Total</th><th>Estado</th><th>Nro. control</th></tr>
+            </thead>
+            <tbody>
+            {{range .Contingencia}}
+                <tr>
+                    <td>{{.Invoice}}</td>
+                    <td>{{.Fecha}}</td>
+                    <td><code>{{.Referencia}}</code></td>
+                    <td>{{.RIF}}</td>
+                    <td>{{printf "%.2f" .Total}}</td>
+                    <td>
+                        {{if eq .EstadoDI "sent"}}<span class="label label-success">Transmitida</span>
+                        {{else if eq .EstadoDI "failed"}}<span class="label label-danger">Rechazada</span>
+                        {{else}}<span class="label label-warning">Pendiente</span>{{end}}
+                    </td>
+                    <td>{{.NroControl}}</td>
+                </tr>
+            {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <p class="erp-caption">No hay documentos de contingencia registrados.</p>
+        {{end}}
     </div>
 </div>
 {{end}}

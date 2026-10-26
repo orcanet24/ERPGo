@@ -3,6 +3,8 @@ package pos
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -101,13 +103,18 @@ func (s *SyncServer) SyncSale(req *SyncSaleRequest) (*SyncSaleResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 1. Verificar si el número fiscal ya existe (idempotencia).
+	// La venta llega SIN RED: el número de control fiscal todavía no existe (lo
+	// asigna la imprenta digital), así que el documento se registra como
+	// contingencia con referencia propia por caja. Ver contingenciaRef.
+	controlNo, offlineNo := contingenciaRef(req.TerminalID, req.FiscalNumber, req.SaleLocalID)
+
+	// 1. Verificar si el documento ya existe (idempotencia).
 	if req.FiscalNumber != "" {
 		var existingID int64
 		err := s.db.QueryRow(`
 			SELECT invoice_id FROM invoice
-			WHERE control_no = ? AND series = 'POS'`,
-			"POS-"+req.FiscalNumber).Scan(&existingID)
+			WHERE control_no = ? AND series = 'CONT'`,
+			controlNo).Scan(&existingID)
 		if err == nil {
 			return &SyncSaleResponse{
 				Success:      true,
@@ -139,17 +146,17 @@ func (s *SyncServer) SyncSale(req *SyncSaleRequest) (*SyncSaleResponse, error) {
 
 	// 4. Insertar cabecera de factura.
 	now := time.Now().Format("2006-01-02")
-	controlNo := "POS-" + req.FiscalNumber
 
 	_, err = s.db.Exec(`
 		INSERT INTO invoice (invoice_id, customer_id, date, total_amount, paid_amount, due_amount,
 			invoice, invoice_details, status, payment_type, control_no, customer_rif, series,
-			total_vat_amnt, warehouse_id, is_online, sales_by, currency_code, exchange_rate, total_amount_usd, exchange_rate_source)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'VES',?,?,'BCV')`,
+			total_vat_amnt, warehouse_id, is_online, sales_by, currency_code, exchange_rate, total_amount_usd, exchange_rate_source,
+			offline_invoice_no)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'VES',?,?,'BCV',?)`,
 		invoiceNo, customerID, now, req.Total, req.Total, 0,
-		invoiceNo, "Venta POS sincronizada", 1, 1, controlNo, req.CustomerRIF, "POS",
+		invoiceNo, "Venta POS sincronizada (contingencia)", 1, 1, controlNo, req.CustomerRIF, "CONT",
 		req.Tax, "WH-MAIN", 2, "POS-SYSTEM",
-		1.0, 0.0)
+		1.0, 0.0, offlineNo)
 	if err != nil {
 		return &SyncSaleResponse{
 			Status: "error",
@@ -297,12 +304,12 @@ func (s *SyncServer) GetSyncStatus(terminalID string) (*SyncStatusResponse, erro
 
 	_ = s.db.QueryRow(`
 		SELECT COUNT(*) FROM invoice
-		WHERE series = 'POS' AND invoice_details LIKE ?`,
+		WHERE series IN ('POS','CONT') AND invoice_details LIKE ?`,
 		"%"+terminalID+"%").Scan(&totalSales)
 
 	var lastID sql.NullInt64
 	_ = s.db.QueryRow(`
-		SELECT MAX(invoice_id) FROM invoice WHERE series = 'POS'`).Scan(&lastID)
+		SELECT MAX(invoice_id) FROM invoice WHERE series IN ('POS','CONT')`).Scan(&lastID)
 	if lastID.Valid {
 		lastInvoiceID = fmt.Sprintf("%d", lastID.Int64)
 	}
@@ -370,4 +377,75 @@ func (s *SyncServer) findOrCreateProduct(code, name string, price, taxRate float
 		return code, err
 	}
 	return code, nil
+}
+
+// contingenciaRef construye la referencia del documento que la caja emitió sin
+// red, y devuelve también el correlativo local de la caja.
+//
+// POR QUÉ NO SE INVENTA UN NÚMERO DE CONTROL.
+//
+// Antes aquí se hacía `controlNo := "POS-" + req.FiscalNumber`. Eso no es un
+// número de control fiscal: el control lo asigna la imprenta digital autorizada
+// y es consecutivo y único por emisor (Providencia SNAT/2024/000102, art. 30).
+// Un "POS-7" se repite en cada caja, no existe en ningún libro del SENIAT y
+// además no cabe en las consultas que cruzan control con serie.
+//
+// QUÉ ES ESTE DOCUMENTO MIENTRAS TANTO.
+//
+// Un documento de CONTINGENCIA (art. 16 de la misma providencia): la caja
+// vendió sin conexión, entregó su ticket con numeración propia y la factura
+// digital se emite al reconectar. Por eso la serie es 'CONT' y la referencia
+// lleva el terminal y el correlativo local: identifica el papel que tiene el
+// cliente y permite armar la relación que se notifica después.
+//
+// El formato cabe en control_no (varchar 20): "CONT-" + 6 del terminal + "-" +
+// correlativo de hasta 8 dígitos.
+func contingenciaRef(terminalID, fiscalNumber, saleLocalID string) (control string, offlineNo int64) {
+	term := soloAlfanumerico(terminalID)
+	if len(term) > 6 {
+		term = term[len(term)-6:]
+	}
+	if term == "" {
+		term = "POS"
+	}
+	n := strings.TrimSpace(fiscalNumber)
+	if n == "" {
+		n = strings.TrimSpace(saleLocalID)
+	}
+	n = soloAlfanumerico(n)
+	if n == "" {
+		n = "0"
+	}
+	if len(n) > 8 {
+		n = n[len(n)-8:]
+	}
+	control = "CONT-" + term + "-" + n
+	if len(control) > 20 {
+		control = control[:20]
+	}
+	offlineNo, _ = strconv.ParseInt(soloDigitos(fiscalNumber), 10, 64)
+	return control, offlineNo
+}
+
+// soloAlfanumerico deja solo A-Z y 0-9 en mayúscula.
+func soloAlfanumerico(s string) string {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// soloDigitos deja solo los dígitos de un texto ("7" de "7", "" de "A-7").
+func soloDigitos(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
