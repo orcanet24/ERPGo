@@ -206,7 +206,7 @@
     function moveMenu(id, newParentID) {
         showStatus('Moviendo menú...', 'info');
         var xhr = new XMLHttpRequest();
-        xhr.open('POST', '/settings/menu/move', true);
+        xhr.open('POST', '/config/menu/move', true);
         xhr.setRequestHeader('Content-Type', 'application/json');
         xhr.setRequestHeader('X-CSRF-Token', csrfToken);
         xhr.onreadystatechange = function() {
@@ -227,7 +227,7 @@
 
     function saveReorder(parentID, ids) {
         var xhr = new XMLHttpRequest();
-        xhr.open('POST', '/settings/menu/reorder', true);
+        xhr.open('POST', '/config/menu/reorder', true);
         xhr.setRequestHeader('Content-Type', 'application/json');
         xhr.setRequestHeader('X-CSRF-Token', csrfToken);
         xhr.onreadystatechange = function() {
@@ -255,14 +255,26 @@
 
     function loadMenus() {
         var xhr = new XMLHttpRequest();
-        xhr.open('GET', '/settings/menu/data', true);
+        // Alineado con registerMenuManagerRoutes (menu_manager.go): /config/menu/*.
+        // Antes pedía /settings/menu/data (ruta inexistente) y el árbol quedaba
+        // en blanco SIN ningún aviso: el gestor parecía 'inoperante'. Ahora el
+        // fallo se ve en pantalla.
+        xhr.open('GET', '/config/menu/data', true);
         xhr.onreadystatechange = function() {
-            if (xhr.readyState === 4 && xhr.status === 200) {
-                var resp;
-                try { resp = JSON.parse(xhr.responseText); } catch(e) { return; }
-                if (resp.status == 1 && resp.menus) {
-                    renderTree(resp.menus);
-                }
+            if (xhr.readyState !== 4) return;
+            if (xhr.status !== 200) {
+                showStatus('✗ Cargando menús: el servidor respondió ' + xhr.status + '. Vuelve a entrar con sesión activa.', 'danger');
+                return;
+            }
+            var resp;
+            try { resp = JSON.parse(xhr.responseText); } catch(e) {
+                showStatus('✗ La respuesta del servidor no es válida (JSON inválido).', 'danger');
+                return;
+            }
+            if (resp.status == 1 && resp.menus) {
+                renderTree(resp.menus);
+            } else {
+                showStatus('✗ ' + (resp.error || 'El servidor no devolvió menús.'), 'danger');
             }
         };
         xhr.send();
