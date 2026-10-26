@@ -28,8 +28,11 @@ func NewManager(basePath string) *Manager {
 // Si no existe, lo crea con nombre aleatorio.
 func (m *Manager) EmpresaDir(companyID string, db *sql.DB) (string, error) {
 	var uploadPath string
+	// COALESCE: la columna es DEFAULT NULL y un Scan directo a string revienta
+	// con 'converting NULL to string is unsupported' (se vio al subir el favicon).
+	// Con NULL/vacío la lógica de abajo genera un directorio nuevo y lo persiste.
 	err := db.QueryRow(
-		"SELECT upload_path FROM company_information WHERE company_id = ?", companyID,
+		"SELECT COALESCE(upload_path, '') FROM company_information WHERE company_id = ?", companyID,
 	).Scan(&uploadPath)
 
 	if err != nil && err != sql.ErrNoRows {
@@ -101,7 +104,7 @@ func (m *Manager) Save(companyID string, rama string, file multipart.File, heade
 func (m *Manager) GetFullPath(relPath string, companyID string, db *sql.DB) (string, error) {
 	var uploadPath string
 	err := db.QueryRow(
-		"SELECT upload_path FROM company_information WHERE company_id = ?", companyID,
+		"SELECT COALESCE(upload_path, '') FROM company_information WHERE company_id = ?", companyID,
 	).Scan(&uploadPath)
 	if err != nil && err != sql.ErrNoRows {
 		return "", err

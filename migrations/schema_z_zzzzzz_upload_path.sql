@@ -1,0 +1,21 @@
+-- ---------------------------------------------------------------------------
+-- UPLOAD_PATH NULO → '' (2026-10-26).
+--
+-- El esquema original crea `company_information.upload_path` como
+-- VARCHAR(64) DEFAULT NULL (schema.sql:347). Hasta hoy el gestor de uploads
+-- hacía `SELECT upload_path FROM company_information` con Scan directo a
+-- string: con la fila en NULL el MySQL devolvía 'converting NULL to string
+-- is unsupported' y guardar desde la pantalla (ej.: el favicon) fallaba con
+-- "No se pudo guardar el archivo".
+--
+-- El código ya quedó tolerante (SELECT COALESCE(upload_path,'') en
+-- internal/upload/manager.go), pero de paso normalizamos el dato en bases
+-- existentes: los NULL pasan a '' vacío y la lógica del manager genera el
+-- directorio aleatorio y lo persiste en el primer uso.
+--
+-- Idempotente por construcción (WHERE ... IS NULL) y NO contradice la
+-- doctrina: no borra, no altera históricos — corrige una columna operativa
+-- que el propio esquema definió como opcional.
+-- ---------------------------------------------------------------------------
+
+UPDATE `company_information` SET `upload_path` = '' WHERE `upload_path` IS NULL;
