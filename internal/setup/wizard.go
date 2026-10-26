@@ -534,7 +534,7 @@ func (w *Wizard) createCompany(cfg *configs.Config) error {
 		return fmt.Errorf("la base %q ya existe pero no está registrada; no se sobrescribió. Regístrala o verifica su dueño antes de reintentar", baseName)
 	}
 	dbCfg := persistence.ConfigMySQL{Host: cfg.DBHost, Port: cfg.DBPort,
-		Usuario: cfg.DBUser, Clave: cfg.DBPassword, Nombre: baseName}
+		Usuario: cfg.DBProvisionUser, Clave: cfg.DBProvisionPassword, Nombre: baseName}
 	if err := persistence.EnsureDatabase(dbCfg); err != nil {
 		return fmt.Errorf("creando base para %s: %w", code, err)
 	}
