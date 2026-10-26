@@ -85,8 +85,12 @@ def lanzar_desploys():
     hilo.start()
 
 class Handler(BaseHTTPRequestHandler):
+    # Rutas válidas: /deploy directo y /webhook/github when nginx proxía el
+    # dominio público (o por compatibilidad con instalaciones antiguas.
+    RUTAS_EN = ('/deploy', '/webhook/github')
+
     def do_POST(self):
-        if self.path != '/deploy':
+        if self.path not in self.RUTAS_EN:
             self.send_response(404); self.end_headers(); return
         len = int(self.headers.get('Content-Length', '0'))
         body = self.rfile.read(len)

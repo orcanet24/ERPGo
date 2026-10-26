@@ -1,0 +1,12 @@
+[Unit]
+Description=ERPGo: revisar GitHub cada 5 minutos para deploy
+
+[Timer]
+OnBootSec=2min
+# Cada 5 minutos (RandomizedDelaySec evita rafagas perfectas cuando haya varios servidores)
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Unit=erpgow-deploy.service
+
+[Install]
+WantedBy=timers.target

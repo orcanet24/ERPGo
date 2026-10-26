@@ -100,3 +100,54 @@ Retraso: lo que tardes en correrlo. Útil mientras pruebes las otras opciones.
 - **Esta semana**: migrar a Opción B (webhook) para segundos.
 - Mantener Opción C como plan B documentado (si GitHub/Internet falla,
   siempre hay camino manual).
+
+## Opción B detallada — systemd (servidor Linux, es la recomendada)
+
+Las unidades ya vienen listas en `scripts/deploy/systemd/`. Instalación:
+
+```bash
+# 0) (una vez por servidor) donde vive el código:
+git clone https://github.com/orcanet24/ERPGo.git /opt/erpgow
+# Si ya está: cd /opt/erpgow && git pull origin main
+
+# 1) Ajusta el nombre de TU servicio del ERP dentro de las unidades:
+#    erpgow-deploy.service → Environment=SERVICE=<tu servicio, ej. erpgo>
+#    (verifica el nombre: systemctl list-units --type=service | grep -i erp)
+
+# 2) Deploy por CRON cada 5 min (opción conservadora):
+sudo cp scripts/deploy/systemd/erpgow-deploy.service /etc/systemd/system/
+sudo cp scripts/deploy/systemd/erpgow-deploy.timer   /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now erpgow-deploy.timer
+journalctl -fu erpgow-deploy          # ver cada intento en vivo
+systemctl list-timers | grep erpgow   # ver el estado del timer
+
+# 3) Deploy INSTANTÁNEO por webhook (opción definitiva):
+sudo cp scripts/deploy/systemd/erpgow-webhook.service /etc/systemd/system/
+sudo nano /etc/systemd/system/erpgow-webhook.service   # pon tu SECRET real
+sudo systemctl daemon-reload
+sudo systemctl enable --now erpgow-webhook
+# PRUEBA rápida en el server: curl -X POST http://127.0.0.1:9091/deploy
+#  (que responda 403 es señal BUENA: el receptor está vivo y exige firma HMAC)
+```
+
+Y en NGINX (el proxy que ya usa el servidor):
+
+```nginx
+location /webhook/github {
+    proxy_pass http://127.0.0.1:9090/deploy;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+}
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+GitHub → Settings → Webhooks → Add webhook:
+- Payload URL: `https://orcanet1724.click/webhook/github`
+- Content type: `application/json`
+- Secret: el MISMO que quedó en `erpgow-webhook.service` (nunca en el repo)
+- Eventos: *Just the push event*
+
+Desde ese momento: cada push (los que hago yo o los tuyos) despliega en
+segundos. El timer de 5 min queda como red de respaldo por si el webhook
+falla (red, GitHub caído, etc.).

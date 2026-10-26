@@ -1,0 +1,17 @@
+[Unit]
+Description=ERPGo: actualizar desde GitHub (pull + build + reinicio controlado)
+Wants=network-online.target
+After=network-online.target erpgo.service
+
+[Service]
+Type=oneshot
+# Ajusta aquí (o deja que el script use sus defaults con ERPDIR=/opt/erpgow):
+# SERVICE debe ser el nombre de TU servicio systemd del ERP.
+Environment=ERPDIR=/opt/erpgo
+Environment=RESETYPE=systemctl
+Environment=SERVICE=erpgo
+ExecStart=/opt/erpgo/scripts/deploy/actualizar_desde_git.sh
+# timeouts: la compilación de Go puede tardar unos minutos en una caja pequeña
+TimeoutStartSec=600
+Nice=10
+CPUQuota=50%

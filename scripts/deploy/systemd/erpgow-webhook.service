@@ -1,0 +1,21 @@
+[Unit]
+Description=ERPGo: receptor webhook de GitHub (deploy instantáneo)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=erpgow
+WorkingDirectory=/opt/erpgo/scripts/deploy
+Environment=WEBHOOK_PORT=9090
+# El secret vive SOLO aquí en el servidor (nunca en el repo).
+Environment=GITHUB_WEBHOOK_SECRET=PON-AQUI-EL-SECRET-DEL-WEBHOOK
+Environment=DEPLOY_SCRIPT=/opt/erpgo/scripts/deploy/actualizar_desde_git.sh
+# Nginx proxía https://orcanet1724.click/webhook/github → 127.0.0.1:9090
+ExecStart=/usr/bin/python3 /opt/erpgo/scripts/deploy/webhook_github.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
