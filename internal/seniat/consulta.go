@@ -21,20 +21,45 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os/exec"
-	"runtime"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
 
 const BaseURL = "https://contribuyente.seniat.gob.ve/BuscaRif/"
 
-// DefaultOcrCmd es el comando de OCR por defecto: ddddocr leyendo el captcha
-// desde stdin y escribiendo el código leído en stdout. Igual que hace
-// consultar_rif.py. Si ddddocr no está instalado, el admin puede configurar
-// el suyo (fiscal_setting `seniat_ocr_cmd`).
+// ocrScript es el programa Python que hace la misma llamada que
+// consultar_rif.py: ddddocr leyendo el captcha por stdin y escribiendo el
+// código por stdout.
+const ocrScript = `import sys,ddddocr;o=ddddocr.DdddOcr(show_ad=False);print(o.classification(sys.stdin.buffer.read()))`
+
+// interpretesOCR son los nombres del intérprete de Python en los tres
+// mundos donde puede caer el binario: Linux (python3), instalaciones viejas
+// o Windows (python) y Windows con el lanzador de la Microsoft Store (py).
+// Es la razón típica de "en Python funciona y en Go no": el comando fijo
+// `python3` no existía en el servidor y el error quedaba enterrado.
+var interpretesOCR = []string{"python3", "python", "py"}
+
+// DefaultOcrCmd es el comando OCR por defecto (el primero de la lista). Se
+// muestra en la pantalla de prueba del admin; en ejecución se prueban todos.
 const DefaultOcrCmd = `python3 -c "import sys,ddddocr;o=ddddocr.DdddOcr(show_ad=False);print(o.classification(sys.stdin.buffer.read()))"`
+
+// comandosOCR devuelve los comandos a intentar, en orden. Si el admin
+// configuró uno (fiscal_setting seniat_ocr_cmd), solo ese: su
+// decisión manda. Si no, la lista de intérpretes con el mismo script.
+func comandosOCR(cmd string) []string {
+	if c := strings.TrimSpace(cmd); c != "" {
+		return []string{c}
+	}
+	lista := make([]string, 0, len(interpretesOCR))
+	for _, interp := range interpretesOCR {
+		lista = append(lista, interp+` -c "`+ocrScript+`"`)
+	}
+	return lista
+}
 
 var consultHeaders = map[string]string{
 	"User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -86,35 +111,58 @@ func shellPara() (prog string, args []string) {
 // error que un captcha ilegible, y era imposible saber por qué "no funciona".
 func OCRPorComando(cmd string) OcrFunc {
 	return func(jpg []byte) (string, error) {
-		prog, pre := shellPara()
-		ocmd := exec.Command(prog, append(pre, ComandoOCR(cmd))...)
-		ocmd.Stdin = bytes.NewReader(jpg)
-		var errOut bytes.Buffer
-		ocmd.Stderr = &errOut
-		var out bytes.Buffer
-		if err := ocmd.Run(); err != nil {
-			detalle := strings.TrimSpace(errOut.String())
-			if len(detalle) > 300 {
-				detalle = detalle[:300]
+		comandos := comandosOCR(cmd)
+		var fallos []string
+		for _, c := range comandos {
+			codigo, err := correrOCR(c, jpg)
+			if err == nil {
+				return codigo, nil
 			}
-			if detalle != "" {
-				return "", fmt.Errorf("OCR del captcha falló: %v — stderr: %s", err, detalle)
+			nombre := c
+			if len(nombre) > 48 {
+				nombre = nombre[:48] + "…"
 			}
-			return "", fmt.Errorf("OCR del captcha falló: %w", err)
+			fallos = append(fallos, nombre+": "+err.Error())
 		}
-		codigo := strings.TrimSpace(out.String())
-		if codigo == "" {
-			detalle := strings.TrimSpace(errOut.String())
-			if len(detalle) > 300 {
-				detalle = detalle[:300]
-			}
-			if detalle != "" {
-				return "", fmt.Errorf("el OCR no devolvió código — stderr: %s", detalle)
-			}
-			return "", fmt.Errorf("el OCR no devolvió código")
-		}
-		return codigo, nil
+		// Un solo error con TODOS los intentos: clasificarFallo lo reconoce
+		// por el prefijo y el admin ve qué intérpretes se probaron.
+		return "", fmt.Errorf("OCR del captcha falló: %s", strings.Join(fallos, " | "))
 	}
+}
+
+// correrOCR ejecuta UN comando OCR: captcha por stdin, código por stdout.
+// El stderr SE CONSERVA (truncado) en el error: sin él, un `python3` ausente
+// o un `ddddocr` no instalado producía exactamente el mismo error que un
+// captcha ilegible, y era imposible saber por qué "no funciona".
+func correrOCR(cmd string, jpg []byte) (string, error) {
+	prog, pre := shellPara()
+	ocmd := exec.Command(prog, append(pre, cmd)...)
+	ocmd.Stdin = bytes.NewReader(jpg)
+	var errOut bytes.Buffer
+	ocmd.Stderr = &errOut
+	var out bytes.Buffer
+	if err := ocmd.Run(); err != nil {
+		detalle := strings.TrimSpace(errOut.String())
+		if len(detalle) > 300 {
+			detalle = detalle[:300]
+		}
+		if detalle != "" {
+			return "", fmt.Errorf("%v — stderr: %s", err, detalle)
+		}
+		return "", err
+	}
+	codigo := strings.TrimSpace(out.String())
+	if codigo == "" {
+		detalle := strings.TrimSpace(errOut.String())
+		if len(detalle) > 300 {
+			detalle = detalle[:300]
+		}
+		if detalle != "" {
+			return "", fmt.Errorf("el OCR no devolvió código — stderr: %s", detalle)
+		}
+		return "", fmt.Errorf("el OCR no devolvió código")
+	}
+	return codigo, nil
 }
 
 // Consultar consulta un RIF (ej. J294570968) o una cédula (ej. 14989834) en el
@@ -203,8 +251,13 @@ func consultarUnaVez(valor, campo string, ocr OcrFunc, timeout time.Duration) (*
 	}
 
 	// 4. POST del formulario.
-	form := fmt.Sprintf("%s=%s&codigo=%s", campo, valor, codigo)
-	req, err = http.NewRequest("POST", BaseURL+"BuscaRif.jsp", strings.NewReader(form))
+	// Codificado como formulario (url.Values), no concatenado a mano: un
+	// código de captcha con cualquier caracter fuera de [A-Za-z0-9] rompía
+	// el POST y el SENIAT respondía "captcha incorrecto" sin motivo.
+	form := url.Values{}
+	form.Set(campo, valor)
+	form.Set("codigo", codigo)
+	req, err = http.NewRequest("POST", BaseURL+"BuscaRif.jsp", strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}
