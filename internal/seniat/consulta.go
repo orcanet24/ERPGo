@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"os/exec"
+	"runtime"
 	"regexp"
 	"strings"
 	"time"
@@ -57,23 +58,59 @@ type Resultado struct {
 // comando externo; así el binario no lleva un modelo dentro.
 type OcrFunc func(captchaJPG []byte) (string, error)
 
+// ComandoOCR devuelve el comando OCR efectivo (el configurado o el de
+// fábrica). Lo usa la pantalla de prueba para mostrar QUÉ se va a ejecutar.
+func ComandoOCR(cmd string) string {
+	if strings.TrimSpace(cmd) == "" {
+		return DefaultOcrCmd
+	}
+	return strings.TrimSpace(cmd)
+}
+
+// shellPara devuelve el intérprete de comandos de cada sistema. `sh -c` NO
+// existe en Windows, y ahí el OCR nunca corría — el ERP se distribuye como .bat
+// para Windows, así que este detalle decidía si la consulta funcionaba o no
+// según el servidor donde cayera el binario.
+func shellPara() (prog string, args []string) {
+	if runtime.GOOS == "windows" {
+		return "cmd", []string{"/c"}
+	}
+	return "sh", []string{"-c"}
+}
+
 // OCRPorComando llena un OcrFunc a partir de un comando shell: el captcha
 // entra por stdin y el código sale en la primera línea de stdout.
+//
+// El stderr del comando SE CONSERVA (truncado) en el error: sin él, un
+// `python3` ausente o un `ddddocr` no instalado producía exactamente el mismo
+// error que un captcha ilegible, y era imposible saber por qué "no funciona".
 func OCRPorComando(cmd string) OcrFunc {
 	return func(jpg []byte) (string, error) {
-		c := cmd
-		if c == "" {
-			c = DefaultOcrCmd
-		}
-		ocmd := exec.Command("sh", "-c", c)
+		prog, pre := shellPara()
+		ocmd := exec.Command(prog, append(pre, ComandoOCR(cmd))...)
 		ocmd.Stdin = bytes.NewReader(jpg)
-		ocmd.Stderr = io.Discard
+		var errOut bytes.Buffer
+		ocmd.Stderr = &errOut
 		var out bytes.Buffer
 		if err := ocmd.Run(); err != nil {
+			detalle := strings.TrimSpace(errOut.String())
+			if len(detalle) > 300 {
+				detalle = detalle[:300]
+			}
+			if detalle != "" {
+				return "", fmt.Errorf("OCR del captcha falló: %v — stderr: %s", err, detalle)
+			}
 			return "", fmt.Errorf("OCR del captcha falló: %w", err)
 		}
 		codigo := strings.TrimSpace(out.String())
 		if codigo == "" {
+			detalle := strings.TrimSpace(errOut.String())
+			if len(detalle) > 300 {
+				detalle = detalle[:300]
+			}
+			if detalle != "" {
+				return "", fmt.Errorf("el OCR no devolvió código — stderr: %s", detalle)
+			}
 			return "", fmt.Errorf("el OCR no devolvió código")
 		}
 		return codigo, nil

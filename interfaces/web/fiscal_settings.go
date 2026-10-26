@@ -14,6 +14,10 @@ func (s *Server) registerFiscalSettingsRoutes() {
 	s.mux.HandleFunc("GET /settings/fiscal", s.fiscalSettingsPage)
 	s.mux.HandleFunc("POST /settings/fiscal/save", s.fiscalSettingsSave)
 	s.mux.HandleFunc("POST /settings/fiscal/series/save", s.fiscalSeriesSave)
+	// Prueba real de la consulta al SENIAT: corre el flujo completo y devuelve
+	// el fallo EXACTO (OCR ausente, 403 del WAF, captcha ilegible). Bajo
+	// /settings → solo master, como el resto de la pantalla.
+	s.mux.HandleFunc("GET /settings/fiscal/seniat-test", s.seniatTest)
 }
 
 type fiscalSeriesRow struct {
