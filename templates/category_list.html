@@ -10,7 +10,14 @@
                     <input type="hidden" name="category_id" id="category_id" value="">
                     <div class="form-group">
                         <label for="category_name">Nombre de la Categoría <span class="text-danger">*</span></label>
-                        <input type="text" class="form-control" id="category_name" name="category_name" required placeholder="Ej: Bebidas">
+                        <input type="text" class="form-control" id="category_name" name="category_name" required placeholder="Ej: Calzado">
+                    </div>
+                    <div class="form-group">
+                        <label for="parent_id">Categoría padre</label>
+                        <select class="form-control" id="parent_id" name="parent_id">
+                            <option value="">— Raíz (sin padre) —</option>
+                        </select>
+                        <small class="text-muted">Vacío = categoría raíz. Elija un padre para crear una subcategoría.</small>
                     </div>
                     <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
             <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
@@ -31,7 +38,7 @@
                             <th style="width:60px">ID</th>
                             <th>Nombre</th>
                             <th class="text-right" style="width:90px">Productos</th>
-                            <th class="text-center" style="width:110px">Acciones</th>
+                            <th class="text-center" style="width:140px">Acciones</th>
                         </tr>
                     </thead>
                     <tbody id="categoryRows">
@@ -46,8 +53,55 @@
 
 {{define "pagejs"}}
 <script>
+var catData = [];
+
+function escapeHtml(s) {
+    var ent = {
+        '&': '&' + 'amp;',
+        '<': '&' + 'lt;',
+        '>': '&' + 'gt;',
+        '"': '&' + 'quot;'
+    };
+    return String(s).replace(/[&<>"]/g, function (m) { return ent[m]; });
+}
+function padHtml(depth) {
+    var s = '';
+    for (var i = 0; i < depth; i++) s += '&nbsp;&nbsp;';
+    return s;
+}
+
+// Reconstruye el selector de padre. `deshabilitados` son los ids que no pueden
+// ser padre (la propia categoría y sus descendientes: eso cerraría un ciclo).
+function fillParentSelect(valor, deshabilitados) {
+    deshabilitados = deshabilitados || [];
+    var sel = '<option value="">— Raíz (sin padre) —</option>';
+    catData.forEach(function (c) {
+        var off = deshabilitados.indexOf(c.id) >= 0;
+        sel += '<option value="' + c.id + '"' + (off ? ' disabled' : '') + '>' +
+            padHtml(c.depth) + escapeHtml(c.name) + (off ? ' (no puede)' : '') + '</option>';
+    });
+    $('#parent_id').html(sel);
+    if (valor) $('#parent_id').val(String(valor));
+    else $('#parent_id').val('');
+}
+
+// La rama de un id: él mismo y todos sus descendientes.
+function ramaDe(id) {
+    var hijos = {};
+    catData.forEach(function (c) {
+        (hijos[c.parent] = hijos[c.parent] || []).push(c.id);
+    });
+    var fuera = [id], cola = [id];
+    while (cola.length) {
+        var n = cola.pop();
+        (hijos[n] || []).forEach(function (h) { fuera.push(h); cola.push(h); });
+    }
+    return fuera;
+}
+
 function loadCategories() {
     $.getJSON('/product/category/data', function (d) {
+        catData = d;
         var rows = '';
         if (!d.length) {
             rows = '<tr><td colspan="4" class="text-center">Sin categorías</td></tr>';
@@ -55,10 +109,12 @@ function loadCategories() {
         d.forEach(function (c) {
             rows += '<tr>' +
                 '<td>' + c.id + '</td>' +
-                '<td>' + escapeHtml(c.name) + '</td>' +
-                '<td class="text-right">' + c.products + '</td>' +
+                '<td>' + padHtml(c.depth) + escapeHtml(c.name) +
+                    (c.depth > 0 ? ' <span class="label label-default">sub</span>' : '') + '</td>' +
+                '<td class="text-right" title="Directos: ' + c.products + '">' + c.rama + '</td>' +
                 '<td class="text-center">' +
-                    '<button class="btn btn-warning btn-xs do-edit" data-id="' + c.id + '" data-name="' + escapeHtml(c.name) + '" title="Editar"><i class="fa fa-pencil"></i></button> ' +
+                    '<button class="btn btn-default btn-xs do-sub" data-id="' + c.id + '" data-name="' + escapeHtml(c.name) + '" title="Añadir subcategoría"><i class="fa fa-level-down"></i></button> ' +
+                    '<button class="btn btn-warning btn-xs do-edit" data-id="' + c.id + '" data-name="' + escapeHtml(c.name) + '" data-parent="' + (c.parent || '') + '" title="Editar"><i class="fa fa-pencil"></i></button> ' +
                     '<button class="btn btn-danger btn-xs do-del" data-id="' + c.id + '" title="Eliminar"><i class="fa fa-trash"></i></button>' +
                 '</td></tr>';
         });
@@ -67,39 +123,53 @@ function loadCategories() {
         $('#categoryRows').html('<tr><td colspan="4" class="text-center text-danger">Error al cargar</td></tr>');
     });
 }
-function escapeHtml(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+
 function resetForm() {
     $('#category_id').val('');
     $('#category_name').val('');
+    fillParentSelect('');
     $('#formTitle').text('Nueva Categoría');
     $('#btnSave').html('<i class="fa fa-save"></i> Guardar');
 }
+
 $(function () {
     loadCategories();
 
     $('#btnReset').on('click', resetForm);
 
+    // Editar: el padre actual queda seleccionado y la propia rama se bloquea.
     $('#categoryRows').on('click', '.do-edit', function () {
-        $('#category_id').val($(this).data('id'));
+        var id = $(this).data('id');
+        $('#category_id').val(id);
         $('#category_name').val($(this).data('name'));
-        $('#formTitle').text('Editar Categoría #' + $(this).data('id'));
+        fillParentSelect($(this).data('parent'), ramaDe(id));
+        $('#formTitle').text('Editar Categoría #' + id);
         $('#btnSave').html('<i class="fa fa-check"></i> Actualizar');
+    });
+
+    // El "+" de la fila: el formulario se arma como hijo de esa categoría.
+    $('#categoryRows').on('click', '.do-sub', function () {
+        var id = $(this).data('id');
+        $('#category_id').val('');
+        $('#category_name').val('');
+        fillParentSelect(id, ramaDe(id));
+        $('#formTitle').text('Nueva subcategoría de "' + $(this).data('name') + '"');
+        $('#btnSave').html('<i class="fa fa-save"></i> Guardar');
+        $('#category_name').focus();
     });
 
     $('#categoryRows').on('click', '.do-del', function () {
         var id = $(this).data('id');
         swal({
             title: "¿Eliminar categoría?",
-            text: "Solo se puede eliminar si no tiene productos.",
+            text: "Solo se puede eliminar si no tiene subcategorías ni productos en su rama.",
             type: "warning",
             showCancelButton: true,
             confirmButtonText: "Eliminar",
             confirmButtonColor: ERPGo.appearance.css("--erp-danger", "#9c3333")
         }, function () {
             $.post('/product/category/delete/' + id, function (r) {
-                if (r.status == 1) { toastr.success(r.msg); loadCategories(); }
+                if (r.status == 1) { toastr.success(r.msg); resetForm(); loadCategories(); }
                 else toastr.error(r.error || 'Error');
             }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
         });
@@ -115,6 +185,9 @@ $(function () {
             } else toastr.error(r.error || 'Error');
         }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
     });
+
+    // El selector de padre existe vacío (solo "Raíz") hasta que lleguen los datos.
+    fillParentSelect('');
 });
 </script>
 {{end}}

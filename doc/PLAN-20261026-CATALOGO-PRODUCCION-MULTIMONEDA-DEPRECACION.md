@@ -75,28 +75,30 @@ Al final: orden de aplicación, tabla resumen de esfuerzos, política de migraci
 
 **Qué se pide.** Productos con características alternas (textil: talla × color; calzado: talla), donde el inventario se lleva **por combinación**.
 
-**Diseño propuesto — y por qué este y no otro.**
+**Diseño propuesto (decisión del 2026-10-26: UN producto, N combinaciones).**
 
-- Modelo **plantilla + producto variante** (el que usan Odoo y los POS modernos):
-  - `product_attribute` (talla, color, material…), `product_attribute_value` (S, M, L / negro, rojo).
-  - `product_information` gana `parent_product_id VARCHAR(100) NULL` e `is_template TINYINT`.
-  - La plantilla agrupa y **no se vende**; cada combinación es un **producto hijo real** con su propio `product_id`, SKU, código de barras, precio, costo y **su propio stock**.
-- Un generador de matriz en la ficha del producto crea los hijos de un solo clic (talla × color → N productos con SKU automático, ej. `CAM-001-M-NEG`).
+La variante NO es un producto separado: el zapato casual de cuero es **UN producto con UN SKU**, y sus tallas y colores son una relación **1 a N** de combinaciones que se controlan sobre ese mismo producto. Además, la compraventa es por bultos multi-talla/multi-color, y muchas combinaciones comparten el mismo precio de venta y el mismo costo de compra.
 
-**Por qué este modelo y no tablas de atributos EAV:** con producto-hijo, **todo lo existente sigue funcionando sin tocarse**: kardex, lotes, conteo cíclico, listas de precio, facturación, libros fiscales, respaldos y el POS — porque cada variante ya es un producto que esas piezas entienden. El modelo de atributos "compuestos" obligaría a reescribir facturas, sync POS e inventario para usar claves compuestas: alto riesgo de romper exactamente lo que ya funciona.
+- `product_attribute` (talla, color, material…), `product_attribute_value` (S, M, L / negro, rojo).
+- `product_variant` — una fila por combinación del producto: **hereda precio y costo del producto por defecto** (con sobreescritura opcional rara), código de barras opcional por combinación (para etiquetas/tickets) y su **stock propio**.
+- El producto conserva su identidad: un `product_id`, un SKU, un precio, un costo. El stock del producto = suma de sus combinaciones; un producto sin variantes no cambia nada.
+- **Compra en bulto**: al recibir la compra se abre una pantalla de distribución — "bulto de 20 pares: 5 de talla 8, 8 de talla 9, 7 de talla 10" — y el inventario queda repartido por combinación en el mismo movimiento de entrada.
+- **Venta**: en factura y POS, si el producto tiene variantes se elige la combinación (que es lo que descuenta inventario). POSGo requiere su propio cambio para esto.
+
+**Cómo se logra sin romper nada:** las tablas y columnas de variante son nuevas y las columnas sobre movimientos van `NULL` por defecto. `variant_id NULL` = producto sin variantes = el camino exacto de hoy. Kardex, lotes, conteo cíclico, listas de precio, facturación, libros fiscales y respaldos siguen operando por `product_id` como siempre; la combinación se añade como capa de control de stock encima, no como reescritura.
 
 **Impacto sobre lo existente.**
 
 | Zona | Cambio | Riesgo |
 |------|--------|--------|
-| Ficha de producto | Pestaña/panel "Variantes" con matriz y generación de hijos | Bajo |
-| Búsqueda de producto (factura, compras) | Las plantillas se excluyen de las listas de venta (`is_template=0`); los hijos aparecen con su nombre compuesto (Padre + Talla + Color) | Medio — hay que filtrar en todos los selectores |
-| Inventario / kardex / conteo | Sin cambios estructurales: cada hijo ya es producto | Nulo |
-| Sync POS | Los hijos se sincronizan como productos normales; la plantilla no (o se envía marcada no vendible) | **Medio — toca POSGo también** |
-| Código de barras / etiquetas | Funciona por hijo, que ya tiene barcode propio | Nulo |
-| Listas de precio | Funcionan por hijo sin cambios | Nulo |
+| Ficha de producto | Panel "Variantes" con matriz de combinaciones (talla × color) | Bajo |
+| Facturación / compras | Selector de combinación al vender productos con variantes; pantalla de distribución al recibir bultos | Medio — toca línea de factura y de compra |
+| Inventario / kardex / conteo | Columna opcional `variant_id` (NULL = hoy); stock por producto = suma de combinaciones | Medio — movimiento de stock con opción extra, default intacto |
+| Sync POS | El catálogo envía las combinaciones para elegir al vender | **Medio — toca POSGo también** |
+| Código de barras / etiquetas | Barras opcional por combinación para etiquetar tallas | Nulo |
+| Listas de precio | Siguen por producto; las combinaciones heredan el precio | Nulo |
 
-**Migración sin romper.** Tablas nuevas (no se altera el sentido de ninguna existente) + dos columnas nuevas con default NULL/0. Los productos existentes quedan `parent_product_id=NULL, is_template=0`: se comportan exactamente igual que hoy. Los selectores ganan un filtro que, mientras no haya plantillas, no cambia absolutamente nada.
+**Migración sin romper.** Tablas nuevas (`product_attribute`, `product_attribute_value`, `product_variant`) + columnas opcionales con default NULL en las tablas de movimientos. Mientras una combinación no exista, `variant_id` queda NULL y **cada fila del sistema se comporta exactamente igual que hoy**. Cero reescritura de datos.
 
 **Esfuerzo y riesgo:** 6–8 días ERP · riesgo **medio** (los selectores de producto son muchos y hay que cazarlos todos). **POSGo necesita cambio aparte** para mostrar/agrupar variantes en terminal: estimar 2–3 días en el repositorio del POS, fuera de este plan.
 
@@ -247,9 +249,7 @@ Las tres componentes del costo son las de siempre (MPD + MOD + CIF), y **cada un
 - **Imputación a costo de producto** (lo que decide usted): dos parámetros globales, ambos **APAGADOS POR DEFECTO**:
   1. `depreciacion_activa` — ¿se calcula depreciación? (default: no, hasta que se den de alta activos)
   2. `imputar_a_costo` — ¿la depreciación mensual entra al costo de los productos? (default: no; muchos negocios la dejan como gasto del período)
-- **Forma de imputar cuando se activa** (dos opciones, a decidir):
-  - **A) Por centro de costo** (recomendada): el activo se asigna a una línea/estación (el horno de la panadería) y su depreciación mensual entra como CIF de esa línea, prorrateada entre las órdenes que pasaron por ella. Es el modelo estándar y el que ya prepara `cost_center`.
-  - **B) Por unidades** (más simple): depreciación anual ÷ unidades producidas/vendidas en el año = recargo por unidad. Más fácil de explicar, menos preciso.
+- **Forma de imputar cuando se activa — RESUELTO (2026-10-26): por centro de costo.** El activo se asigna a una línea/estación (el horno de la panadería) y su depreciación mensual entra como CIF de esa línea, prorrateada entre las órdenes que pasaron por ella. Es el modelo estándar y el que ya prepara `cost_center`. La opción "por unidades" queda descartada.
 
 **Nota de honestidad fiscal:** esto es un cálculo **contable y de gestión**. La deducción fiscal ante el SENIAT sigue sus propias reglas y tablas; el sistema debe permitir que lo que se impute a costo contable no se confunda con lo declarado. Por eso el feature viene apagado y separado: **quien no lo active, su contabilidad y sus costos quedan exactamente iguales que hoy.**
 
@@ -291,15 +291,13 @@ El orden no es arbitrario: primero lo que es base de lo demás y lo que da infor
 
 ---
 
-## 5. Decisiones que quedan pendientes de SU aprobación
+## 5. Decisiones — RESUELTAS el 2026-10-26
 
-Este plan no se toca hasta que usted diga "sí". Y al decirlo, puede decidir estas 5 cosas:
-
-1. **Modelo de variantes**: ¿producto hijo (recomendado, seguro) o atributos compuestos (arriesgado)?
-2. **Alcance de producción**: ¿solo Fase P1 (orden simple, 8–10 días) o ya se aprueba también P2 (rutas y programación, +5–7)?
-3. **Depreciación — forma de imputar**: ¿por centro de costo (recomendada, precisa) o por unidades (simple)?
-4. **Combos**: ¿expandir a componentes en la factura (recomendado, sin stock propio) o dar stock propio al combo?
-5. **Orden**: ¿se respeta el orden F0→F6 propuesto o se reordena?
+1. **Modelo de variantes — RESUELTO: UN producto, N combinaciones.** No es un producto por talla/color: el producto es uno (un SKU, un modelo) y sus combinaciones se controlan 1 a N sobre él, heredando precio y costo por defecto. Las compras en bulto multi-talla se distribuyen entre combinaciones al recibirse. (Ver Punto 2, diseño actualizado.)
+2. **Alcance de producción — pendiente de confirmar al llegar a F4**: Fase P1 (orden simple) es lo aprobado por ahora; P2 (rutas y programación) se decide tras validar P1 con un negocio real.
+3. **Depreciación — RESUELTO: por centro de costo**, con los dos toggles (calcular / imputar a costo) apagados por defecto: es una decisión administrativa de cada comercio, y muchos llevan el equipo a gasto directo — el sistema lo permite sin juzgarlo.
+4. **Combos — RESUELTO: expansión en la venta, sin stock propio.** Ejemplo validado: el combo Big Mac descuenta hamburguesa + papas + refresco del inventario y genera un solo ingreso; cada componente se vende también por separado. Distinto del pan horneado, que sí pasa por producción (F4). (Ver Punto 3b.)
+5. **Orden — RESUELTO: F0 → F1 → F2 → F3a → F3b → F4 → F6**, tal como está propuesto.
 
 ---
 
@@ -311,4 +309,4 @@ Este plan no se toca hasta que usted diga "sí". Y al decirlo, puede decidir est
 
 ---
 
-*Documento generado el 2026-10-26 a partir del análisis del código en `main` (`af62d9c`). Pendiente de lectura, evaluación y aprobación.*
+*Documento generado el 2026-10-26 a partir del análisis del código en `main` (`af62d9c`). Actualizado el 2026-10-26 con las decisiones del dueño del proyecto: variantes 1:N sobre un único producto, depreciación por centro de costo con toggles por defecto apagados, combos por expansión en venta. **Plan aprobado: se aplica por fases.**

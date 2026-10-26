@@ -20,7 +20,7 @@
                                 <select class="form-control" id="category_id" name="category_id">
                                     <option value="">-- Seleccione --</option>
                                     {{range .Categories}}
-                                    <option value="{{.id}}" {{if $.P}}{{if eq $.P.Cat.String (printf "%d" .id)}}selected{{end}}{{end}}>{{.name}}</option>
+                                    <option value="{{.id}}" {{if $.P}}{{if eq $.P.Cat.String (printf "%d" .id)}}selected{{end}}{{end}}>{{.label}}</option>
                                     {{end}}
                                 </select>
                             </div>

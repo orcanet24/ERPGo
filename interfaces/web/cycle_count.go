@@ -124,19 +124,35 @@ func (s *Server) productosEnAmbito(r *http.Request, ambito, valor string, ventan
 	}
 
 	var consulta string
+	arg := valor
 	switch ambito {
 	case "full":
 		consulta = `SELECT product_id FROM product_information WHERE status = 1`
 	case "category":
-		consulta = `SELECT product_id FROM product_information
-		            WHERE status = 1 AND category_id = ?`
+		// La categoría manda con su RAMA entera: contar "Calzado" debe incluir
+		// los productos de "Calzado/Hombres" y "Calzado/Mujer", no solo los
+		// pegados directamente al nodo. El camino ('/12/') trae la rama con un
+		// LIKE y sin recursión; si un dato antiguo no tiene camino, se queda en
+		// la categoría exacta de siempre.
+		var camino string
+		_ = s.dbFor(r).QueryRow(`SELECT IFNULL(path,'') FROM product_category WHERE category_id = ?`, valor).Scan(&camino)
+		if camino != "" {
+			consulta = `SELECT product_id FROM product_information
+			            WHERE status = 1 AND category_id IN
+			              (SELECT category_id FROM product_category
+			               WHERE status = 1 AND path LIKE CONCAT(?,'%'))`
+			arg = camino
+		} else {
+			consulta = `SELECT product_id FROM product_information
+			            WHERE status = 1 AND category_id = ?`
+		}
 	case "supplier":
 		consulta = `SELECT DISTINCT product_id FROM supplier_product WHERE supplier_id = ?`
 	case "abc":
 		return s.productosABC(r, valor, ventanaDias)
 	}
 
-	filas, err := s.dbFor(r).Query(consulta, valor)
+	filas, err := s.dbFor(r).Query(consulta, arg)
 	if err != nil {
 		return nil, fmt.Errorf("no se pudo armar la lista de productos: %w", err)
 	}

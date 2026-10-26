@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -109,17 +110,20 @@ func (s *Server) productForm(w http.ResponseWriter, r *http.Request) {
 	// categories + units for dropdowns
 	cats := []map[string]interface{}{}
 	units := []map[string]interface{}{}
-	rows, _ := s.dbFor(r).Query(`SELECT category_id, category_name FROM product_category WHERE status=1 ORDER BY category_name`)
-	if rows != nil {
-		for rows.Next() {
-			var id int64
-			var name string
-			_ = rows.Scan(&id, &name)
-			cats = append(cats, map[string]interface{}{"id": id, "name": name})
+	// El selector va ordenado por ÁRBOL y con la profundidad pintada en la
+	// etiqueta ("Calzado", "\u00a0\u00a0Hombres", …). MySQL ordenaría los caminos
+	// lexicográficamente —10 antes que 2—, así que el orden se calcula con el
+	// mismo árbol que usa la pantalla de categorías.
+	if nodos, err := s.categoriaArbol(r); err == nil {
+		for _, n := range nodos {
+			cats = append(cats, map[string]interface{}{
+				"id":    n.ID,
+				"name":  n.Name,
+				"label": strings.Repeat("\u00a0\u00a0", n.Depth) + n.Name,
+			})
 		}
-		rows.Close()
 	}
-	rows, _ = s.dbFor(r).Query(`SELECT unit_id, unit_name FROM units WHERE status=1 ORDER BY unit_name`)
+	rows, _ := s.dbFor(r).Query(`SELECT unit_id, unit_name FROM units WHERE status=1 ORDER BY unit_name`)
 	if rows != nil {
 		for rows.Next() {
 			var id int64
@@ -394,23 +398,128 @@ func (s *Server) categoryList(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "category_list.html", map[string]interface{}{"Title": "Categorías de Producto"})
 }
 
-func (s *Server) categoryListData(w http.ResponseWriter, r *http.Request) {
+// catNodo es una fila de `product_category` colocada en su sitio del árbol.
+type catNodo struct {
+	ID       int64
+	Name     string
+	Parent   int64
+	Sort     int
+	Products int // productos directos en ESTA categoría
+	Depth    int // profundidad real (0 = raíz); se calcula aquí, no en SQL
+}
+
+// categoriaArbol devuelve las categorías activas aplanadas en orden
+// jerárquico: cada raíz seguida de su rama.
+//
+// El orden NO se delega al ORDER BY: los caminos ('/1/', '/1/10/') ordenan
+// lexicográficamente y el 10 quedaría antes que el 2. El catálogo de un
+// comercio es chico (decenas), así que el árbol se ordena en Go por hermano
+// (sort_order, id) y se aplana en profundidad primera.
+func (s *Server) categoriaArbol(r *http.Request) ([]catNodo, error) {
 	rows, err := s.dbFor(r).Query(`
-		SELECT c.category_id, c.category_name,
-			(SELECT COUNT(*) FROM product_information p WHERE p.category_id = c.category_id) AS products
-		FROM product_category c WHERE c.status=1 ORDER BY c.category_name`)
+		SELECT c.category_id, c.category_name, IFNULL(c.parent_id, 0),
+		       IFNULL(c.sort_order, 0),
+		       (SELECT COUNT(*) FROM product_information p WHERE p.category_id = c.category_id)
+		FROM product_category c WHERE c.status = 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var todo []catNodo
+	for rows.Next() {
+		var n catNodo
+		if err := rows.Scan(&n.ID, &n.Name, &n.Parent, &n.Sort, &n.Products); err != nil {
+			continue
+		}
+		todo = append(todo, n)
+	}
+	return construirArbol(todo), nil
+}
+
+// construirArbol ordena y aplana las categorías. Es pura (sin base) para que
+// la parte delicada —ordenar por hermano y no por texto, y promover huérfanos
+// a raíz— se pueda probar sin servidor.
+func construirArbol(todo []catNodo) []catNodo {
+	existe := map[int64]bool{}
+	for _, n := range todo {
+		existe[n.ID] = true
+	}
+
+	hijos := map[int64][]catNodo{}
+	var raices []catNodo
+	for _, n := range todo {
+		// Un padre que no existe (borrado a mano, dato heredado) no convierte a
+		// la categoría en algo invisible: sube a raíz y sigue listable.
+		if n.Parent == 0 || !existe[n.Parent] {
+			n.Parent = 0
+			raices = append(raices, n)
+		} else {
+			hijos[n.Parent] = append(hijos[n.Parent], n)
+		}
+	}
+
+	ordenar := func(g []catNodo) {
+		sort.Slice(g, func(i, j int) bool {
+			if g[i].Sort != g[j].Sort {
+				return g[i].Sort < g[j].Sort
+			}
+			return g[i].ID < g[j].ID
+		})
+	}
+	ordenar(raices)
+	for _, g := range hijos {
+		ordenar(g)
+	}
+
+	var plano []catNodo
+	var bajar func(n catNodo, depth int)
+	bajar = func(n catNodo, depth int) {
+		n.Depth = depth
+		plano = append(plano, n)
+		for _, h := range hijos[n.ID] {
+			bajar(h, depth+1)
+		}
+	}
+	for _, raiz := range raices {
+		bajar(raiz, 0)
+	}
+	return plano
+}
+
+// productosRama suma por categoría el total de su rama completa (ella y sus
+// descendientes). Es pura y se recorre de atrás hacia adelante: en
+// profundidad primera los hijos van DESPUÉS del padre, así que al retroceder
+// cada hijo ya trae su total cuando lo aporta al suyo.
+func productosRama(nodos []catNodo) map[int64]int {
+	rama := map[int64]int{}
+	for i := len(nodos) - 1; i >= 0; i-- {
+		n := nodos[i]
+		total := n.Products + rama[n.ID]
+		rama[n.ID] = total
+		if n.Parent != 0 {
+			rama[n.Parent] += total
+		}
+	}
+	return rama
+}
+
+func (s *Server) categoryListData(w http.ResponseWriter, r *http.Request) {
+	nodos, err := s.categoriaArbol(r)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	defer rows.Close()
+	// Productos de la RAMA (la categoría y todo lo suyo). Se suman recorriendo
+	// al revés: en profundidad primera los hijos van después del padre, así
+	// que al retroceder cada hijo ya trae su total cuando lo suma el padre.
+	rama := productosRama(nodos)
 	list := []map[string]interface{}{}
-	for rows.Next() {
-		var id int64
-		var name string
-		var products int
-		_ = rows.Scan(&id, &name, &products)
-		list = append(list, map[string]interface{}{"id": id, "name": name, "products": products})
+	for _, n := range nodos {
+		list = append(list, map[string]interface{}{
+			"id": n.ID, "name": n.Name, "parent": n.Parent,
+			"depth": n.Depth, "products": n.Products, "rama": rama[n.ID],
+		})
 	}
 	writeJSON(w, list)
 }
@@ -422,15 +531,102 @@ func (s *Server) categorySave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.FormValue("category_id")
+	db := s.dbFor(r)
+
+	// El padre: vacío o "0" = raíz.
+	var parentID int64
+	if pv := strings.TrimSpace(r.FormValue("parent_id")); pv != "" && pv != "0" {
+		pid, err := strconv.ParseInt(pv, 10, 64)
+		if err != nil {
+			jsonError(w, "La categoría padre no es válida", 400)
+			return
+		}
+		parentID = pid
+	}
+
+	// Validaciones de árbol ANTES de escribir: una categoría no puede ser hija
+	// de sí misma ni de un descendiente suyo — eso cerraría un ciclo y dejaría
+	// la rama inatraversable de forma permanente.
+	var caminoPadre string
+	nivelPadre := 0
+	if parentID != 0 {
+		if id != "" {
+			idInt, _ := strconv.ParseInt(id, 10, 64)
+			if parentID == idInt {
+				jsonError(w, "Una categoría no puede ser hija de sí misma", 400)
+				return
+			}
+		}
+		err := db.QueryRow(`SELECT IFNULL(path,''), IFNULL(level,0) FROM product_category WHERE category_id = ? AND status = 1`, parentID).
+			Scan(&caminoPadre, &nivelPadre)
+		if err == sql.ErrNoRows {
+			jsonError(w, "La categoría padre no existe", 400)
+			return
+		}
+		if err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		if id != "" && strings.HasPrefix(caminoPadre, "/"+id+"/") {
+			jsonError(w, "No puede moverse bajo una subcategoría suya", 400)
+			return
+		}
+	}
+
+	// La ruta: del padre, o '/raíz/' si no hay padre.
+	base := "/"
+	if parentID != 0 {
+		base = caminoPadre
+	}
+	nivel := 0
+	if parentID != 0 {
+		nivel = nivelPadre + 1
+	}
+
 	if id == "" {
-		if _, err := s.dbFor(r).Exec(`INSERT INTO product_category (category_name, status) VALUES (?,1)`, name); err != nil {
+		var parentArg interface{}
+		if parentID != 0 {
+			parentArg = parentID
+		}
+		res, err := db.Exec(`INSERT INTO product_category (category_name, status, parent_id) VALUES (?,1,?)`, name, parentArg)
+		if err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		newID, _ := res.LastInsertId()
+		camino := fmt.Sprintf("%s%d/", base, newID)
+		if _, err := db.Exec(`UPDATE product_category SET path = ?, level = ? WHERE category_id = ?`, camino, nivel, newID); err != nil {
 			jsonError(w, err.Error(), 500)
 			return
 		}
 	} else {
-		if _, err := s.dbFor(r).Exec(`UPDATE product_category SET category_name=? WHERE category_id=?`, name, id); err != nil {
+		var caminoViejo string
+		nivelViejo := 0
+		if err := db.QueryRow(`SELECT IFNULL(path,''), IFNULL(level,0) FROM product_category WHERE category_id = ?`, id).
+			Scan(&caminoViejo, &nivelViejo); err != nil {
+			jsonError(w, "Categoría no encontrada", 404)
+			return
+		}
+		var parentArg interface{}
+		if parentID != 0 {
+			parentArg = parentID
+		}
+		caminoNuevo := base + id + "/"
+		if _, err := db.Exec(`UPDATE product_category SET category_name = ?, parent_id = ?, path = ?, level = ? WHERE category_id = ?`,
+			name, parentArg, caminoNuevo, nivel, id); err != nil {
 			jsonError(w, err.Error(), 500)
 			return
+		}
+		// Mover una categoría mueve su rama: a los descendientes se les
+		// reescribe el prefijo viejo por el nuevo y se les desplaza el nivel.
+		// Sin esto, los caminos de la rama quedarían apuntando a un sitio al
+		// que la categoría ya no pertenece y el filtrado por rama mentiría.
+		if caminoViejo != "" && caminoNuevo != caminoViejo {
+			delta := nivel - nivelViejo
+			_, _ = db.Exec(`UPDATE product_category
+				SET path = CONCAT(?, SUBSTRING(path, ?)), level = level + ?
+				WHERE path LIKE CONCAT(?, '%') AND category_id <> ?`,
+				caminoNuevo, len(caminoViejo)+1, delta, caminoViejo, id)
 		}
 	}
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Guardado", "redirect": saveRedirect(r, "/product/list")})
@@ -438,13 +634,33 @@ func (s *Server) categorySave(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) categoryDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var used int
-	_ = s.dbFor(r).QueryRow(`SELECT COUNT(*) FROM product_information WHERE category_id = ?`, id).Scan(&used)
-	if used > 0 {
-		jsonError(w, "No se puede eliminar: hay productos en esta categoría", 400)
+	db := s.dbFor(r)
+
+	// Con jerarquía, eliminar una categoría con hijos dejaría a los hijos
+	// colgando de un id que ya no existe. Se pide borrar de abajo hacia arriba.
+	var hijos int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM product_category WHERE parent_id = ?`, id).Scan(&hijos)
+	if hijos > 0 {
+		jsonError(w, "Tiene subcategorías: elimine primero las subcategorías", 400)
 		return
 	}
-	if _, err := s.dbFor(r).Exec(`DELETE FROM product_category WHERE category_id = ?`, id); err != nil {
+
+	// Los productos de la rama entera cuentan: la categoría vacía pero con
+	// productos en una subcategoría no se puede borrar tampoco.
+	var camino string
+	_ = db.QueryRow(`SELECT IFNULL(path,'') FROM product_category WHERE category_id = ?`, id).Scan(&camino)
+	var used int
+	if camino != "" {
+		_ = db.QueryRow(`SELECT COUNT(*) FROM product_information p
+			WHERE p.category_id IN (SELECT category_id FROM product_category WHERE path LIKE CONCAT(?,'%'))`, camino).Scan(&used)
+	} else {
+		_ = db.QueryRow(`SELECT COUNT(*) FROM product_information WHERE category_id = ?`, id).Scan(&used)
+	}
+	if used > 0 {
+		jsonError(w, "No se puede eliminar: hay productos en esta categoría o en sus subcategorías", 400)
+		return
+	}
+	if _, err := db.Exec(`DELETE FROM product_category WHERE category_id = ?`, id); err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
