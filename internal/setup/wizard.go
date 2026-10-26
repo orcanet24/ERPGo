@@ -12,6 +12,7 @@ import (
 
 	"erpgow/configs"
 	"erpgow/infrastructure/persistence"
+	"erpgow/internal/security"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -476,6 +477,15 @@ func (w *Wizard) migrateRegisteredCompanies(cfg *configs.Config) error {
 	return nil
 }
 
+// createCompany registra una empresa nueva en el catálogo y prepara SU base.
+//
+// ERPGo NO crea bases de datos: en hosting compartido (cPanel, Plesk, etc.) el
+// usuario de MySQL no tiene permiso de CREATE DATABASE y un intento de crearla
+// termina con "Access denied ... Error 1044" ya en producción, que es el peor
+// momento de todos. Lo que hace el wizard es PEDIR los datos de la base —que se
+// crea desde el panel del servidor con su usuario exacto—, verificar la
+// conexión, aplicar el esquema y registrar la empresa con las credenciales que
+// el runtime usará en cada login.
 func (w *Wizard) createCompany(cfg *configs.Config) error {
 	master, err := w.openMasterDB(cfg)
 	if err != nil {
@@ -486,7 +496,26 @@ func (w *Wizard) createCompany(cfg *configs.Config) error {
 	if name == "" {
 		return fmt.Errorf("la razón social es obligatoria")
 	}
-	rif := strings.TrimSpace(w.askInput("RIF", false))
+	var rif string
+	for {
+		rif = normalizarRIF(w.askInput("RIF", false))
+		if rif == "" {
+			break // opcional
+		}
+		if verr := validarFormatoRIF(rif); verr != nil {
+			fmt.Printf("    ✗ %v — intente de nuevo (Enter vacío para continuar sin RIF)\n", verr)
+			continue
+		}
+		break
+	}
+
+	// Duplicados ANTES de pedir nada más: no tiene sentido llenar el resto del
+	// formulario para descubrir al final que la empresa ya existe.
+	if existenEmpresasIguales(master, name, rif) {
+		return fmt.Errorf("la empresa ya está registrada en el sistema (misma razón social o RIF)\n" +
+			"  Búsquela en el catálogo de empresas, o corrija el nombre/RIF")
+	}
+
 	username := strings.TrimSpace(w.askInput("Usuario administrador", false))
 	if username == "" {
 		return fmt.Errorf("el usuario administrador es obligatorio")
@@ -506,11 +535,11 @@ func (w *Wizard) createCompany(cfg *configs.Config) error {
 			code = fmt.Sprintf("%s_%d", slug, suffix)
 			continue
 		}
-		var exists int
-		if err := master.QueryRow(`SELECT COUNT(*) FROM tenants WHERE code=?`, code).Scan(&exists); err != nil {
+		var existsQty int
+		if err := master.QueryRow(`SELECT COUNT(*) FROM tenants WHERE code=?`, code).Scan(&existsQty); err != nil {
 			return fmt.Errorf("comprobando código de empresa: %w", err)
 		}
-		if exists == 0 {
+		if existsQty == 0 {
 			break
 		}
 		code = fmt.Sprintf("%s_%d", slug, suffix)
@@ -522,29 +551,50 @@ func (w *Wizard) createCompany(cfg *configs.Config) error {
 	if userExists != 0 {
 		return fmt.Errorf("el usuario %q ya existe en el sistema; use un usuario nuevo", username)
 	}
-	baseName, err := persistence.NombreBaseEmpresa(code)
+
+	// Base de datos: ERPGo no la crea, la SOLICITA. El nombre predeterminado
+	// sigue la convención del sistema (erpgo_<código>) para que el runtime la
+	// encuentre sin configuración extra; si el panel del hosting obliga a otro
+	// nombre (prefijo del cuenta, etc.) se acepta y se registra: el runtime
+	// usa el nombre guardado en el catálogo.
+	basePorDefecto, err := persistence.NombreBaseEmpresa(code)
 	if err != nil {
-		return err
+		return fmt.Errorf("nombre de base para %q: %w", code, err)
 	}
-	var existsDB int
-	if err := master.QueryRow(`SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name=?`, baseName).Scan(&existsDB); err != nil {
-		return fmt.Errorf("comprobando la base de empresa %q: %w", baseName, err)
+	fmt.Println()
+	fmt.Println("  ── Base de datos de la nueva empresa ──")
+	fmt.Println("  ERPGo NO crea bases. Cree la base y su usuario ANTES en el panel")
+	fmt.Println("  del servidor (cPanel, Plesk, ...) y colóquelas aquí, exactas.")
+	dbHost := w.askInput(fmt.Sprintf("Host MySQL [Enter = %s]", cfg.DBHost), false)
+	if dbHost == "" {
+		dbHost = cfg.DBHost
 	}
-	if existsDB != 0 {
-		return fmt.Errorf("la base %q ya existe pero no está registrada; no se sobrescribió. Regístrala o verifica su dueño antes de reintentar", baseName)
+	dbPort := w.askInt("Puerto MySQL", cfg.DBPort)
+	dbName := strings.TrimSpace(w.askInput(fmt.Sprintf("Nombre de la base [Enter = %s]", basePorDefecto), false))
+	if dbName == "" {
+		dbName = basePorDefecto
 	}
-	dbCfg := persistence.ConfigMySQL{Host: cfg.DBHost, Port: cfg.DBPort,
-		Usuario: cfg.DBProvisionUser, Clave: cfg.DBProvisionPassword, Nombre: baseName}
-	if err := persistence.EnsureDatabase(dbCfg); err != nil {
-		return fmt.Errorf("creando base para %s: %w", code, err)
+	dbUser := strings.TrimSpace(w.askInput(fmt.Sprintf("Usuario de la base [Enter = %s]", cfg.DBUser), false))
+	if dbUser == "" {
+		dbUser = cfg.DBUser
 	}
+	dbPass := w.askInput("Contraseña de la base", true)
+	if dbPass == "" {
+		dbPass = cfg.DBPassword
+	}
+
+	dbCfg := persistence.ConfigMySQL{Host: dbHost, Port: dbPort, Usuario: dbUser, Clave: dbPass, Nombre: dbName}
+	// Conectar SIN crear nada. OpenMySQL hace Ping sobre la base exacta: si no
+	// existe o las credenciales están mal, el error es explícito y proviene
+	// del servidor, no un fallo de permisos de CREATE disfrazado.
 	db, err := persistence.OpenMySQL(dbCfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("no se pudo conectar a la base de la empresa (%s@%s:%d/%s): %v\n"+
+			"  Verifique que la base existe en el panel y que el usuario tiene permisos completos sobre ella", dbName, dbUser, dbPort, dbHost, err)
 	}
 	defer db.Close()
 	if err := persistence.RunMigrationsForMySQL(db, dbCfg); err != nil {
-		return fmt.Errorf("migrando %s: %w", code, err)
+		return fmt.Errorf("migrando %s: %w", dbName, err)
 	}
 	if _, err := db.Exec(`INSERT INTO company_information (company_id, company_name, vat_no, status) VALUES ('1', ?, ?, 1)
 		ON DUPLICATE KEY UPDATE company_name=VALUES(company_name), vat_no=VALUES(vat_no), status=1`, name, rif); err != nil {
@@ -556,11 +606,22 @@ func (w *Wizard) createCompany(cfg *configs.Config) error {
 	if err := registerTenantAdmin(master, username, password); err != nil {
 		return fmt.Errorf("registrando identidad global del administrador: %w", err)
 	}
+
+	// Credenciales por empresa: el runtime (openTenantDB) prefiere estas antes
+	// que las globales, así que el login de esta empresa usa SU usuario MySQL.
+	// Las claves viajan encriptadas (AES-256-GCM) con la clave derivada del
+	// secreto JWT, igual que el aprovisionamiento web.
+	dbPassEnc, err := security.Encrypt(dbPass, security.DeriveKey(cfg.JWTSecret))
+	if err != nil {
+		return fmt.Errorf("encriptando credenciales de la empresa: %w", err)
+	}
+
 	tx, err := master.Begin()
 	if err != nil {
 		return fmt.Errorf("iniciando registro de empresa: %w", err)
 	}
-	if _, err := tx.Exec(`INSERT INTO tenants (code, legal_name, rif, status, created_at) VALUES (?, ?, ?, 1, NOW())`, code, name, rif); err != nil {
+	if _, err := tx.Exec(`INSERT INTO tenants (code, legal_name, rif, status, created_at, db_user, db_password_enc, db_name)
+		VALUES (?, ?, ?, 1, NOW(), ?, ?, ?)`, code, name, rif, dbUser, []byte(dbPassEnc), dbName); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("registrando empresa: %w", err)
 	}
@@ -568,10 +629,97 @@ func (w *Wizard) createCompany(cfg *configs.Config) error {
 		_ = tx.Rollback()
 		return fmt.Errorf("registrando propietario: %w", err)
 	}
+	if _, err := tx.Exec(`INSERT INTO tenant_provision_log (tenant_code, action, detail, created_at) VALUES (?, 'create', ?, NOW())`,
+		code, fmt.Sprintf("base=%s usuario_bd=%s host=%s:%d", dbName, dbUser, dbHost, dbPort)); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("registrando bitácora de aprovisionamiento: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("confirmando registro de empresa: %w", err)
 	}
-	fmt.Printf("Empresa %q creada: código=%s, base=%s, admin=%s\n", name, code, baseName, username)
+	fmt.Printf("Empresa %q creada: código=%s, base=%s, admin=%s\n", name, code, dbName, username)
+	return nil
+}
+
+// existenEmpresasIguales busca una empresa registrada con el mismo nombre
+// (insensible a mayúsculas) o el mismo RIF. Devuelve el detalle del conflicto
+// para que el administrador sepa CUAL empresa pegó, sin adivinar.
+func existenEmpresasIguales(master *sql.DB, name, rif string) bool {
+	var dupes int
+	if err := master.QueryRow(
+		`SELECT COUNT(*) FROM tenants WHERE (rif<>'' AND rif=?) OR LOWER(TRIM(legal_name))=LOWER(TRIM(?))`,
+		rif, name,
+	).Scan(&dupes); err != nil || dupes == 0 {
+		return false
+	}
+	rows, err := master.Query(
+		`SELECT code, legal_name, rif FROM tenants WHERE (rif<>'' AND rif=?) OR LOWER(TRIM(legal_name))=LOWER(TRIM(?))`,
+		rif, name,
+	)
+	if err == nil {
+		defer rows.Close()
+		fmt.Println("\n  ⚠  La empresa ya existe en el catálogo:")
+		for rows.Next() {
+			var c, l, r string
+			if rows.Scan(&c, &l, &r) == nil {
+				fmt.Printf("     · %s — %s (RIF: %s)\n", c, l, r)
+			}
+		}
+		rows.Close()
+	}
+	return true
+}
+
+// normalizarRIF limpia separadores y va a mayúsculas, el mismo formato que usa
+// la validación del núcleo, para que un RIF tecleado con guiones no lo tome
+// como una empresa distinta.
+func normalizarRIF(rif string) string {
+	rif = strings.TrimSpace(rif)
+	var b strings.Builder
+	for _, r := range rif {
+		switch r {
+		case '.', '-', ' ':
+			// separador fuera
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.ToUpper(b.String())
+}
+
+// validarFormatoRIF aplica el algoritmo módulo 11 del SENIAT (los mismos pesos
+// que la validación del núcleo en interfaces/web) para rechazar RIFs mal
+// tecleados en el momento, y no cuando el primero factura.
+func validarFormatoRIF(rif string) error {
+	if rif == "" {
+		return nil // el RIF es opcional
+	}
+	if len(rif) != 10 {
+		return fmt.Errorf("el RIF debe tener 10 caracteres: letra + 9 dígitos (recibidos: %d)", len(rif))
+	}
+	letra := rif[0]
+	switch letra {
+	case 'J', 'G', 'V', 'E', 'P':
+	default:
+		return fmt.Errorf("el RIF debe iniciar con J, G, V, E o P (recibido: %c)", letra)
+	}
+	for i := 1; i < len(rif); i++ {
+		if rif[i] < '0' || rif[i] > '9' {
+			return fmt.Errorf("después de la letra el RIF debe tener solo dígitos (posición %d: %c)", i+1, rif[i])
+		}
+	}
+	var sum int
+	weights := [8]int{3, 2, 7, 6, 5, 4, 3, 2}
+	for i := 0; i < 8; i++ {
+		sum += int(rif[i+1]-'0') * weights[i]
+	}
+	dv := 11 - (sum % 11)
+	if dv >= 10 {
+		dv = 0
+	}
+	if dv != int(rif[9]-'0') {
+		return fmt.Errorf("el dígito verificador del RIF no es válido")
+	}
 	return nil
 }
 

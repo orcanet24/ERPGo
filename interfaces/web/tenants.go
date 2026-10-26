@@ -325,12 +325,17 @@ func (s *Server) openTenantDB(code string) (*sql.DB, error) {
 
 	// Resolver credenciales: primero intentar las de la empresa (más seguro),
 	// luego fallback a las credenciales globales (empresas antiguas sin migración).
+	// Si la empresa registró su NOMBRE de base —hosting compartido— ese manda
+	// sobre el nombre derivado, porque el hosting no perdona prefijos.
 	usuario := s.config.DBUser
 	clave := s.config.DBPassword
 
 	if creds := s.getTenantCredentials(code); creds != nil {
 		usuario = creds.DBUser
 		clave = creds.DBPasswordPlain
+		if creds.DBName != "" {
+			nombre = creds.DBName
+		}
 	}
 
 	// NO crear la base automáticamente. Si la empresa existe en el catálogo
@@ -413,6 +418,10 @@ var controlSchema = []string{
 	// antiguas, donde `tenants` se creó sin ellas).
 	`ALTER TABLE tenants ADD COLUMN db_user VARCHAR(128) NOT NULL DEFAULT ''`,
 	`ALTER TABLE tenants ADD COLUMN db_password_enc VARBINARY(512) DEFAULT ''`,
+	// db_name: empresas creadas en hosting compartido, donde el panel obliga a
+	// nombres que no derivan del código (prefijo de la cuenta). Vacío = derivar
+	// erpgo_<código> como siempre (compatibilidad con instalaciones antiguas).
+	`ALTER TABLE tenants ADD COLUMN db_name VARCHAR(64) NOT NULL DEFAULT ''`,
 	`ALTER TABLE tenants ADD COLUMN max_users INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE tenants ADD COLUMN created_by VARCHAR(128) NOT NULL DEFAULT ''`,
 	`ALTER TABLE tenants ADD COLUMN db_size_mb INTEGER NOT NULL DEFAULT 0`,

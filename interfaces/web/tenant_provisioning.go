@@ -20,6 +20,10 @@ type TenantCredentials struct {
 	DBPasswordPlain string // desencriptado, solo en memorio, nunca persistido
 	Status          int
 	MaxUsers        int
+	// DBName vive aquí porque en hosting compartido el panel obliga a nombres
+	// con prefijo de la cuenta (orcanet24_erpgo_...), que no derivan del código.
+	// Vacío = empresa antigua: se deriva erpgo_<código> como siempre.
+	DBName string
 }
 
 // generateSecurePassword genera una contraseña aleatoria segura de la longitud dada.
@@ -129,9 +133,9 @@ func (s *Server) getTenantCredentials(code string) *TenantCredentials {
 	var tc TenantCredentials
 	var passEnc []byte
 	err = ctl.QueryRow(
-		"SELECT code, db_user, db_password_enc, status, max_users FROM tenants WHERE code=?",
+		"SELECT code, db_user, db_password_enc, status, max_users, db_name FROM tenants WHERE code=?",
 		code,
-	).Scan(&tc.Code, &tc.DBUser, &passEnc, &tc.Status, &tc.MaxUsers)
+	).Scan(&tc.Code, &tc.DBUser, &passEnc, &tc.Status, &tc.MaxUsers, &tc.DBName)
 	
 	if err != nil {
 		return nil
