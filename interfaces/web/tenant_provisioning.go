@@ -2,7 +2,9 @@ package web
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"fmt"
+	"log"
 	"math/big"
 	"strings"
 	"time"
@@ -123,10 +125,16 @@ func (s *Server) saveTenantCredentials(code, dbUser, dbPassEnc string) error {
 }
 
 // getTenantCredentials recupera las credenciales de una empresa del catálogo.
-// Devuelve nil si no tiene credenciales propias (empresa antigua, usa credenciales globales).
+//
+// Devuelve nil si no tiene credenciales propias (empresa antigua, usa
+// credenciales globales) — y LOGUEA POR QUÉ cuando el nil es un incidente y
+// no una empresa antigua. Sin esto, el runtime caía al usuario global,
+// producía un «Access denied» (Error 1044) al entrar a la empresa y nadie
+// podía distinguir si faltaba la fila, el usuario o la clave.
 func (s *Server) getTenantCredentials(code string) *TenantCredentials {
 	ctl, err := s.controlStore()
 	if err != nil {
+		log.Printf("tenant %q: no se pudo abrir el catálogo de control para leer sus credenciales: %v", code, err)
 		return nil
 	}
 	
@@ -137,12 +145,17 @@ func (s *Server) getTenantCredentials(code string) *TenantCredentials {
 		code,
 	).Scan(&tc.Code, &tc.DBUser, &passEnc, &tc.Status, &tc.MaxUsers, &tc.DBName)
 	
+	if err == sql.ErrNoRows {
+		return nil // empresa sin fila: ni credenciales hay que leer
+	}
 	if err != nil {
+		log.Printf("tenant %q: leyendo credenciales del catálogo: %v — se usarán las credenciales globales", code, err)
 		return nil
 	}
 	
 	// Si no tiene usuario propio, es una empresa antigua sin credenciales por empresa
 	if tc.DBUser == "" {
+		log.Printf("tenant %q: sin credenciales de BD propias en el catálogo — se usarán las credenciales globales; si su BD no es accesible con el usuario global, guárdalas con --setup (opción de credenciales de empresa)", code)
 		return nil
 	}
 	
@@ -152,6 +165,7 @@ func (s *Server) getTenantCredentials(code string) *TenantCredentials {
 	key := security.DeriveKey(s.config.JWTSecret)
 	tc.DBPasswordPlain, err = security.Decrypt(string(passEnc), key)
 	if err != nil {
+		log.Printf("tenant %q: no se pudo desencriptar la clave de BD guardada (%v) — se usarán las credenciales globales; re-guárdalas con --setup", code, err)
 		return nil // no desencriptar = no conectar (fail closed)
 	}
 	

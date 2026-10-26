@@ -349,7 +349,12 @@ func (s *Server) openTenantDB(code string) (*sql.DB, error) {
 		Nombre:  nombre,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("la base de la empresa %q no existe o no es accesible: %w", code, err)
+		// El fallo se reporta con lo que REALMENTE se intentó (base y usuario):
+		// el Error 1044 sin este detalle provocaba adivinanzas — ¿fue el usuario
+		// global por falta de credenciales propias, o las propias con algo mal?
+		// El log anterior de getTenantCredentials ya dice cuál fue el camino.
+		return nil, fmt.Errorf("la base de la empresa %q no es accesible (se intentó %s@%s:%d sobre la base %q): %w",
+			code, usuario, s.config.DBHost, s.config.DBPort, nombre, err)
 	}
 	// Verificar que la base realmente existe y tiene tablas
 	if err := opened.Ping(); err != nil {

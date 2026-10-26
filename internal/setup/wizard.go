@@ -460,7 +460,8 @@ func (w *Wizard) runMaintenance(cfg *configs.Config) error {
 	fmt.Println("  1. Aplicar migraciones a todas las bases registradas")
 	fmt.Println("  2. Crear una empresa adicional")
 	fmt.Println("  3. Activar la empresa DEMO de práctica (requiere su propia BD)")
-	fmt.Println("  4. Salir")
+	fmt.Println("  4. Guardar/actualizar las credenciales de BD de una empresa")
+	fmt.Println("  5. Salir")
 	fmt.Println()
 
 	switch choice := w.askInput("Opción", false); choice {
@@ -470,7 +471,9 @@ func (w *Wizard) runMaintenance(cfg *configs.Config) error {
 		return w.createCompany(cfg)
 	case "3":
 		return w.createDemoTenant(cfg)
-	case "4", "":
+	case "4":
+		return w.actualizarCredencialesEmpresa(cfg)
+	case "5", "":
 		return nil
 	default:
 		return fmt.Errorf("opción de mantenimiento desconocida: %q", choice)
@@ -810,6 +813,114 @@ func (w *Wizard) createDemoTenant(cfg *configs.Config) error {
 		logNoFatal("bitácora de aprovisionamiento de la DEMO", err)
 	}
 	fmt.Printf("Empresa DEMO activada: base=%s, accesible para todos los usuarios en el selector\n", dbName)
+	return nil
+}
+
+// actualizarCredencialesEmpresa repara el punto débil del Error 1044 al entrar
+// a una empresa: el runtime conecta con las credenciales de la empresa
+// (guardadas en el catálogo) y, si no están o no se pueden descifrar, cae al
+// usuario global — que en hosting compartido no tiene acceso a la BD de esa
+// empresa. Aquí el administrador las escribe DE NUEVO, se verifican contra el
+// servidor REAL y quedan encriptadas con la clave JWT vigente del .env: esto
+// arregla también una clave encriptada con un secreto distinto.
+//
+// No toca datos de negocio, ni migraciones, ni registro de la empresa: solo la
+// fila del catálogo que dice dónde está su BD.
+func (w *Wizard) actualizarCredencialesEmpresa(cfg *configs.Config) error {
+	master, err := w.openMasterDB(cfg)
+	if err != nil {
+		return fmt.Errorf("abriendo catálogo maestro: %w", err)
+	}
+	defer master.Close()
+
+	asegurarColumna(master, "tenants", "is_demo", "TINYINT(1) NOT NULL DEFAULT 0")
+	asegurarColumna(master, "tenants", "db_name", "VARCHAR(64) NOT NULL DEFAULT ''")
+	asegurarColumna(master, "tenants", "db_user", "VARCHAR(128) NOT NULL DEFAULT ''")
+	asegurarColumna(master, "tenants", "db_password_enc", "VARBINARY(512) DEFAULT ''")
+
+	// Lista de empresas para que el administrador vea el CÓDIGO exacto.
+	fmt.Println()
+	fmt.Println("  Empresas registradas:")
+	rows, err := master.Query(`SELECT code, legal_name FROM tenants ORDER BY code`)
+	if err != nil {
+		return fmt.Errorf("leyendo empresas: %w", err)
+	}
+	for rows.Next() {
+		var c, l string
+		if rows.Scan(&c, &l) == nil {
+			fmt.Printf("   · %s — %s\n", c, l)
+		}
+	}
+	rows.Close()
+
+	code := strings.TrimSpace(w.askInput("Código de la empresa", false))
+	if code == "" {
+		return fmt.Errorf("el código es obligatorio")
+	}
+	var codeExists int
+	if err := master.QueryRow(`SELECT COUNT(*) FROM tenants WHERE code=?`, code).Scan(&codeExists); err != nil {
+		return fmt.Errorf("comprobando la empresa: %w", err)
+	}
+	if codeExists == 0 {
+		return fmt.Errorf("la empresa %q no está en el catálogo", code)
+	}
+	// La maestra usa DB_NAME directamente; sus credenciales son las del .env
+	// y no se deben tocar aquí.
+	if esTenantMaestro(cfg, code) {
+		return fmt.Errorf("%q es la empresa maestra: usa las credenciales globales del .env y no se gestionan aquí", code)
+	}
+
+	baseDerived, err := persistence.NombreBaseEmpresa(code)
+	if err != nil {
+		return err
+	}
+	var dbNameActual string
+	_ = master.QueryRow(`SELECT IFNULL(db_name,'') FROM tenants WHERE code=?`, code).Scan(&dbNameActual)
+	if dbNameActual == "" {
+		dbNameActual = baseDerived
+	}
+
+	dbName := strings.TrimSpace(w.askInput(fmt.Sprintf("Nombre de la base [Enter = %s]", dbNameActual), false))
+	if dbName == "" {
+		dbName = dbNameActual
+	}
+	dbUser := strings.TrimSpace(w.askInput(fmt.Sprintf("Usuario de la base [Enter = %s]", cfg.DBUser), false))
+	if dbUser == "" {
+		dbUser = cfg.DBUser
+	}
+	dbPass := w.askInput("Contraseña de la base (Enter = conservar la ya guardada)", true)
+
+	// Si escribe contraseña nueva se puede PROBAR de verdad antes de guardar:
+	// OpenMySQL pega (Ping) en la apertura, así que si conecta es porque la
+	// base existe y el usuario tiene acceso; si no, el error se reporta ANTES
+	// de escribir nada en el catálogo.
+	if dbPass != "" {
+		probe, perror := persistence.OpenMySQL(persistence.ConfigMySQL{
+			Host: cfg.DBHost, Port: cfg.DBPort, Usuario: dbUser, Clave: dbPass, Nombre: dbName,
+		})
+		if perror != nil {
+			return fmt.Errorf("la prueba de conexión falló (%s@%s:%d/%s): %v — nada se guardó", dbUser, cfg.DBHost, cfg.DBPort, dbName, perror)
+		}
+		_ = probe.Close()
+	}
+
+	if dbPass != "" {
+		enc, err := security.Encrypt(dbPass, security.DeriveKey(cfg.JWTSecret))
+		if err != nil {
+			return fmt.Errorf("encriptando la clave: %w", err)
+		}
+		if _, err := master.Exec(`UPDATE tenants SET db_user=?, db_name=?, db_password_enc=? WHERE code=?`,
+			dbUser, dbName, []byte(enc), code); err != nil {
+			return fmt.Errorf("guardando credenciales: %w", err)
+		}
+	} else {
+		// Clave conservada: se actualizan usuario y nombre, la encriptada queda.
+		if _, err := master.Exec(`UPDATE tenants SET db_user=?, db_name=? WHERE code=?`, dbUser, dbName, code); err != nil {
+			return fmt.Errorf("guardando credenciales: %w", err)
+		}
+		fmt.Println("  Aviso: se conservó la clave ya guardada. Si el problema era la clave, repita con ella escrita.")
+	}
+	fmt.Printf("Credenciales de %q guardadas: base=%s, usuario=%s. Entra de nuevo a la empresa para verificar.\n", code, dbName, dbUser)
 	return nil
 }
 
