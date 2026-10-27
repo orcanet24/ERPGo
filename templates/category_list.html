@@ -38,7 +38,7 @@
                             <th style="width:60px">ID</th>
                             <th>Nombre</th>
                             <th class="text-right" style="width:90px">Productos</th>
-                            <th class="text-center" style="width:140px">Acciones</th>
+                            <th class="text-center" style="width:180px">Acciones</th>
                         </tr>
                     </thead>
                     <tbody id="categoryRows">
@@ -52,6 +52,12 @@
 {{end}}
 
 {{define "pagejs"}}
+<style>
+    /* Drag & drop de filas: indicadores sutiles de dónde caería la fila. */
+    tr.arrastrando { opacity: 0.45; }
+    tr.drop-arriba { box-shadow: inset 0 3px 0 0 #0f4c46; }
+    tr.drop-abajo  { box-shadow: inset 0 -3px 0 0 #0f4c46; }
+</style>
 <script>
 var catData = [];
 
@@ -102,17 +108,23 @@ function ramaDe(id) {
 function loadCategories() {
     $.getJSON('/product/category/data', function (d) {
         catData = d;
+        // Los datos llegaron DESPUÉS de que la página rendereó el <select>
+        // vacío: hay que reconstruirlo ahora, conservando lo que el usuario
+        // ya haya elegido (p. ej. el padre preseleccionado de una subcategoría).
+        fillParentSelect($('#parent_id').val());
         var rows = '';
         if (!d.length) {
             rows = '<tr><td colspan="4" class="text-center">Sin categorías</td></tr>';
         }
         d.forEach(function (c) {
-            rows += '<tr>' +
+            rows += '<tr draggable="true" data-id="' + c.id + '" data-parent="' + (c.parent || 0) + '">' +
                 '<td>' + c.id + '</td>' +
                 '<td>' + padHtml(c.depth) + escapeHtml(c.name) +
                     (c.depth > 0 ? ' <span class="label label-default">sub</span>' : '') + '</td>' +
                 '<td class="text-right" title="Directos: ' + c.products + '">' + c.rama + '</td>' +
                 '<td class="text-center">' +
+                    '<button class="btn btn-default btn-xs do-up" data-id="' + c.id + '" data-dir="up" title="Subir"><i class="fa fa-arrow-up"></i></button> ' +
+                    '<button class="btn btn-default btn-xs do-down" data-id="' + c.id + '" data-dir="down" title="Bajar"><i class="fa fa-arrow-down"></i></button> ' +
                     '<button class="btn btn-default btn-xs do-sub" data-id="' + c.id + '" data-name="' + escapeHtml(c.name) + '" title="Añadir subcategoría"><i class="fa fa-level-down"></i></button> ' +
                     '<button class="btn btn-warning btn-xs do-edit" data-id="' + c.id + '" data-name="' + escapeHtml(c.name) + '" data-parent="' + (c.parent || '') + '" title="Editar"><i class="fa fa-pencil"></i></button> ' +
                     '<button class="btn btn-danger btn-xs do-del" data-id="' + c.id + '" title="Eliminar"><i class="fa fa-trash"></i></button>' +
@@ -156,6 +168,95 @@ $(function () {
         $('#formTitle').text('Nueva subcategoría de "' + $(this).data('name') + '"');
         $('#btnSave').html('<i class="fa fa-save"></i> Guardar');
         $('#category_name').focus();
+    });
+
+    // Reordenar hermanos: sube o baja la categoría dentro de su grupo; el
+    // servidor reescribe sort_order de todos los hermanos y solo se recarga
+    // la tabla. En el extremo el API contesta 400 y el toast lo cuenta.
+    // ---------- Drag & drop: arrastrar una fila la reordena dentro de su
+    // grupo de hermanos, SALIENDO por el mismo endpoint del botón pero con el
+    // modo bajo_de ("colócame tras este hermano; 0 = primera") que expresa el
+    // salto de N posiciones del arrastre. Solo se permite soltar sobre un
+    // hermano (mismo data-parent): cruzar grupos sería mover la categoría de
+    // padre, y eso es otro flujo con otras reglas (editar el padre).
+    var filaArrastrada = null;
+    var filaDestino = null;
+    var insertarAntes = false;
+
+    function limpiarMarcas() {
+        $('#categoryRows tr').removeClass('drop-arriba drop-abajo');
+    }
+
+    $('#categoryRows').on('dragstart', 'tr', function (e) {
+        filaArrastrada = $(this);
+        filaArrastrada.addClass('arrastrando');
+        // Chrome/FF exigen un setData para iniciar el arrastre.
+        if (e.originalEvent.dataTransfer) {
+            e.originalEvent.dataTransfer.effectAllowed = 'move';
+            e.originalEvent.dataTransfer.setData('text/plain', String($(this).data('id')));
+        }
+    });
+
+    $('#categoryRows').on('dragover', 'tr', function (e) {
+        if (!filaArrastrada || filaArrastrada[0] === this) return;
+        var $t = $(this);
+        if (String($t.data('parent') || 0) !== String(filaArrastrada.data('parent') || 0)) return;
+        e.preventDefault(); // necesario para que el drop esté permitido
+        var mitad = this.getBoundingClientRect().top + this.offsetHeight / 2;
+        filaDestino = $t;
+        insertarAntes = e.originalEvent.clientY < mitad;
+        limpiarMarcas();
+        $t.addClass(insertarAntes ? 'drop-arriba' : 'drop-abajo');
+    });
+
+    $('#categoryRows').on('dragleave', 'tr', function () {
+        $(this).removeClass('drop-arriba drop-abajo');
+    });
+
+    $('#categoryRows').on('drop', 'tr', function (e) {
+        e.preventDefault();
+        limpiarMarcas();
+        if (!filaArrastrada || !filaDestino || filaArrastrada[0] === filaDestino[0]) return;
+        var idMovida = String(filaArrastrada.data('id'));
+
+        // El nuevo orden se calcula con el orden VISIBLE de la tabla, que es
+        // el mismo criterio del servidor (sort_order, id): la fila que queda
+        // justo antes de la posición nueva define bajo_de; si cae al frente,
+        // 0.
+        var ids = [];
+        $('#categoryRows tr').each(function () {
+            ids.push(String($(this).data('id')));
+        });
+        var arr = ids.filter(function (x) { return x !== idMovida; });
+        var idxDestino = arr.indexOf(String(filaDestino.data('id')));
+        if (idxDestino < 0) return;
+        // Soltar tras la ÚLTIMA fila es una posición válida (quedar al final):
+        // ahí bajo_de es el propio último hermano.
+        var posNueva = insertarAntes ? idxDestino : idxDestino + 1;
+        if (posNueva > arr.length) return;
+        var bajoDe = posNueva === 0 ? '0' : arr[posNueva - 1];
+
+        $.post('/product/category/reorder/' + idMovida, { bajo_de: bajoDe }, function (r) {
+            if (r.status == 1) loadCategories();
+            else toastr.error(r.error || 'Error');
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+    });
+
+    // El dragend corre SIEMPRE, incluso si el drop no fue válido: limpia el
+    // estado o la fila quedaría semitransparente para siempre.
+    $('#categoryRows').on('dragend', 'tr', function () {
+        if (filaArrastrada) filaArrastrada.removeClass('arrastrando');
+        limpiarMarcas();
+        filaArrastrada = null;
+        filaDestino = null;
+    });
+
+    $('#categoryRows').on('click', '.do-up, .do-down', function () {
+        var btn = $(this);
+        $.post('/product/category/reorder/' + btn.data('id'), { dir: btn.data('dir') }, function (r) {
+            if (r.status == 1) loadCategories();
+            else toastr.error(r.error || 'Error');
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
     });
 
     $('#categoryRows').on('click', '.do-del', function () {

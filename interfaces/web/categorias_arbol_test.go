@@ -60,6 +60,50 @@ func TestConstruirArbolPromueveHuerfanosARaiz(t *testing.T) {
 	}
 }
 
+func TestConstruirArbolRompeCiclos(t *testing.T) {
+	// Datos corruptos: 5 y 7 se apuntan mutuamente. Sin guard, bajar()
+	// recursiona hasta reventar el stack y la página pantea. Con guard, TODO
+	// miembro del ciclo sube a raíz y un hijo externo (9) conserva su padre
+	// legítimo (5, ahora raíz).
+	todo := []catNodo{
+		{ID: 5, Name: "A", Parent: 7},
+		{ID: 7, Name: "B", Parent: 5},
+		{ID: 9, Name: "C", Parent: 5},
+	}
+	plano := construirArbol(todo) // antes de esto: recursión infinita
+	if len(plano) != 3 {
+		t.Fatalf("esperaba 3 nodos, salieron %d", len(plano))
+	}
+	por := map[int64]catNodo{}
+	for _, n := range plano {
+		por[n.ID] = n
+	}
+	for _, id := range []int64{5, 7} {
+		if por[id].Parent != 0 || por[id].Depth != 0 {
+			t.Errorf("miembro del ciclo %d debe subir a raíz; salió con padre %d y profundidad %d", id, por[id].Parent, por[id].Depth)
+		}
+	}
+	if por[9].Parent != 5 || por[9].Depth != 1 {
+		t.Errorf("el hijo externo 9 conserva su padre 5; salió padre %d profundidad %d", por[9].Parent, por[9].Depth)
+	}
+}
+
+func TestConstruirArbolRompeAutobucle(t *testing.T) {
+	// Ciclo mínimo: una sola categoría que es su propio padre.
+	plano := construirArbol([]catNodo{
+		{ID: 4, Name: "Solo", Parent: 4},
+		{ID: 6, Name: "Raíz"},
+	})
+	if len(plano) != 2 {
+		t.Fatalf("esperaba 2 nodos, salieron %d", len(plano))
+	}
+	for _, n := range plano {
+		if n.Parent == 4 {
+			t.Errorf("el autobucle del 4 rompió el árbol: el nodo %d quedó colgando de él", n.ID)
+		}
+	}
+}
+
 func TestProductosRamaSumaLaRamaCompleta(t *testing.T) {
 	// 1 (2 directos) > 2 (3 directos) > 3 (5 directos): la rama de 1 vale 10.
 	nodos := []catNodo{

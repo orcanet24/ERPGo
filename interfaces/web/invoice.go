@@ -1007,7 +1007,23 @@ func (s *Server) invoiceDetails(w http.ResponseWriter, r *http.Request) {
 func (s *Server) posForm(w http.ResponseWriter, r *http.Request) {
 	// categories for grid
 	cats := []map[string]interface{}{}
-	rows, _ := s.dbFor(r).Query(`SELECT category_id, category_name FROM product_category WHERE status=1 ORDER BY category_name`)
+	// El catálogo se imprime con el mismo criterio que el árbol visible: las
+	// raíces primero, y dentro del mismo padre, el orden sort_order y luego el
+	// id. Así el listado del POS y la búsqueda de productos salen agrupados
+	// como el catálogo que el usuario ve, no como el alfabeto. El ORDER BY es
+	// SIN transacción: es lectura y de varias decenas de filas, que el listado
+	// correcto sobrepasa cualquier problema de concurrencia y evita pisar un
+	// tx en vuelo sobre este handler.
+	rows, err := s.dbFor(r).Query(`SELECT category_id, category_name FROM product_category
+		WHERE status = 1
+		ORDER BY
+			CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END,
+			parent_id, sort_order, category_id`)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
 	if rows != nil {
 		for rows.Next() {
 			var id int64

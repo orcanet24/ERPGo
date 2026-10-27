@@ -29,6 +29,7 @@ func (s *Server) registerProductRoutes() {
 	s.mux.HandleFunc("GET /product/category/data", s.categoryListData)
 	s.mux.HandleFunc("POST /product/category/save", s.categorySave)
 	s.mux.HandleFunc("POST /product/category/delete/{id}", s.categoryDelete)
+	s.mux.HandleFunc("POST /product/category/reorder/{id}", s.categoryReorder)
 	// units
 	s.mux.HandleFunc("GET /product/unit", s.unitList)
 	s.mux.HandleFunc("GET /product/unit/data", s.unitListData)
@@ -446,12 +447,57 @@ func construirArbol(todo []catNodo) []catNodo {
 		existe[n.ID] = true
 	}
 
+	// CICLOS EN LOS DATOS. Si dos categorías se apuntan mutuamente (herencia
+	// de una corrupción anterior: un padre movido bajo su propio descendiente
+	// antes de existir el guard de ancestros, o un dedo rápido en SQL), el
+	// recorrido `bajar` de abajo no termina nunca y el stack overflow tumba
+	// el proceso justo cuando alguien abre la pantalla de categorías o el
+	// form de producto. Se sube la cadena de padres de cada nodo con su
+	// propio conjunto de visitados; la primera vez que el recorrido reaparece
+	// en un nodo conocido delata el ciclo, y TODA su membrecía sube a raíz:
+	// corta el ciclo completo y deja a los hijos de fuera colgando sanos de
+	// su padre (que ahora es raíz).
+	raizForzada := map[int64]bool{}
+	{
+		padre := make(map[int64]int64, len(todo))
+		for _, n := range todo {
+			padre[n.ID] = n.Parent
+		}
+		for _, n := range todo {
+			vistos := map[int64]bool{n.ID: true}
+			cadena := []int64{n.ID}
+			for p := padre[n.ID]; p != 0; p = padre[p] {
+				if !existe[p] {
+					break // cadena interrumpida: sin ciclo, nada que cortar
+				}
+				if vistos[p] {
+					// El ciclo arranca en `p` y regresa hasta aquí.
+					desde := 0
+					for i, x := range cadena {
+						if x == p {
+							desde = i
+							break
+						}
+					}
+					for _, x := range cadena[desde:] {
+						raizForzada[x] = true
+					}
+					break
+				}
+				vistos[p] = true
+				cadena = append(cadena, p)
+			}
+		}
+	}
+
 	hijos := map[int64][]catNodo{}
 	var raices []catNodo
 	for _, n := range todo {
 		// Un padre que no existe (borrado a mano, dato heredado) no convierte a
-		// la categoría en algo invisible: sube a raíz y sigue listable.
-		if n.Parent == 0 || !existe[n.Parent] {
+		// la categoría en algo invisible: sube a raíz y sigue listable. Los
+		// miembros de un ciclo heredado también: sin padre, la rama vuelve a
+		// ser finita y la página no muere.
+		if n.Parent == 0 || !existe[n.Parent] || raizForzada[n.ID] {
 			n.Parent = 0
 			raices = append(raices, n)
 		} else {
@@ -547,15 +593,16 @@ func (s *Server) categorySave(w http.ResponseWriter, r *http.Request) {
 	// Validaciones de árbol ANTES de escribir: una categoría no puede ser hija
 	// de sí misma ni de un descendiente suyo — eso cerraría un ciclo y dejaría
 	// la rama inatraversable de forma permanente.
+	var idInt int64
+	if id != "" {
+		idInt, _ = strconv.ParseInt(id, 10, 64)
+	}
 	var caminoPadre string
 	nivelPadre := 0
 	if parentID != 0 {
-		if id != "" {
-			idInt, _ := strconv.ParseInt(id, 10, 64)
-			if parentID == idInt {
-				jsonError(w, "Una categoría no puede ser hija de sí misma", 400)
-				return
-			}
+		if idInt != 0 && parentID == idInt {
+			jsonError(w, "Una categoría no puede ser hija de sí misma", 400)
+			return
 		}
 		err := db.QueryRow(`SELECT IFNULL(path,''), IFNULL(level,0) FROM product_category WHERE category_id = ? AND status = 1`, parentID).
 			Scan(&caminoPadre, &nivelPadre)
@@ -567,9 +614,26 @@ func (s *Server) categorySave(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		if id != "" && strings.HasPrefix(caminoPadre, "/"+id+"/") {
-			jsonError(w, "No puede moverse bajo una subcategoría suya", 400)
-			return
+		// Descendiente check SIN confiar en `path`: se sube la cadena real de
+		// padres del padre elegido, paso a paso. El chequeo viejo por prefijo
+		// (HasPrefix(caminoPadre, "/id/")) era burlable si la ruta del padre
+		// estaba corrupta (sin slash inicial, de una fila sembrada sin
+		// camino): permitía mover una categoría bajo su propia descendiente y
+		// fabricar un ciclo en parent_id. El límite de pasos corta cadenas
+		// corruptas que no cierran sobre sí mismas.
+		if idInt != 0 {
+			candidato := parentID
+			for pasos := 0; candidato != 0 && pasos < 100; pasos++ {
+				if candidato == idInt {
+					jsonError(w, "No puede moverse bajo una subcategoría suya", 400)
+					return
+				}
+				var siguiente int64
+				if err := db.QueryRow(`SELECT IFNULL(parent_id, 0) FROM product_category WHERE category_id = ?`, candidato).Scan(&siguiente); err != nil {
+					break // cadena interrumpida (padre inexistente): no cierra ciclo
+				}
+				candidato = siguiente
+			}
 		}
 	}
 
@@ -583,20 +647,36 @@ func (s *Server) categorySave(w http.ResponseWriter, r *http.Request) {
 		nivel = nivelPadre + 1
 	}
 
+	// Crear/mover son VARIOS writes (la fila, su camino, y al mover también
+	// los caminos de la rama). Si el proceso muere a mitad de camino quedaba
+	// una fila con padre y SIN camino — datos divergentes: la pantalla dibuja
+	// el árbol por parent_id, pero el filtrado por ruta (delete, conteo de
+	// rama) ya calcula mal. Todo el bloque de escritura va en UNA transacción:
+	// o queda completo, o no queda nada.
+	tx, err := db.Begin()
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	fallo := func(msg string, code int) {
+		_ = tx.Rollback()
+		jsonError(w, msg, code)
+	}
+
 	if id == "" {
 		var parentArg interface{}
 		if parentID != 0 {
 			parentArg = parentID
 		}
-		res, err := db.Exec(`INSERT INTO product_category (category_name, status, parent_id) VALUES (?,1,?)`, name, parentArg)
+		res, err := tx.Exec(`INSERT INTO product_category (category_name, status, parent_id) VALUES (?,1,?)`, name, parentArg)
 		if err != nil {
-			jsonError(w, err.Error(), 500)
+			fallo(err.Error(), 500)
 			return
 		}
 		newID, _ := res.LastInsertId()
 		camino := fmt.Sprintf("%s%d/", base, newID)
-		if _, err := db.Exec(`UPDATE product_category SET path = ?, level = ? WHERE category_id = ?`, camino, nivel, newID); err != nil {
-			jsonError(w, err.Error(), 500)
+		if _, err := tx.Exec(`UPDATE product_category SET path = ?, level = ? WHERE category_id = ?`, camino, nivel, newID); err != nil {
+			fallo(err.Error(), 500)
 			return
 		}
 	} else {
@@ -604,6 +684,7 @@ func (s *Server) categorySave(w http.ResponseWriter, r *http.Request) {
 		nivelViejo := 0
 		if err := db.QueryRow(`SELECT IFNULL(path,''), IFNULL(level,0) FROM product_category WHERE category_id = ?`, id).
 			Scan(&caminoViejo, &nivelViejo); err != nil {
+			_ = tx.Rollback()
 			jsonError(w, "Categoría no encontrada", 404)
 			return
 		}
@@ -612,22 +693,32 @@ func (s *Server) categorySave(w http.ResponseWriter, r *http.Request) {
 			parentArg = parentID
 		}
 		caminoNuevo := base + id + "/"
-		if _, err := db.Exec(`UPDATE product_category SET category_name = ?, parent_id = ?, path = ?, level = ? WHERE category_id = ?`,
+		if _, err := tx.Exec(`UPDATE product_category SET category_name = ?, parent_id = ?, path = ?, level = ? WHERE category_id = ?`,
 			name, parentArg, caminoNuevo, nivel, id); err != nil {
-			jsonError(w, err.Error(), 500)
+			fallo(err.Error(), 500)
 			return
 		}
 		// Mover una categoría mueve su rama: a los descendientes se les
 		// reescribe el prefijo viejo por el nuevo y se les desplaza el nivel.
 		// Sin esto, los caminos de la rama quedarían apuntando a un sitio al
 		// que la categoría ya no pertenece y el filtrado por rama mentiría.
+		// Antes el error de este UPDATE se tragaba en silencio (`_, _ =`): una
+		// rama escrita a medias deja caminos mentirosos que no se reparan
+		// solos, así que el error tiene que abortar el guardado entero.
 		if caminoViejo != "" && caminoNuevo != caminoViejo {
 			delta := nivel - nivelViejo
-			_, _ = db.Exec(`UPDATE product_category
+			if _, err := tx.Exec(`UPDATE product_category
 				SET path = CONCAT(?, SUBSTRING(path, ?)), level = level + ?
 				WHERE path LIKE CONCAT(?, '%') AND category_id <> ?`,
-				caminoNuevo, len(caminoViejo)+1, delta, caminoViejo, id)
+				caminoNuevo, len(caminoViejo)+1, delta, caminoViejo, id); err != nil {
+				fallo(err.Error(), 500)
+				return
+			}
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
 	}
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Guardado", "redirect": saveRedirect(r, "/product/list")})
 }
@@ -665,6 +756,160 @@ func (s *Server) categoryDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Eliminado", "redirect": saveRedirect(r, "/product/list")})
+}
+
+// categoryReorder reordena una categoría ENTRE sus hermanos. Dos modos, por
+// el cuerpo:
+//   - dir=up|down: intercambio con el vecino inmediato (los botones ↑/↓).
+//   - bajo_de=<id hermano>|0: colocar la categoría JUSTO detrás de ese hermano
+//     (0 = primera posición). Es el modo del drag & drop: una fila soltada en
+//     cualquier punto es un salto de N posiciones, que el modo up/down no
+//     puede expresar.
+//
+// Es el orden que la migración de jerarquía prometía y nadie exponía:
+// sort_order no tenía ni UI ni endpoint, así que toda categoría nacía con 0
+// y el orden real lo decidía el id.
+//
+// No toca parent_id ni rutas: cambia el orden DENTRO del padre. Y con cada
+// movimiento se reescriben las marcas de TODOS los hermanos (posición × 10):
+// con empates (todas en 0, el estado después de crear tres raíces seguidas)
+// intercambiar valores no mueve nada, y las marcas por posición dejan hueco
+// (10, 20, 30...) para insertar en medio sin reordenar el resto.
+func (s *Server) categoryReorder(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	dir := r.FormValue("dir")
+	bajoDe := r.FormValue("bajo_de")
+	if dir != "up" && dir != "down" && bajoDe == "" {
+		jsonError(w, "Dirección o destino no válidos", 400)
+		return
+	}
+	idInt, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		jsonError(w, "Categoría no encontrada", 404)
+		return
+	}
+	db := s.dbFor(r)
+
+	// El padre del nodo define el grupo de hermanos. Sin padre: las raíces.
+	var parentID int64
+	if err := db.QueryRow(`SELECT IFNULL(parent_id, 0) FROM product_category WHERE category_id = ? AND status = 1`, id).
+		Scan(&parentID); err != nil {
+		jsonError(w, "Categoría no encontrada", 404)
+		return
+	}
+	var parentArg interface{}
+	if parentID != 0 {
+		parentArg = parentID
+	}
+
+	// Los hermanos activos en el MISMO orden que dibuja el árbol:
+	// (sort_order, id). La consulta portable (OR con IS NULL) en vez de <=>
+	// para no casar el engine.
+	rows, err := db.Query(`SELECT category_id FROM product_category
+		WHERE status = 1 AND (parent_id = ? OR (parent_id IS NULL AND ? IS NULL))
+		ORDER BY sort_order, category_id`, parentArg, parentArg)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	var hermanos []int64
+	for rows.Next() {
+		var cid int64
+		if err := rows.Scan(&cid); err == nil {
+			hermanos = append(hermanos, cid)
+		}
+	}
+	rows.Close()
+
+	pos := -1
+	for i, cid := range hermanos {
+		if cid == idInt {
+			pos = i
+			break
+		}
+	}
+	if pos < 0 {
+		jsonError(w, "Categoría no encontrada", 404)
+		return
+	}
+
+	if bajoDe != "" {
+		// Modo drag & drop: quitar la arrastrada de su lugar y reinsertarla
+		// tras `bajoDe` (o al frente con 0). El destino debe ser un hermano
+		// activo real; de lo contrario el front me está mandando posiciones
+		// de una fila que ya no existe.
+		var bajoInt int64
+		if bajoDe != "0" {
+			bajoInt, err = strconv.ParseInt(bajoDe, 10, 64)
+			if err != nil {
+				jsonError(w, "Destino no válido", 400)
+				return
+			}
+		}
+		primero := bajoInt == 0
+		if !primero && bajoInt == idInt {
+			// Soltarla detrás de sí misma: es un no-op, responder bien.
+			writeJSON(w, map[string]interface{}{"status": 1, "msg": "Orden guardado"})
+			return
+		}
+		resto := make([]int64, 0, len(hermanos)-1)
+		for _, cid := range hermanos {
+			if cid != idInt {
+				resto = append(resto, cid)
+			}
+		}
+			donde := 0 // soltar frente a todo: índice 0
+		if !primero {
+			donde = -1
+			for i, cid := range resto {
+				if cid == bajoInt {
+					donde = i + 1
+					break
+				}
+			}
+			if donde < 0 {
+				jsonError(w, "La categoría de destino no es hermana de la arrastrada", 400)
+				return
+			}
+		}
+		// Insertar en el índice `donde` desplazando la cola (Copy no solapa a
+		// sí hacia delante: por eso el append del hueco va antes del copy).
+		resto = append(resto, 0)
+		copy(resto[donde+1:], resto[donde:])
+		resto[donde] = idInt
+		hermanos = resto
+	} else {
+		// Modo botones: intercambio con el vecino de dir.
+		objetivo := pos - 1
+		if dir == "down" {
+			objetivo = pos + 1
+		}
+		if objetivo < 0 || objetivo >= len(hermanos) {
+			jsonError(w, "Ya está en el extremo de la lista", 400)
+			return
+		}
+		hermanos[pos], hermanos[objetivo] = hermanos[objetivo], hermanos[pos]
+	}
+
+	// Un write por hermano, pero en UNA transacción: o queda el grupo entero
+	// con sus marcas nuevas, o queda como estaba.
+	tx, err := db.Begin()
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	for i, cid := range hermanos {
+		if _, err := tx.Exec(`UPDATE product_category SET sort_order = ? WHERE category_id = ?`, i*10, cid); err != nil {
+			_ = tx.Rollback()
+			jsonError(w, err.Error(), 500)
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Orden guardado"})
 }
 
 // ---------- Units ----------

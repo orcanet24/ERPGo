@@ -451,9 +451,18 @@ func cargarCatalogoCarniceria(s *Server, db *sql.DB, sid string) (int, error) {
 	for id, nombre := range map[string]string{
 		"10": "Carnes rojas", "20": "Carnes blancas", "30": "Menudencias", "40": "Entrada (canales)",
 	} {
-		if _, err := db.Exec(`INSERT INTO product_category (category_id, category_name, status)
-			VALUES (?,?,1) ON DUPLICATE KEY UPDATE category_name=VALUES(category_name)`,
-			id, nombre); err != nil {
+		// El path y el level van DESDE EL INSERT: una categoría sembrada sin
+		// ruta quedaba condenada (el backfill vive dentro de la migración, que
+		// se sella tras aplicarse una vez) y sus hijos nacían con caminos
+		// mochos ('8/9/' en vez de '/8/9/'), lo que burlaba el chequeo de
+		// ciclos y desbarraba el filtrado por rama. Idempotente con lo que ya
+		// exista: el ON DUPLICATE solo refresca el nombre, no toca rutas
+		// establecidas.
+		if _, err := db.Exec(`INSERT INTO product_category
+			(category_id, category_name, status, path, level)
+			VALUES (?,?,1,CONCAT('/',?,'/'),0)
+			ON DUPLICATE KEY UPDATE category_name=VALUES(category_name)`,
+			id, nombre, id); err != nil {
 			return 0, fmt.Errorf("categoría %s: %w", nombre, err)
 		}
 	}
