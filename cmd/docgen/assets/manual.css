@@ -1,0 +1,238 @@
+/* Manual del desarrollador — hoja propia, sin dependencias externas.
+   Sin comillas dobles ni selects con > a propósito: la plantilla lo pasa por
+   el escapador de CSS de html/template y estos caracteres sobreviven mejor
+   sin escapar. */
+
+:root {
+  --fondo: #f6f5f1;
+  --tinta: #1d2530;
+  --tinta-suave: #57616e;
+  --linea: #dcd8cd;
+  --panel: #ffffff;
+  --acento: #0f4c46;
+  --acento-claro: #e2efec;
+  --alarma: #8a3b2e;
+  --ok: #2c6e49;
+  --mono: "JetBrains Mono", Consolas, Menlo, monospace;
+}
+
+html { background: var(--fondo); }
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--tinta);
+  line-height: 1.55;
+}
+
+/* ---------- cabecera ---------- */
+.topbar {
+  background: linear-gradient(120deg, #123d38 0%, #0f4c46 55%, #176b5e 100%);
+  color: #f2efe8;
+  padding: 28px 0 22px;
+  border-bottom: 4px solid #0a2f2b;
+}
+.topbar-inner,
+main, footer.pie {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+.topbar h1 {
+  margin: 0;
+  font-size: 26px;
+  letter-spacing: 0.2px;
+}
+.topbar .meta {
+  margin-top: 6px;
+  font-size: 14px;
+  color: #cfe3de;
+}
+.topbar .badges { margin-top: 14px; }
+.badge {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  font-size: 12.5px;
+  padding: 3px 12px;
+  margin: 2px 6px 2px 0;
+}
+.badge b { font-weight: 600; color: #fff; }
+
+/* ---------- navegación ---------- */
+nav.tabs {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--fondo);
+  border-bottom: 1px solid var(--linea);
+  padding: 10px 24px 0;
+}
+nav.tabs .inner {
+  max-width: 1080px;
+  margin: 0 auto;
+}
+nav.tabs button {
+  appearance: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  color: var(--tinta-suave);
+  padding: 8px 16px;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+}
+nav.tabs button:hover { color: var(--tinta); }
+nav.tabs button.activo {
+  background: var(--panel);
+  border-color: var(--linea);
+  color: var(--acento);
+  font-weight: 600;
+}
+
+/* ---------- secciones ---------- */
+main { padding: 26px 24px 60px; }
+section.vista { animation: sutil 160ms ease-out; }
+
+@keyframes sutil {
+  from { opacity: 0.4; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+h2.tituloV {
+  margin: 26px 0 8px;
+  font-size: 18px;
+  border-left: 4px solid var(--acento);
+  padding-left: 10px;
+}
+p.lema { color: var(--tinta-suave); margin: 2px 0 18px; }
+
+/* ---------- tarjetas ---------- */
+.cards { display: flex; flex-wrap: wrap; gap: 12px; }
+.card {
+  background: var(--panel);
+  border: 1px solid var(--linea);
+  border-radius: 10px;
+  padding: 14px 18px;
+  flex: 1 1 300px;
+}
+.card h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: var(--acento);
+}
+.card p { margin: 6px 0; font-size: 14px; }
+.card ul { margin: 6px 0 0; padding-left: 20px; font-size: 14px; }
+.card.ruta:hover { border-color: var(--acento); }
+
+/* ---------- recorrido guiado y reglas ---------- */
+.paso {
+  display: flex;
+  gap: 14px;
+  margin: 12px 0;
+  background: var(--panel);
+  border: 1px solid var(--linea);
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+.paso .num {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--acento-claro);
+  color: var(--acento);
+  font-weight: 700;
+  text-align: center;
+  line-height: 34px;
+}
+.paso a { color: var(--acento); text-decoration: none; font-weight: 600; }
+
+/* ---------- buscador y archivos ---------- */
+.barra-busqueda {
+  display: flex;
+  gap: 10px;
+  margin: 14px 0;
+  flex-wrap: wrap;
+}
+.barra-busqueda input, .barra-busqueda select {
+  font: inherit;
+  font-size: 14px;
+  padding: 7px 12px;
+  border: 1px solid var(--linea);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.barra-busqueda input { flex: 1 1 260px; }
+
+table.archivos {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border: 1px solid var(--linea);
+  border-radius: 10px;
+  font-size: 13.5px;
+}
+table.archivos th, table.archivos td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--linea);
+}
+table.archivos th {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--tinta-suave);
+}
+table.archivos tr.fila:hover { background: var(--acento-claro); }
+table.archivos tr.fila { cursor: pointer; }
+td.ruta { font-family: var(--mono); font-size: 12.5px; }
+.tag {
+  display: inline-block;
+  font-size: 11px;
+  border-radius: 999px;
+  padding: 1px 9px;
+  border: 1px solid var(--linea);
+  color: var(--tinta-suave);
+}
+.tag.curado { border-color: var(--ok); color: var(--ok); }
+.tag.generado { border-color: var(--alarma); color: var(--alarma); }
+
+/* ---------- detalle de archivo ---------- */
+.detalle {
+  background: var(--panel);
+  border: 1px solid var(--acento);
+  border-radius: 10px;
+  padding: 18px 22px;
+  margin: 18px 0;
+}
+.detalle h3 { margin: 12px 0 8px; font-size: 15px; color: var(--acento); }
+.detalle p, .detalle li { font-size: 14px; }
+.watchout { color: var(--alarma); }
+
+.sig {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  margin: 8px 0 2px;
+}
+.sig b { color: var(--acento); }
+.how-lista { margin: 2px 0 8px; padding-left: 20px; font-size: 13.5px; }
+
+/* ---------- pie ---------- */
+footer.pie {
+  color: var(--tinta-suave);
+  border-top: 1px solid var(--linea);
+  padding-top: 14px;
+  padding-bottom: 40px;
+  font-size: 13px;
+}
+footer.pie code { font-family: var(--mono); font-size: 12.5px; }
+
+.cargando { color: var(--tinta-suave); }
+
+@media (max-width: 700px) {
+  .card { flex: 1 1 100%; }
+  table.archivos td.ruta { word-break: break-all; }
+}

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<style>{{.CSS}}</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div>
+      <h1>{{.Title}}</h1>
+    </div>
+  </div>
+</header>
+
+<!--
+  El JS de abajo NO va inline: se pasa como fuente a new Function para que
+  html/template no lo re-escape (un valor interpolado dentro de un script
+  sale de html/template como un literal de cadena JS, que es lo que new
+  Function espera). El modelo llega por JSON.parse del mismo modo: la
+  salida de {{.JSON}} es o bien una cadena literal (JS) o bien JSON crudo,
+  y JSON.parse funciona con ambas formas por diseño.
+-->
+<main id="app">
+  <noscript>Este manual se renderiza con JavaScript desde un modelo JSON embebido.</noscript>
+  <p class="cargando">Cargando manual…</p>
+</main>
+
+<script>
+(function () {
+  var model = JSON.parse({{.JSON}});
+  (new Function("model", "doc", {{.JS}}))(model, document);
+})();
+</script>
+
+<footer class="pie">
+  Documento embebido: cero peticiones de red. Regenerable de forma
+  determinista con <code>go run ./cmd/docgen</code>.
+</footer>
+</body>
+</html>
