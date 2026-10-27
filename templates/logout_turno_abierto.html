@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="{{.Theme}}" data-density="{{.Density}}">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Turno de caja abierto - {{.AppName}}</title>
+    <meta content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" name="viewport">
+    <link href="/static/css/bootstrap.min.css" rel="stylesheet" type="text/css" />
+    <link href="/static/css/font-awesome.min.css" rel="stylesheet" type="text/css" />
+    <link href="/static/css/custom.min.css" rel="stylesheet" type="text/css" />
+    <link href="/static/css/style.css" rel="stylesheet" type="text/css" />
+    <link href="/static/css/erpgow-tema.css" rel="stylesheet" type="text/css" />
+</head>
+<body class="hold-transition login-page">
+<div class="login-box">
+    <div class="login-logo auth-logo">
+        <a href="/"><b>{{.AppName}}</b></a>
+    </div>
+    <div class="login-box-body auth-box">
+        <p class="login-box-msg auth-msg"><i class="fa fa-clock-o"></i> Tiene un turno de caja abierto</p>
+
+        <div class="alert alert-warning">{{.Texto}}</div>
+
+        <ul class="list-unstyled">
+            {{range .Turnos}}
+            <li style="margin-bottom:6px">
+                <i class="fa fa-clock-o"></i>
+                <strong>{{.Que}}</strong>: abierto a las {{.Desde}} &middot; lleva {{.Duracion}}{{if .Terminal}} &middot; {{.Terminal}}{{end}}
+            </li>
+            {{end}}
+        </ul>
+
+        <p class="help-block">
+            Ciérrelo con su arqueo desde la terminal de caja antes de salir. Si sale ahora,
+            el turno sigue abierto y su tiempo sigue corriendo, y quedará registrado en la
+            auditoría que la sesión se cerró con el turno abierto.
+        </p>
+
+        <div class="row">
+            <div class="col-xs-12" style="margin-bottom:8px">
+                <a href="/" class="btn btn-primary btn-block btn-flat erp-btn-block">Volver y cerrar el turno</a>
+            </div>
+            <div class="col-xs-12">
+                <a href="/logout?forzar=1" class="btn btn-default btn-block btn-flat">Salir de todos modos</a>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="erp-page-footer">
+    ERPGo &copy; <strong>Orcanet1724 C.A</strong> &mdash; Uso libre para el comercio venezolano
+</div>
+<script src="/static/js/jquery-3.4.1.min.js"></script>
+<script src="/static/js/bootstrap.min.js"></script>
+<script src="/static/js/appearance.js"></script>
+</body>
+</html>

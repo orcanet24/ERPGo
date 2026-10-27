@@ -96,7 +96,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 		username := strings.TrimSpace(r.FormValue("username"))
 
-		if loginLimiter.checkRateLimit("user:"+username) {
+		if loginLimiter.checkRateLimit("user:" + username) {
 			s.renderStandalone(r, w, "login.html", map[string]interface{}{
 				"Error": "Demasiados intentos. Espera 15 minutos.",
 			})
@@ -161,7 +161,34 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleLogout destroys the session.
+//
+// NO SE CIERRA EN SILENCIO SI HAY UN TURNO DE CAJA ABIERTO. La sesión se va, el
+// turno se queda: su tiempo sigue corriendo, la caja sigue abierta en el panel
+// del POS y nadie se enteró. Cerrar el turno es un arqueo y no se puede hacer
+// por el usuario —falsearía la prueba—, así que se le dice cuál es, desde cuándo
+// y cuánto lleva, y elige: volver a cerrarlo o salir dejándolo abierto. En ese
+// segundo caso la salida queda en la cadena de auditoría, con los turnos que
+// quedaron abiertos, para que el turno huérfano tenga explicación.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionFromRequest(r)
+
+	var turnos []turnoAbierto
+	if sess != nil {
+		turnos = s.turnosAbiertosDe(sess)
+	}
+	if len(turnos) > 0 && r.URL.Query().Get("forzar") != "1" {
+		s.renderStandalone(r, w, "logout_turno_abierto.html", map[string]interface{}{
+			"Title":  "Turno de caja abierto",
+			"Turnos": turnos,
+			"Texto":  textoDeTurnosAbiertos(turnos),
+		})
+		return
+	}
+	if len(turnos) > 0 {
+		s.appendAudit(r, sess.UserID, clientIP(r), "logout", "Sesión", "web_sessions", "",
+			map[string]interface{}{"salida_con_turno_abierto": turnos}, nil)
+	}
+
 	if cookie, err := r.Cookie("erpgow_session"); err == nil {
 		s.sessions.Delete(cookie.Value)
 	}
@@ -186,7 +213,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		clientIP = host
 	}
 
-	if loginLimiter.checkRateLimit("api:"+clientIP) {
+	if loginLimiter.checkRateLimit("api:" + clientIP) {
 		jsonError(w, "Demasiados intentos. Espera 15 minutos.", http.StatusTooManyRequests)
 		return
 	}
@@ -202,7 +229,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 
 	username := strings.TrimSpace(req.Username)
 
-	if loginLimiter.checkRateLimit("api:user:"+username) {
+	if loginLimiter.checkRateLimit("api:user:" + username) {
 		jsonError(w, "Demasiados intentos. Espera 15 minutos.", http.StatusTooManyRequests)
 		return
 	}
