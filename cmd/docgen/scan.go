@@ -132,6 +132,14 @@ var skipDirs = map[string]bool{
 	"php_original": true, // reference copy of the old PHP tree
 	"data":         true, // runtime database directory
 	"developer":    true, // this manual's own output directory
+	// Copia heredada del árbol de ejecución: repite templates/, static/ e
+	// internal/ archivo por archivo (654 de sus 656 ficheros tienen gemelo, y de
+	// los 2 que no nadie los pide). El binario embebe las carpetas de verdad
+	// (embed.go); documentar la copia sería documentar duplicados.
+	"assets": true,
+	// Material de trabajo suelto: scripts de prueba en Python, capturas y un
+	// HTML generado. No es fuente del producto.
+	"artifacts": true,
 }
 
 var ruleRe = regexp.MustCompile(`\b(?:REG|RULE)-\d{1,2}\b`)

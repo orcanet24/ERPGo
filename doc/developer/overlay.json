@@ -12,7 +12,7 @@
       "summary": "Punto de entrada, configuración, embebido de assets, sesión, autenticación y el registro de rutas que engancha todos los módulos.",
       "responsibilities": [],
       "invariants": [],
-      "paths": ["cmd/", "configs/", "tools/", "embed.go", "go.mod", "go.sum", "iniciar.bat", "instalar.bat", "README.md"],
+      "paths": ["cmd/", "configs/", "tools/", "scripts/", "embed.go", "go.mod", "go.sum", "iniciar.bat", "instalar.bat", "README.md"],
       "files": [
         "interfaces/web/server.go",
         "interfaces/web/session.go",
@@ -33,8 +33,7 @@
       "paths": ["templates/"],
       "files": [
         "interfaces/web/render.go",
-        "interfaces/web/cache.go",
-        "interfaces/web/cache_test.go"
+        "interfaces/web/cache.go"
       ]
     },
     {
@@ -57,7 +56,7 @@
       "summary": "Facturas y POS, cotizaciones, devoluciones, productos, clientes, proveedores, ajustes de inventario y reportes.",
       "responsibilities": [],
       "invariants": [],
-      "paths": ["interfaces/web/"],
+      "paths": ["interfaces/web/", "internal/pos/", "proto/"],
       "files": []
     },
     {
@@ -85,13 +84,12 @@
       "files": [
         "interfaces/web/fiscal.go",
         "interfaces/web/fiscal_settings.go",
-        "interfaces/web/fiscal_test.go",
         "interfaces/web/creditnote.go",
-        "interfaces/web/cashsession.go",
         "interfaces/web/legal_books.go",
         "interfaces/web/kardex.go",
         "interfaces/web/audit_chain.go",
-        "interfaces/web/audit_igtf.go"
+        "interfaces/web/audit_igtf.go",
+        "fiscalprinteradapter/adapter.go"
       ]
     },
     {
@@ -105,7 +103,6 @@
       "files": [
         "interfaces/web/ai.go",
         "interfaces/web/ai_agents.go",
-        "interfaces/web/ai_agents_test.go",
         "interfaces/web/ai_providers.go",
         "interfaces/web/ai_providers_tools.go",
         "interfaces/web/ai_rules.go",
@@ -135,7 +132,28 @@
       "summary": "README, diccionario vivo, bitácoras de migración, planes de producto y guías fiscales.",
       "responsibilities": [],
       "invariants": [],
-      "paths": ["doc/"],
+      "paths": ["doc/", "docs/"],
+      "files": []
+    },
+    {
+      "id": "runtime",
+      "title": "Runtime e instalación",
+      "tagline": "El proceso por dentro: cola de trabajo, orquestador de escrituras, servicio de Windows, instalador y comprobaciones de arranque.",
+      "summary": "Cola de trabajo en segundo plano y puerta única de escritura, alta del binario como servicio de Windows, asistente de instalación, comprobación de esquema y de plantillas, cifrado de las credenciales de cada empresa, logs, subida de archivos y registro del proveedor de emisión digital. Nada de esto se ve en pantalla.",
+      "responsibilities": [],
+      "invariants": [],
+      "paths": [
+        "internal/digitalinvoice/",
+        "internal/logger/",
+        "internal/migrationcheck/",
+        "internal/orchestrator/",
+        "internal/queue/",
+        "internal/security/",
+        "internal/service/",
+        "internal/setup/",
+        "internal/upload/",
+        "internal/webcheck/"
+      ],
       "files": []
     }
   ],
