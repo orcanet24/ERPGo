@@ -157,8 +157,414 @@
       "files": []
     }
   ],
-  "files": {},
-  "funcs": {},
+  "files": {
+    "README.md": {
+      "role": "La carta de presentación del proyecto y, sobre todo, su política de orden y crecimiento: la norma que el propio código repite en los encabezados.",
+      "how": "Cinco reglas no negociables: los datos de los clientes no se tocan, las migraciones son la única vía de cambio, los registros históricos son inmutables, el crecimiento es modular y nada que rompa una base existente se hace.",
+      "relations": "Es el texto que citan cmd/server/main.go y los encabezados de las migraciones como norma superior.",
+      "watchouts": ""
+    },
+    "embed.go": {
+      "role": "El único sitio donde el binario declara qué lleva dentro: templates, static y migrations.",
+      "how": "Tres go:embed y un fs.FS que mira primero el disco (directorio de trabajo y después el del ejecutable) y cae a la copia embebida; los módulos aportan sus propias plantillas y estáticos.",
+      "relations": "Lo consumen el render de páginas, el servidor de estáticos y el runner de migraciones.",
+      "watchouts": "Un go:embed exige que el directorio exista: si falta templates o static, el paquete raíz no compila y con él el repositorio entero."
+    },
+    "cmd/server/main.go": {
+      "role": "El arranque real: lee configuración, abre bases, aplica migraciones y enciende el servidor.",
+      "how": "Pasa por el asistente cuando no hay instalación, abre la base de control y la de cada empresa, arranca como consola o como servicio de Windows y espera señales para apagarse ordenadamente.",
+      "relations": "Es el único main que importa interfaces/web; usa configs, persistence, internal/setup y internal/service.",
+      "watchouts": ""
+    },
+    "configs/config.go": {
+      "role": "Todo lo que el proceso necesita saber de su entorno, resuelto en un solo sitio.",
+      "how": "Lee el archivo .env, aplica valores por defecto, deriva la ruta de datos y sabe escribir el archivo de conexión de una empresa; el secreto de sesión se genera si falta.",
+      "relations": "Lo usan el arranque, el asistente de instalación y toda la capa web, que recibe esta configuración.",
+      "watchouts": ""
+    },
+    "interfaces/web/server.go": {
+      "role": "El servidor web: el mux, los middlewares y el enganche de todas las rutas de la aplicación.",
+      "how": "NewServer arma el mux con plantillas, caché y cola, registra cada módulo por su registerXRoutes y aplica autenticación, CSRF y cabeceras; Start y Shutdown gobiernan el ciclo de vida.",
+      "relations": "Es el punto donde cada módulo deja de ser un archivo aislado y pasa a ser una ruta.",
+      "watchouts": ""
+    },
+    "interfaces/web/session.go": {
+      "role": "Las sesiones de usuario, persistentes y con una caché delante.",
+      "how": "La fila en la base de control es la fuente de verdad; la caché en memoria evita un SELECT por petición y una sesión expirada se detecta por su fecha, no confiando en que alguien limpió la tabla.",
+      "relations": "La lee el middleware del servidor en cada petición; la crean y borran los handlers de acceso.",
+      "watchouts": "La caché solo vale con un proceso escribiendo: con varias instancias haría falta invalidación entre procesos, y eso hoy no existe."
+    },
+    "interfaces/web/handlers.go": {
+      "role": "El acceso al sistema: login, logout y el freno a la fuerza bruta.",
+      "how": "Valida credenciales con bcrypt (y con md5 solo para usuarios migrados), limita los intentos por IP y por usuario y cierra la sesión limpiando caché y fila.",
+      "relations": "Es la puerta de entrada de todo lo demás: sin sesión, el middleware corta.",
+      "watchouts": ""
+    },
+    "interfaces/web/helpers.go": {
+      "role": "Las utilidades pequeñas que casi todo handler usa: fechas, dinero, correlativos y redirecciones.",
+      "how": "Resuelve el ejercicio activo por fechas, toma el máximo de un campo y suma uno para el siguiente número, y normaliza lo que llega de un formulario.",
+      "relations": "Lo llaman facturación, contabilidad y compras.",
+      "watchouts": ""
+    },
+    "interfaces/web/json.go": {
+      "role": "El puente mínimo entre handlers y JSON.",
+      "how": "Serializa sin propagar error y decodifica el cuerpo de una petición.",
+      "relations": "Lo usan los endpoints de datos de las tablas y las respuestas de la IA.",
+      "watchouts": ""
+    },
+    "interfaces/web/md5compat.go": {
+      "role": "La única razón por la que el proyecto mantiene md5: verificar las claves heredadas del SalesERP en PHP.",
+      "how": "Replica en hexadecimal la función md5 de PHP y nada más; las claves nuevas se guardan con bcrypt.",
+      "relations": "Lo usa el acceso cuando la fila del usuario trae un hash antiguo.",
+      "watchouts": "No debe usarse para nada nuevo: existe para que un usuario migrado pueda entrar una vez."
+    },
+    "interfaces/web/dashboard.go": {
+      "role": "La portada: los contadores y el gráfico que resumen el negocio.",
+      "how": "Cuenta clientes, productos, proveedores y facturas con consultas directas y sirve los datos del gráfico.",
+      "relations": "Se apoya en el render de plantillas y en la sesión activa.",
+      "watchouts": ""
+    },
+    "interfaces/web/render.go": {
+      "role": "La pintura de páginas: un solo camino para renderizar y las funciones que las plantillas pueden usar.",
+      "how": "Compila el conjunto de plantillas una vez y lo reutiliza, expone las funciones de plantilla (dinero, versión de assets, imágenes de usuario), comprueba permisos por vista y responde JSON cuando el cliente lo pide.",
+      "relations": "Lo usan todos los handlers con plantilla; depende de embed.go para saber de dónde salen los ficheros.",
+      "watchouts": ""
+    },
+    "interfaces/web/cache.go": {
+      "role": "Evita reenviar estáticos que el navegador ya tiene.",
+      "how": "Construye el validador con la fecha y el tamaño del fichero, sin leer su contenido, y responde 304 cuando coincide; con la copia embebida no lo emite, porque ahí no hay fecha que sirva.",
+      "relations": "Lo usa el servidor de estáticos del servidor web.",
+      "watchouts": ""
+    },
+    "interfaces/web/dialect.go": {
+      "role": "Los pocos puntos donde el SQL necesita una forma concreta según el motor.",
+      "how": "Agrupa fechas, conversión a texto, escrituras idempotentes y el prefijo de INSERT tolerante en funciones pequeñas, en vez de repartir condiciones por los handlers.",
+      "relations": "Lo usan facturación, fiscal y ajustes.",
+      "watchouts": ""
+    },
+    "interfaces/web/database_settings.go": {
+      "role": "La pantalla de base de datos: qué motor, cuántas tablas y filas, cuánto ocupa y un respaldo con un clic.",
+      "how": "Consulta el estado real de la base de la empresa activa, escribe el respaldo en un comprimido y lista los respaldos disponibles.",
+      "relations": "Se apoya en infrastructure/persistence para el volcado y en la configuración para saber a qué base apunta.",
+      "watchouts": ""
+    },
+    "infrastructure/persistence/database.go": {
+      "role": "El runner de migraciones de SQLite y la apertura de la base incrustada.",
+      "how": "Lee los .sql embebidos, lleva un registro con la suma de cada archivo para saber qué se aplicó y qué cambió, tolera los errores de eso ya existía y traduce a SQLite lo que venía escrito para MySQL.",
+      "relations": "Lo llama el arranque; es el hermano de mysql_migrations.go, que hace lo mismo hablando MySQL nativo.",
+      "watchouts": "Un archivo aplicado a medias no se anota: si se anotara, el esquema quedaría incompleto sin que nadie volviera a mirarlo."
+    },
+    "infrastructure/persistence/mysql_migrations.go": {
+      "role": "El mismo runner de migraciones, pero hablando MySQL directamente.",
+      "how": "Manda cada archivo entero en una sola ida y, si falla, lo repite sentencia a sentencia; deja tablas y columnas en la misma intercalación y neutraliza los cambios de juego de caracteres que traen los archivos heredados.",
+      "relations": "Lo usa el arranque cuando el motor es MySQL; comparte el registro de migraciones con database.go.",
+      "watchouts": "La intercalación no es estética: comparar una columna con una expresión de otra intercalación da el error 1267, y ese error aparece usando el ERP, no instalando."
+    },
+    "interfaces/web/invoice.go": {
+      "role": "El módulo de facturación dentro del ERP: listar, crear, editar, borrar y ver facturas, más el catálogo que alimenta al POS.",
+      "how": "Registra sus rutas, guarda la factura con sus líneas, reserva el número fiscal y expone los productos y el catálogo ya ordenados por la jerarquía de categorías.",
+      "relations": "Depende de fiscal para la numeración, de contabilidad para el asiento y del kárdex para el costo de venta.",
+      "watchouts": ""
+    },
+    "interfaces/web/product.go": {
+      "role": "Productos, unidades y el árbol de categorías, que es donde vive la jerarquía del catálogo.",
+      "how": "Guarda dentro de una transacción, construye el árbol a partir del padre con un guardia contra ciclos y reordena las hermanas por posición; el catálogo del POS y el despliegue de servicios salen en ese orden.",
+      "relations": "Lo consumen facturación, compras, inventario y el POS.",
+      "watchouts": ""
+    },
+    "interfaces/web/accounting.go": {
+      "role": "El motor de partida doble: de comprobante pendiente a asiento aprobado.",
+      "how": "Aprobar un comprobante escribe dos filas (la línea y su contrapartida) y actualiza el saldo mensual; revertir deja rastro en vez de borrar.",
+      "relations": "Lo llaman facturación, compras, notas de crédito y pagos; es la razón de que todo movimiento monetario acabe en el mismo sitio.",
+      "watchouts": ""
+    },
+    "interfaces/web/account.go": {
+      "role": "El plan de cuentas y los libros contables vistos desde la web.",
+      "how": "CRUD del árbol de cuentas, comprobantes con sus líneas y los informes de balance, resultados y libro diario.",
+      "relations": "Se apoya en el motor de contabilidad para aprobar y revertir.",
+      "watchouts": ""
+    },
+    "interfaces/web/voucher_extra.go": {
+      "role": "La variante multi-línea del comprobante contable.",
+      "how": "Añade una ruta y el formulario con filas dinámicas, sin tocar el flujo normal de comprobantes.",
+      "relations": "Complementa al módulo de cuentas.",
+      "watchouts": ""
+    },
+    "interfaces/web/fiscal.go": {
+      "role": "El núcleo fiscal venezolano: RIF, series, número de control, IGTF y parámetros del SENIAT.",
+      "how": "Valida RIF y documentos, reserva el consecutivo de cada serie dentro de la transacción de la operación, una sola vez y con reintento ante carrera, y calcula el IGTF.",
+      "relations": "Todo handler fiscal pasa por aquí; facturación y notas de crédito no pueden numerar sin esta reserva.",
+      "watchouts": ""
+    },
+    "interfaces/web/fiscal_settings.go": {
+      "role": "La página donde se configuran las series, el IGTF y los parámetros fiscales.",
+      "how": "Lista, crea y edita series y guarda los ajustes con su validación.",
+      "relations": "Escribe lo que el núcleo fiscal lee al reservar números.",
+      "watchouts": ""
+    },
+    "interfaces/web/creditnote.go": {
+      "role": "Las notas de crédito fiscales: la única forma legítima de corregir una factura.",
+      "how": "Nunca edita ni borra la factura: crea una nota que la referencia, con su propio número de serie y su asiento automático.",
+      "relations": "Depende del núcleo fiscal para el consecutivo y del motor contable para el asiento.",
+      "watchouts": ""
+    },
+    "interfaces/web/legal_books.go": {
+      "role": "Los libros legales: compras, ventas, control de inventario y las retenciones de IVA e ISLR, con su versión imprimible y su archivo de texto.",
+      "how": "Arma cada libro desde los movimientos reales y genera el archivo con el formato que pide la norma.",
+      "relations": "Lee facturas, compras, retenciones y movimientos de inventario; el kárdex es su hermano de inventario.",
+      "watchouts": ""
+    },
+    "interfaces/web/kardex.go": {
+      "role": "El libro de inventario valorizado que exige el Artículo 177 del reglamento del ISLR.",
+      "how": "No tiene tabla propia: se arma leyendo los movimientos reales (compras, devoluciones de venta, ajustes y salidas) y valoriza por costo promedio ponderado.",
+      "relations": "Lo alimentan compras, ventas y ajustes; sus cifras son las que usan los reportes de costo.",
+      "watchouts": "Un libro paralelo que se llenara a mano se desincroniza y deja de servir como prueba."
+    },
+    "interfaces/web/audit_chain.go": {
+      "role": "La pista de auditoría encadenada: cada cambio con su hash y el del registro anterior.",
+      "how": "El middleware anota módulo, tabla, registro, valores e IP; verificar recalcula la cadena y señala el primer registro roto, y el cierre de período sella bloques.",
+      "relations": "Lo alimentan todos los handlers que escriben y el propio subsistema de agentes IA.",
+      "watchouts": "La tabla es de solo añadir: un UPDATE o un DELETE rompe toda la cadena posterior."
+    },
+    "interfaces/web/audit_igtf.go": {
+      "role": "El IGTF, la tasa de cambio y la diferencia cambiaria.",
+      "how": "Calcula el tres por ciento sobre pagos en divisas, guarda y sirve la tasa y firma con HMAC los datos que se quieren verificar.",
+      "relations": "Lo usan facturación y caja al cobrar en divisas.",
+      "watchouts": ""
+    },
+    "fiscalprinteradapter/adapter.go": {
+      "role": "El contrato público con las impresoras fiscales, para que el POS lo use sin importar paquetes internos.",
+      "how": "Define las operaciones que debe implementar una impresora (abrir, facturar, subtotal, cobrar, informes X y Z, gaveta, corte) y entrega un driver vacío cuando no hay ninguna.",
+      "relations": "Lo consume el POS, que así queda aislado de las tripas del ERP.",
+      "watchouts": ""
+    },
+    "interfaces/web/ai.go": {
+      "role": "El analista de negocio tal como lo ve el usuario: ajustes, informes por tipo y resúmenes.",
+      "how": "Carga el ajuste activo, envuelve la respuesta del modelo en un sobre que se puede leer, arma los datos del gráfico y sirve los resúmenes de ventas, compras, devoluciones y stock.",
+      "relations": "Se apoya en los proveedores para hablar con el modelo y en las reglas para lo que no se negocia.",
+      "watchouts": ""
+    },
+    "interfaces/web/ai_agents.go": {
+      "role": "Los agentes IA como usuarios reales del sistema: rol de permisos normal y proveedor de la lista blanca.",
+      "how": "Crea el usuario, su rol y su secreto, y escribe auditoría marcando el origen como ia; el resto es altas, bajas y cambios.",
+      "relations": "Los usan las tareas para ejecutar y la pista de auditoría para dejar constancia.",
+      "watchouts": ""
+    },
+    "interfaces/web/ai_providers.go": {
+      "role": "Los proveedores de modelo: cuál está activo y cómo se le habla.",
+      "how": "Valida la dirección del proveedor, arma la petición de conversación, cuenta los tokens usados y traduce los errores a algo legible.",
+      "relations": "Es el único sitio que sale a Internet; lo usan el analista, los agentes y los informes.",
+      "watchouts": ""
+    },
+    "interfaces/web/ai_rules.go": {
+      "role": "El núcleo de seguridad de la IA, compilado en el binario y fuera del alcance del administrador.",
+      "how": "Antepone las reglas del sistema a todo prompt, exige que el SQL sea una sola consulta de lectura, quita comentarios y literales antes de mirarlo y fuerza el límite de filas.",
+      "relations": "Lo aplican proveedores, tareas e informes: ningún camino que hable con el modelo lo evita.",
+      "watchouts": "Estas reglas no viven en la base de datos a propósito: si fueran editables desde la interfaz dejarían de ser una frontera."
+    },
+    "interfaces/web/ai_schema_catalog.go": {
+      "role": "El mapa de la base que se le puede contar al modelo.",
+      "how": "Dos capas: la lista blanca y las relaciones escritas a mano (conocimiento de negocio) y la estructura que se lee del servidor por introspección; lo que no está en la lista no se envía.",
+      "relations": "Lo usan las herramientas del agente y el analista.",
+      "watchouts": ""
+    },
+    "interfaces/web/ai_tasks.go": {
+      "role": "Las tareas programadas de un agente: instrucción, horario y bitácora.",
+      "how": "El runner ejecuta el bucle de modelo y herramientas con límites, guarda cada paso, el informe final y el diario que permite deshacer.",
+      "relations": "Llama a las herramientas para ejecutar y a los proveedores para conversar.",
+      "watchouts": ""
+    },
+    "interfaces/web/ai_tools.go": {
+      "role": "El catálogo de herramientas del agente: el modelo propone, el servidor decide.",
+      "how": "Cada herramienta (consulta, borrador de factura, asiento, pago, plantilla) se declara con sus parámetros, se valida contra el rol del agente antes de ejecutarse y deja anotado qué haría falta para deshacerla.",
+      "relations": "Lo invocan las tareas; escribe con las mismas reglas que un usuario humano.",
+      "watchouts": "Una herramienta que no está en el catálogo no existe para el modelo, aunque la pida."
+    },
+    "interfaces/web/ai_reports.go": {
+      "role": "Los informes por plantilla: los crean usuarios y agentes, y todos pasan por el guardián.",
+      "how": "Valida la definición (columnas, origen, filtros, formato), la ejecuta con el guardián de consultas delante y sabe exportarla.",
+      "relations": "Comparte ejecución con las herramientas del agente y con el motor de reportes.",
+      "watchouts": ""
+    },
+    "interfaces/web/user.go": {
+      "role": "Usuarios y roles: quién entra y qué puede hacer.",
+      "how": "Altas, bajas y cambios de usuarios y de roles con sus permisos, cambio de contraseña, foto de perfil y el enlace entre un usuario y su agente IA cuando lo tiene.",
+      "relations": "Sus permisos son los que consulta el render para decidir qué se pinta.",
+      "watchouts": ""
+    },
+    "interfaces/web/setting.go": {
+      "role": "Los ajustes de la aplicación, los datos de la empresa, las monedas y los respaldos.",
+      "how": "Guarda ajustes, sube y sirve imágenes resolviendo si están en disco o embebidas, gestiona monedas y lanza respaldos.",
+      "relations": "Se apoya en embed.go para servir imágenes y en persistence para el respaldo.",
+      "watchouts": ""
+    },
+    "internal/queue/queue.go": {
+      "role": "El motor de trabajo en segundo plano: informes, IA y cierres sin bloquear al usuario.",
+      "how": "Pool fijo de workers, frenado del productor cuando la cola se llena, tareas persistidas en la tabla queue_tasks y cotas de tiempo y filas por tarea.",
+      "relations": "Lo arranca el servidor; las herramientas de IA y los informes encolan en él.",
+      "watchouts": ""
+    },
+    "internal/orchestrator/orchestrator.go": {
+      "role": "La puerta única por la que debería pasar toda escritura, con auditoría obligatoria.",
+      "how": "Ordena las entradas, las aplica con reintentos y deja el correlativo y el hash de auditoría; nunca rechaza trabajo, frena al productor si la cola se llena.",
+      "relations": "Se apoya en la cola y en la pista de auditoría; hoy convive con handlers que todavía escriben por su cuenta.",
+      "watchouts": ""
+    },
+    "internal/service/service.go": {
+      "role": "Que el mismo binario corra como consola o como servicio de Windows.",
+      "how": "Implementa el saludo con el gestor de servicios en pocos segundos y arranca o detiene la aplicación de forma ordenada.",
+      "relations": "Lo usa el arranque del servidor.",
+      "watchouts": "Registrar el ejecutable con las herramientas de Windows no basta: sin este protocolo, Windows devuelve el error 1053 al arrancar."
+    },
+    "internal/setup/wizard.go": {
+      "role": "El asistente de instalación: de cero a empresa funcionando sin tocar SQL.",
+      "how": "Pregunta por empresa, RIF y puertos, valida formatos, crea la base y su administrador, escribe el archivo de la empresa y sabe entrar en modo mantenimiento; incluye el alta de una empresa de demostración.",
+      "relations": "Lo invoca el arranque cuando no hay instalación; usa configs y persistence.",
+      "watchouts": ""
+    }
+  },
+  "funcs": {
+    "cmd/server/main.go#main": {
+      "what": "El arranque completo en un sitio: configuración, bases, migraciones, servidor y apagado ordenado.",
+      "how": ["Resuelve la configuración y la ruta de datos.", "Abre la base de control y las de cada empresa.", "Aplica las migraciones y arranca el servidor, como consola o como servicio."],
+      "relations": "Es el único sitio que importa la capa web."
+    },
+    "embed.go#Templates": {
+      "what": "Da acceso al árbol de plantillas con el disco por delante.",
+      "how": ["Busca primero en disco (directorio de trabajo y carpeta del ejecutable).", "Si no está, sirve la copia embebida."],
+      "relations": "Lo usa el render de páginas."
+    },
+    "interfaces/web/server.go#NewServer": {
+      "what": "Arma el servidor completo: mux, plantillas, caché, cola y todas las rutas.",
+      "how": ["Prepara las dependencias: configuración, plantillas, caché y cola.", "Registra cada módulo por la función que declara sus rutas.", "Envuelve el mux con los middlewares de sesión, CSRF y estáticos."],
+      "relations": "Es el sitio donde cada archivo de módulo queda conectado a una URL."
+    },
+    "interfaces/web/server.go#Server.authMiddleware": {
+      "what": "Corta la petición si no hay sesión válida y deja el usuario disponible para el handler.",
+      "how": ["Lee la sesión de la petición.", "Si no hay o expiró, redirige al acceso o responde 401 cuando es una llamada de datos."],
+      "relations": "Envuelve todas las rutas salvo las públicas y el propio acceso."
+    },
+    "interfaces/web/session.go#SessionStore.Get": {
+      "what": "Devuelve la sesión sin consultar la base en cada petición.",
+      "how": ["Busca en la caché en memoria.", "Si no está, lee la fila, comprueba la expiración y la descarta si ya venció."],
+      "relations": "Lo llama el middleware en cada petición."
+    },
+    "interfaces/web/handlers.go#Server.handleLogin": {
+      "what": "Valida credenciales, frena la fuerza bruta y abre la sesión.",
+      "how": ["Comprueba el límite de intentos por IP y por usuario.", "Verifica la clave (bcrypt, o md5 para usuarios migrados) y crea la sesión.", "Anota el intento fallido cuando no coincide."],
+      "relations": "Es el único camino hacia una sesión."
+    },
+    "interfaces/web/render.go#Server.render": {
+      "what": "Pinta una página con sus datos y sus permisos.",
+      "how": ["Usa el conjunto de plantillas ya compilado.", "Mezcla los datos comunes (sesión, ajustes, permisos) con los del handler."],
+      "relations": "Es el camino único por el que salen las páginas HTML."
+    },
+    "interfaces/web/render.go#templateFuncs": {
+      "what": "Declara lo que una plantilla puede llamar.",
+      "how": [],
+      "relations": "Cualquier plantilla que formatee dinero o referencie un estático depende de esto."
+    },
+    "interfaces/web/invoice.go#Server.invoiceSave": {
+      "what": "Guarda la factura con sus líneas y deja el rastro fiscal y contable.",
+      "how": ["Reserva el número de la serie fiscal.", "Escribe cabecera y líneas dentro de una transacción.", "Genera el asiento y el movimiento de inventario."],
+      "relations": "Coordina el núcleo fiscal, el motor contable y el kárdex."
+    },
+    "interfaces/web/product.go#Server.categorySave": {
+      "what": "Crea o mueve una categoría manteniendo el árbol coherente.",
+      "how": ["Guarda el padre y recalcula el camino y el nivel.", "Todo dentro de una transacción."],
+      "relations": "Es lo que sostiene el orden del catálogo del POS."
+    },
+    "interfaces/web/product.go#Server.categoryReorder": {
+      "what": "Reordena categorías hermanas, desde los botones o arrastrando una fila.",
+      "how": ["Re-marca la posición de todas las hermanas en una sola transacción.", "Solo toca el orden: no cambia padre, camino ni nivel."],
+      "relations": "El catálogo del POS sale en el orden que deja esto."
+    },
+    "interfaces/web/product.go#construirArbol": {
+      "what": "Convierte filas planas en el árbol de categorías que ve el usuario.",
+      "how": ["Anida por el padre.", "Sube a raíz los huérfanos y no sigue un ciclo si un padre acaba apuntándose a sí mismo."],
+      "relations": "Lo usan la tabla de categorías y el catálogo del POS."
+    },
+    "interfaces/web/accounting.go#Server.approveVoucher": {
+      "what": "Publica un comprobante: el momento en que la operación entra en la contabilidad.",
+      "how": ["Escribe la línea y su contrapartida.", "Actualiza el saldo mensual.", "Marca el comprobante como aprobado."],
+      "relations": "Lo llaman facturación, compras, notas de crédito y pagos."
+    },
+    "interfaces/web/fiscal.go#Server.nextFiscalDoc": {
+      "what": "Entrega el siguiente número de una serie fiscal, una sola vez y sin huecos.",
+      "how": ["Reserva el consecutivo dentro de la transacción de la operación.", "Reintenta si otro lo tomó a la vez."],
+      "relations": "Facturación y notas de crédito no pueden numerar sin pasar por aquí."
+    },
+    "interfaces/web/kardex.go#Server.kardexData": {
+      "what": "Arma el libro de inventario valorizado.",
+      "how": ["Lee los movimientos reales del rango pedido.", "Valoriza por costo promedio ponderado y calcula los saldos."],
+      "relations": "Compras, ventas y ajustes son su entrada."
+    },
+    "interfaces/web/audit_chain.go#Server.appendAudit": {
+      "what": "Deja constancia de un cambio con su hash encadenado.",
+      "how": ["Calcula el hash a partir del registro anterior.", "Inserta la fila sin modificar nada de lo ya escrito."],
+      "relations": "Lo usan los handlers que escriben y los agentes IA."
+    },
+    "interfaces/web/audit_chain.go#Server.auditLogVerify": {
+      "what": "Recalcula la cadena y dice dónde se rompió.",
+      "how": ["Recorre los registros en orden recalculando cada hash.", "Marca el primero que no cuadra."],
+      "relations": "Es lo que convierte la auditoría en prueba."
+    },
+    "interfaces/web/ai_rules.go#aiValidateSQLSelect": {
+      "what": "Lo que impide que una consulta de la IA sea algo más que una lectura.",
+      "how": ["Quita comentarios y literales, que es donde se esconden las trampas.", "Exige una sola consulta de selección y rechaza lo demás.", "Fuerza el límite de filas."],
+      "relations": "Se interpone entre el modelo y la base en informes y herramientas."
+    },
+    "interfaces/web/ai_providers.go#callChatCompletion": {
+      "what": "La única salida a Internet: una llamada de conversación al proveedor activo.",
+      "how": ["Arma la petición con el proveedor activo.", "Cuenta los tokens usados y traduce el error si falla."],
+      "relations": "Lo usan el analista, los agentes y los informes."
+    },
+    "interfaces/web/ai_tools.go#Server.aiDispatchTool": {
+      "what": "Ejecuta la herramienta que pidió el modelo, si su rol la permite.",
+      "how": ["Comprueba que la herramienta exista y que el agente pueda usarla.", "Valida los parámetros y la ejecuta.", "Anota en el diario qué hace falta para deshacerlo."],
+      "relations": "Es el punto donde la propuesta del modelo se convierte en escritura real o en nada."
+    },
+    "interfaces/web/ai_tasks.go#Server.aiRunLoop": {
+      "what": "El bucle que convierte una instrucción en pasos, con límites.",
+      "how": ["Pide al modelo el siguiente paso.", "Ejecuta la herramienta y guarda el resultado.", "Corta por número de pasos o por tiempo."],
+      "relations": "Termina siempre en el despachador de herramientas."
+    },
+    "interfaces/web/ai_tasks.go#Server.aiTaskUndo": {
+      "what": "Deshace lo que hizo una ejecución, con su diario como guía.",
+      "how": ["Lee el diario de la ejecución.", "Aplica las reversiones en orden inverso."],
+      "relations": "Comparte mecanismos con el deshacer de las herramientas."
+    },
+    "interfaces/web/user.go#Server.userSave": {
+      "what": "Crea o actualiza un usuario, su rol y el agente IA que le toque.",
+      "how": ["Guarda el usuario.", "Asigna el rol y ajusta el agente asociado."],
+      "relations": "Los permisos que deja aquí son los que después consulta el render."
+    },
+    "interfaces/web/setting.go#Server.settingSave": {
+      "what": "Guarda los ajustes de la aplicación.",
+      "how": [],
+      "relations": "De aquí salen los valores que el render mezcla en cada página."
+    },
+    "interfaces/web/database_settings.go#Server.databaseBackup": {
+      "what": "Respalda la base de la empresa activa con un clic.",
+      "how": ["Vuelca la base.", "Escribe el comprimido y lo deja listado entre los respaldos."],
+      "relations": "Se apoya en el volcado de la capa de persistencia."
+    },
+    "infrastructure/persistence/database.go#RunMigrationsFor": {
+      "what": "Aplica los .sql embebidos sobre la base que toque, sin repetir trabajo.",
+      "how": ["Compara la suma de cada archivo con lo registrado.", "Aplica solo lo nuevo o lo que cambió.", "Anota lo aplicado."],
+      "relations": "Lo llama el arranque en cada inicio."
+    },
+    "internal/queue/queue.go#Queue.Enqueue": {
+      "what": "Mete una tarea en la cola sin perderla.",
+      "how": ["Frena al productor si la cola está llena, en vez de rechazarle el trabajo.", "Persiste la tarea para que un reinicio no la borre.", "Despierta a los workers."],
+      "relations": "Lo usan los informes, la IA y los cierres."
+    },
+    "internal/orchestrator/orchestrator.go#Orquestador.Submit": {
+      "what": "Mete una escritura por la puerta única y espera su resultado.",
+      "how": ["Encola la entrada con su orden.", "Espera a que el escritor la aplique o la reporte fallida."],
+      "relations": "Es la alternativa al handler que escribe por su cuenta."
+    }
+  },
   "types": {},
   "rules": [],
   "tours": []
