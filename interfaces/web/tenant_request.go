@@ -35,6 +35,16 @@ type scope struct {
 	tenant   string
 	db       *sql.DB
 	settings *AppSettings
+
+	// sess es la identidad de una petición INTERNA (la capa de IA, el
+	// semillero, las llamadas entre handlers). Una petición así no trae cookie
+	// —no hay navegador— y por tanto sessionFromRequest no tenía de dónde
+	// sacar quién actúa: los handlers internos se ejecutaban como el usuario
+	// "1" y la comprobación de permisos del rol no se podía hacer.
+	//
+	// Vacío significa "no hay identidad interna": la petición viene del
+	// navegador y la sesión se lee de su cookie, como siempre.
+	sess *SessionData
 }
 
 type scopeKey struct{}
@@ -118,6 +128,7 @@ func (s *Server) requestForSession(sess *SessionData) *http.Request {
 		tenant:   tenant,
 		db:       s.dbForTenant(tenant),
 		settings: s.settingsOfTenant(tenant),
+		sess:     sess,
 	})
 	return r
 }

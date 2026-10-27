@@ -260,6 +260,13 @@ func (s *Server) sessionFromRequest(r *http.Request) *SessionData {
 	if r == nil {
 		return nil
 	}
+	// Una petición interna (la IA, el semillero de una empresa de prueba) no
+	// trae cookie: su identidad viaja en el ámbito de la petición. Sin esto,
+	// una compra cargada por un agente se registraba como del usuario "1" y su
+	// rol nunca se consultaba.
+	if sc := scopeOf(r); sc != nil && sc.sess != nil {
+		return sc.sess
+	}
 	cookie, err := r.Cookie("erpgow_session")
 	if err != nil {
 		return nil

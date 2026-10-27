@@ -107,6 +107,18 @@ type aiToolDef struct {
 	// está disponible. Declarar antes de implementar es lo que permite que la
 	// gobernanza exista para herramientas futuras sin abrirle la puerta antes.
 	Run func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (string, error)
+
+	// Perm es el permiso de la MATRIZ DE ROLES (sub_module.directory) que el rol
+	// del agente tiene que tener para que la herramienta se ejecute. Es el
+	// Nivel 2: el interruptor de operador dice "este agente puede operar"; este
+	// campo dice "puede operar ESTO", con la misma tabla que limita a un
+	// empleado en la interfaz (role_permission).
+	//
+	// Vacío significa "sin comprobación de rol": las herramientas de lectura y
+	// las que existían antes de que el Nivel 2 se declarara aquí. Se deja vacío
+	// a propósito en lo ya existente para no cambiar, de un día para otro, lo
+	// que un agente ya podía hacer.
+	Perm string
 }
 
 // aiToolRegistry es la fuente de verdad del catálogo de herramientas. Agregar
@@ -319,6 +331,11 @@ var aiToolRegistry = []aiToolDef{
 	// (Run = nil). Declararlas por adelantado es lo que permite que el Nivel 1
 	// las proteja desde el día en que se implementen, sin una ventana en la que
 	// queden sin clasificar. No se anuncian al modelo (ver aiCatalogForPhase).
+	//
+	// supplier.upsert y product.upsert YA están implementadas (ver
+	// ai_tools_compras.go) y por eso se anuncian al modelo: son las que permiten
+	// que un agente cargue una compra de un proveedor y de artículos que todavía
+	// no están en el sistema, igual que hace el operador desde el formulario.
 	{
 		Name:         "invoice.anull",
 		Description:  "Anula una factura mediante nota de crédito.",
@@ -341,18 +358,68 @@ var aiToolRegistry = []aiToolDef{
 		Parameters:   aiParameterSchema(map[string]interface{}{"customer_id": map[string]string{"type": "integer"}, "name": map[string]string{"type": "string"}}, "name"),
 	},
 	{
-		Name:         "supplier.upsert",
-		Description:  "Crea o actualiza un proveedor.",
+		Name: "supplier.upsert",
+		Description: "Crea un proveedor o devuelve el que ya existe (por RIF o nombre). " +
+			"Úselo antes de registrar una compra de un proveedor que no está en el sistema.",
 		Risk:         RiskDraft,
 		OperatorOnly: true,
-		Parameters:   aiParameterSchema(map[string]interface{}{"supplier_id": map[string]string{"type": "integer"}, "name": map[string]string{"type": "string"}}, "name"),
+		Perm:         "add_supplier",
+		Parameters: aiParameterSchema(map[string]interface{}{
+			"supplier_id": map[string]string{"type": "integer", "description": "ID del proveedor a actualizar. Omitir para crear."},
+			"name":        map[string]string{"type": "string", "description": "Razón social del proveedor."},
+			"rif":         map[string]string{"type": "string", "description": "RIF venezolano, ej. J-12345678-9 (obligatorio para el libro de compras)."},
+			"mobile":      map[string]string{"type": "string", "description": "Teléfono."},
+			"email":       map[string]string{"type": "string", "description": "Correo."},
+			"address":     map[string]string{"type": "string", "description": "Dirección."},
+			"city":        map[string]string{"type": "string", "description": "Ciudad."},
+		}, "name"),
+		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (string, error) {
+			return s.aiToolSupplierUpsert(sess, agent, args, journal)
+		},
 	},
 	{
-		Name:         "product.upsert",
-		Description:  "Crea o actualiza un producto en el catálogo.",
+		Name: "product.upsert",
+		Description: "Da de alta un producto en el catálogo o devuelve el que ya existe (por código de barras o " +
+			"nombre+modelo). Úselo para los artículos de una compra que todavía no están cargados.",
 		Risk:         RiskDraft,
 		OperatorOnly: true,
-		Parameters:   aiParameterSchema(map[string]interface{}{"product_id": map[string]string{"type": "integer"}, "name": map[string]string{"type": "string"}}, "name"),
+		Perm:         "create_product",
+		Parameters: aiParameterSchema(map[string]interface{}{
+			"product_id":    map[string]string{"type": "string", "description": "ID del producto a actualizar. Omitir para crear."},
+			"name":          map[string]string{"type": "string", "description": "Nombre del producto."},
+			"product_model": map[string]string{"type": "string", "description": "Modelo o presentación."},
+			"barcode":       map[string]string{"type": "string", "description": "Código de barras (EAN/Code128). Es la identidad del artículo."},
+			"unit":          map[string]string{"type": "string", "description": "Unidad de medida."},
+			"price":         map[string]string{"type": "number", "description": "Precio de venta."},
+			"product_vat":   map[string]string{"type": "number", "description": "IVA en porcentaje."},
+		}, "name"),
+		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (string, error) {
+			return s.aiToolProductUpsert(sess, agent, args, journal)
+		},
+	},
+	{
+		Name: "purchase.create",
+		Description: "Registra una compra completa —cabeza, renglones con lote y vencimiento, y su asiento contable— " +
+			"por el mismo camino que el formulario del sistema. Los productos que falten se pueden dar de alta " +
+			"en la misma llamada. Devuelve la alerta de variación de precio frente a la última compra.",
+		Risk:         RiskExecute,
+		OperatorOnly: true,
+		Perm:         "add_purchase",
+		Parameters: aiParameterSchema(map[string]interface{}{
+			"supplier_id":   map[string]string{"type": "integer", "description": "ID del proveedor."},
+			"supplier_name": map[string]string{"type": "string", "description": "Nombre del proveedor si no se conoce el ID: se busca y, si no existe, se crea."},
+			"supplier_rif":  map[string]string{"type": "string", "description": "RIF del proveedor (necesario si hay que crearlo)."},
+			"date":          map[string]string{"type": "string", "description": "Fecha de la compra AAAA-MM-DD. Por omisión, hoy."},
+			"chalan_no":     map[string]string{"type": "string", "description": "N° de factura del proveedor."},
+			"control_no":    map[string]string{"type": "string", "description": "N° de control fiscal."},
+			"details":       map[string]string{"type": "string", "description": "Observaciones."},
+			"discount":      map[string]string{"type": "number", "description": "Descuento global de la compra."},
+			"items":         map[string]interface{}{"type": "array", "description": "Renglones: product_id o barcode o name, quantity, rate, batch_no, expiry_date, discount_per, vat_per."},
+			"payments":      map[string]interface{}{"type": "array", "description": "Pagos: method_id (payment_method.id) y amount. Sin pagos, la compra queda a crédito."},
+		}, "items"),
+		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (string, error) {
+			return s.aiToolPurchaseCreate(sess, agent, args, journal)
+		},
 	},
 	{
 		Name:         "payment.create",
@@ -570,6 +637,18 @@ func (s *Server) aiDispatchTool(sess *SessionData, agent aiAgent, p aiToolPayloa
 	// aprobación humana aunque el agente tenga permisos de operador.
 	if verdict.NeedsHuman && journal != nil {
 		journal.needsHuman = true
+	}
+
+	// NIVEL 2: el permiso del ROL del agente. Sin esto, "modo operador activo"
+	// era la única puerta y un agente de compras podía cobrar facturas o mover
+	// dinero con tal de que alguien hubiera marcado su casilla de operador.
+	if motivo := s.aiPermisoDenegado(sess, agent, p.Name); motivo != "" {
+		return string(mustJSON(aiToolBlocked{
+			Error:   motivo,
+			Blocked: true,
+			Rule:    "nivel-2",
+			Tool:    p.Name,
+		})), nil
 	}
 
 	// La ejecución sale del MISMO registro que el guardián acaba de consultar, así

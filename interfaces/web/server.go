@@ -352,6 +352,7 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	s.registerSupplierRoutes()
 	// Products, categories, units
 	s.registerProductRoutes()
+	s.registerEntradaRapidaRoutes()
 	// Purchases
 	s.registerPurchaseRoutes()
 	// Invoices + POS

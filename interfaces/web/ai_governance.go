@@ -154,6 +154,7 @@ func isWriteIntent(toolName string) bool {
 		strings.HasPrefix(toolName, "product."),
 		strings.HasPrefix(toolName, "payroll."),
 		strings.HasPrefix(toolName, "payment."),
+		strings.HasPrefix(toolName, "purchase."),
 		strings.HasPrefix(toolName, "voucher."),
 		strings.HasPrefix(toolName, "invoice.anull"):
 		return true

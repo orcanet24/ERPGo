@@ -10,7 +10,14 @@
                 <div class="col-md-4">
                     <div class="form-group">
                         <label for="supplier_id">Proveedor <span class="text-danger">*</span></label>
-                        <select class="form-control" id="supplier_id" name="supplier_id" required style="width:100%"></select>
+                        <div class="input-group">
+                            <select class="form-control" id="supplier_id" name="supplier_id" required style="width:100%"></select>
+                            <span class="input-group-btn">
+                                <button type="button" class="btn btn-success" id="btnNuevoProv"
+                                        title="Crear un proveedor nuevo"><i class="fa fa-plus"></i></button>
+                            </span>
+                        </div>
+                        <small class="help-block">Si no está en la lista, créelo aquí: queda seleccionado en esta compra.</small>
                     </div>
                 </div>
                 <div class="col-md-2">
@@ -44,7 +51,7 @@
                 <table class="table table-striped table-bordered" id="itemsTable">
                     <thead>
                         <tr>
-                            <th style="min-width:220px">Producto</th>
+                            <th style="min-width:300px">Producto</th>
                             <th style="width:80px">Stock</th>
                             <th style="width:80px">Cant.</th>
                             <th style="width:90px">Precio</th>
@@ -62,6 +69,10 @@
                 </table>
             </div>
             <button type="button" class="btn btn-success" id="addRow"><i class="fa fa-plus"></i> Añadir Producto</button>
+            <p class="help-block">
+                Escriba para buscar por nombre, modelo o código de barras. La lupa abre el catálogo con fotos
+                y el botón verde permite dar de alta un producto nuevo sin salir de la compra.
+            </p>
 
             <div class="row" style="margin-top:15px">
                 <div class="col-md-5 col-md-offset-7">
@@ -131,6 +142,131 @@
         </div>
     </div>
 </form>
+
+<!-- Catálogo visual: se abre con la lupa de una fila -->
+<div class="modal fade" id="catalogoProductos" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Cerrar">&times;</button>
+                <h4 class="modal-title"><i class="fa fa-search"></i> Catálogo de productos</h4>
+            </div>
+            <div class="modal-body">
+                <div class="input-group" style="margin-bottom:10px">
+                    <input type="text" class="form-control" id="catBuscar"
+                           placeholder="Buscar por nombre, modelo, código de barras o categoría...">
+                    <span class="input-group-btn">
+                        <button type="button" class="btn btn-primary" id="catBuscarBtn"><i class="fa fa-search"></i></button>
+                    </span>
+                </div>
+                <div id="catLista" class="row" style="max-height:430px;overflow-y:auto"></div>
+            </div>
+            <div class="modal-footer">
+                <span class="pull-left text-muted"><small>Se muestra el precio de venta y el costo de la última compra.</small></span>
+                <button type="button" class="btn btn-default" data-dismiss="modal">Cerrar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Alta rápida de producto -->
+<div class="modal fade" id="nuevoProducto" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Cerrar">&times;</button>
+                <h4 class="modal-title"><i class="fa fa-cube"></i> Producto nuevo</h4>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="np_nombre">Nombre <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="np_nombre">
+                </div>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="np_modelo">Modelo / presentación</label>
+                            <input type="text" class="form-control" id="np_modelo">
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="np_unidad">Unidad</label>
+                            <input type="text" class="form-control" id="np_unidad" placeholder="Ej: kg, unidad">
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="np_codigo">Código de barras</label>
+                            <input type="text" class="form-control" id="np_codigo">
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="np_precio">Precio de venta</label>
+                            <input type="text" class="form-control text-right" id="np_precio" placeholder="0.00">
+                        </div>
+                    </div>
+                </div>
+                <p class="help-block">
+                    El costo de esta compra queda registrado en el renglón; el precio de venta se define aquí
+                    porque el sistema no lo puede deducir de una compra.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="npGuardar">Crear y usar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Alta rápida de proveedor -->
+<div class="modal fade" id="nuevoProveedor" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Cerrar">&times;</button>
+                <h4 class="modal-title"><i class="fa fa-truck"></i> Proveedor nuevo</h4>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="npv_nombre">Nombre / razón social <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="npv_nombre">
+                </div>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="npv_rif">RIF</label>
+                            <input type="text" class="form-control" id="npv_rif" placeholder="J-12345678-9">
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="npv_movil">Teléfono</label>
+                            <input type="text" class="form-control" id="npv_movil">
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="npv_email">Correo</label>
+                    <input type="email" class="form-control" id="npv_email">
+                </div>
+                <div class="form-group">
+                    <label for="npv_direccion">Dirección</label>
+                    <input type="text" class="form-control" id="npv_direccion">
+                </div>
+                <p class="help-block">El RIF es obligatorio para el libro de compras con crédito fiscal.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="npvGuardar">Crear y seleccionar</button>
+            </div>
+        </div>
+    </div>
+</div>
 {{end}}
 
 {{define "pagejs"}}
@@ -138,6 +274,12 @@
 var methods = [];
 var rowSeq = 0;
 var paySeq = 0;
+// Fila destino del catálogo y de las altas rápidas.
+var pickerRow = null;
+// Reintentos de envío tras dar de alta el producto que faltaba.
+var autoIntentos = 0;
+var enviando = false;
+var catProductos = [];
 
 // ---------- product rows ----------
 function itemRow(preset) {
@@ -145,8 +287,15 @@ function itemRow(preset) {
     var i = ++rowSeq;
     var html =
         '<tr class="item-row" data-sl="' + i + '">' +
-        '<td><input type="text" class="form-control pname" placeholder="Escriba para buscar..." autocomplete="off">' +
-            '<input type="hidden" class="form-control" name="product_id" value="' + (preset.pid || '') + '"></td>' +
+        '<td><div class="input-group">' +
+            '<input type="text" class="form-control pname" placeholder="Nombre, modelo o código..." autocomplete="off">' +
+            '<span class="input-group-btn">' +
+                '<button type="button" class="btn btn-default btn-picker" title="Ver catálogo con fotos"><i class="fa fa-search"></i></button>' +
+                '<button type="button" class="btn btn-success btn-nuevo-prod" title="Crear producto nuevo"><i class="fa fa-plus"></i></button>' +
+            '</span>' +
+        '</div>' +
+        '<input type="hidden" name="product_id" value="' + (preset.pid || '') + '">' +
+        '<small class="aviso-precio" style="display:none"></small></td>' +
         '<td><input type="text" class="form-control text-right pstock" value="' + (preset.stock != null ? preset.stock : '') + '" readonly></td>' +
         '<td><input type="text" class="form-control text-right pqty" name="product_quantity" value="' + (preset.qty || 1) + '"></td>' +
         '<td><input type="text" class="form-control text-right prate" name="product_rate" value="' + (preset.rate || '0.00') + '"></td>' +
@@ -173,18 +322,62 @@ function bindAutocomplete($input) {
         },
         minLength: 1,
         select: function (event, ui) {
-            var $row = $(this).closest('tr');
-            $row.find('.pname').val(ui.item.label);
-            $row.find('input[name="product_id"]').val(ui.item.id);
-            $row.find('.pstock').val(ui.item.stock);
-            $row.find('.prate').val(ui.item.supplier_price || ui.item.price || '0.00');
-            calcRow($row);
+            aplicarProducto($(this).closest('tr'), ui.item);
             return false;
         }
     });
 }
 
 function num(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
+
+// aplicarProducto llena una fila con un producto del catálogo o recién creado.
+//
+// El precio se propone en este orden: el último precio de ESTE proveedor, el
+// costo de la última compra (de donde sea) y, si no hay historial, el precio de
+// venta. Es el orden en que un comprador lo pensaría: «qué me cobró este
+// proveedor la vez pasada» primero.
+function aplicarProducto($row, p) {
+    if (!$row || !$row.length) { return; }
+    var nombre = p.name || '';
+    if (p.model) { nombre += ' (' + p.model + ')'; }
+    $row.find('.pname').val(nombre);
+    $row.find('input[name="product_id"]').val(p.id || p.product_id || '');
+    $row.find('.pstock').val(p.stock != null ? p.stock : '');
+    var ultimo = num(p.last_cost);
+    $row.data('ultimo', ultimo).removeData('avisado');
+    var precio = num(p.supplier_price) || ultimo || num(p.price);
+    $row.find('.prate').val(precio.toFixed(2));
+    calcRow($row);
+    avisoVariacion($row);
+}
+
+// avisoVariacion compara el precio escrito con el de la última compra.
+//
+// Se compara contra la última compra y no contra el precio de venta porque lo
+// que se quiere detectar es el cambio del proveedor: un alza se traslada al
+// margen y hay que decidir si se absorbe o si se sube el precio de venta.
+function avisoVariacion($row) {
+    var ultimo = num($row.data('ultimo'));
+    var actual = num($row.find('.prate').val());
+    var $aviso = $row.find('.aviso-precio');
+    if (ultimo <= 0 || actual <= 0) { $aviso.hide().text(''); return; }
+    var dif = actual - ultimo;
+    if (Math.abs(dif) < 0.005) { $aviso.hide().text(''); return; }
+    var pct = Math.abs(dif / ultimo) * 100;
+    var flecha = dif > 0 ? '▲' : '▼';
+    $aviso.removeClass('text-danger text-success')
+        .addClass(dif > 0 ? 'text-danger' : 'text-success')
+        .text('Última compra ' + ultimo.toFixed(2) + ' ' + flecha + ' ' + pct.toFixed(1) + '%')
+        .show();
+    // El aviso emergente sale UNA vez por fila: el campo de precio dispara en
+    // cada tecla y repetirlo haría inservible el aviso.
+    if (pct >= 5 && !$row.data('avisado')) {
+        $row.data('avisado', true);
+        toastr.warning('El precio de ' + ($row.find('.pname').val() || 'el producto') + ' ' +
+            (dif > 0 ? 'subió' : 'bajó') + ' ' + pct.toFixed(1) + '% respecto a la última compra (' +
+            ultimo.toFixed(2) + ').', 'Variación de precio');
+    }
+}
 
 function calcRow($row) {
     var qty = num($row.find('.pqty').val());
@@ -222,6 +415,74 @@ function calcTotals() {
     $('#due_amount').val(Math.max(0, grand - paid).toFixed(2));
 }
 
+// ---------- catálogo con fotos ----------
+function abrirCatalogo($row) {
+    pickerRow = $row;
+    $('#catBuscar').val('');
+    $('#catalogoProductos').modal('show');
+    cargarCatalogo('');
+}
+
+function cargarCatalogo(term) {
+    $('#catLista').html('<div class="col-xs-12 text-center text-muted" style="padding:20px">' +
+        '<i class="fa fa-spinner fa-spin"></i> Cargando catálogo...</div>');
+    $.getJSON('/product/picker', { term: term || '' }, function (r) {
+        pintarCatalogo((r && r.products) || []);
+    }).fail(function () {
+        $('#catLista').html('<div class="col-xs-12 text-danger">No se pudo cargar el catálogo.</div>');
+    });
+}
+
+function pintarCatalogo(lista) {
+    catProductos = lista || [];
+    var $c = $('#catLista').empty();
+    if (!catProductos.length) {
+        $c.append('<div class="col-xs-12 text-muted">Sin resultados. Puede darlo de alta con el botón verde de la fila.</div>');
+        return;
+    }
+    catProductos.forEach(function (p, i) {
+        var foto = p.image
+            ? '<img src="/' + p.image + '" alt="" style="width:100%;height:110px;object-fit:cover">'
+            : '<div class="text-center text-muted" style="height:110px;line-height:110px"><i class="fa fa-cube fa-3x"></i></div>';
+        var ultimo = num(p.last_cost) > 0 ? num(p.last_cost).toFixed(2) : 'sin historial';
+        $c.append(
+            '<div class="col-xs-6 col-sm-4 col-md-3">' +
+                '<div class="panel panel-bd cat-card" data-idx="' + i + '" style="cursor:pointer;margin-bottom:10px">' +
+                    foto +
+                    '<div class="panel-body" style="padding:8px">' +
+                        '<strong>' + escapeHtml(p.name) + '</strong><br>' +
+                        '<small class="text-muted">' + escapeHtml(p.model || '') +
+                            (p.barcode ? ' · ' + escapeHtml(p.barcode) : '') + '</small><br>' +
+                        '<small>Precio: ' + num(p.price).toFixed(2) + ' · Stock: ' + num(p.stock).toFixed(2) + '</small><br>' +
+                        '<small class="' + (num(p.last_cost) > 0 ? 'text-info' : 'text-muted') + '">Última compra: ' + ultimo + '</small>' +
+                    '</div>' +
+                '</div>' +
+            '</div>');
+    });
+}
+
+// ---------- altas rápidas ----------
+function abrirNuevoProducto($row, nombreInicial) {
+    pickerRow = $row || null;
+    $('#np_nombre').val(nombreInicial || ($row ? $row.find('.pname').val() : ''));
+    $('#np_modelo').val('');
+    $('#np_codigo').val('');
+    $('#np_unidad').val('');
+    $('#np_precio').val('');
+    $('#nuevoProducto').modal('show');
+}
+
+function ultimaFilaCompra() { return $('#itemRows .item-row').last(); }
+
+function abrirNuevoProveedor() {
+    $('#npv_nombre').val('');
+    $('#npv_rif').val('');
+    $('#npv_movil').val('');
+    $('#npv_email').val('');
+    $('#npv_direccion').val('');
+    $('#nuevoProveedor').modal('show');
+}
+
 // ---------- payment rows ----------
 function payRow() {
     var opts = '<option value="">-- Método --</option>';
@@ -237,6 +498,80 @@ function payRow() {
 
 function escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// resolverNombres convierte los nombres escritos a mano en productos elegidos.
+//
+// Sin esto, escribir «Harina P.A.N. 1kg» y pulsar Guardar dejaba el renglón con
+// el texto pero sin producto, y el sistema respondía «Complete producto y
+// cantidad en todas las filas» —un aviso que no dice qué falta ni cómo
+// arreglarlo—. Aquí se busca lo escrito y, si el catálogo lo conoce, se
+// selecciona solo.
+function resolverNombres(cb) {
+    var pendientes = [];
+    $('#itemRows .item-row').each(function () {
+        var $r = $(this);
+        if (!$.trim($r.find('.pname').val())) { return; }
+        if ($r.find('input[name="product_id"]').val()) { return; }
+        pendientes.push($r);
+    });
+    if (!pendientes.length) { cb(); return; }
+    var i = 0;
+    (function siguiente() {
+        if (i >= pendientes.length) { cb(); return; }
+        var $r = pendientes[i++];
+        var escrito = $.trim($r.find('.pname').val()).toLowerCase();
+        $.getJSON('/product/search', { term: escrito, supplier_id: $('#supplier_id').val() || 0 }, function (lista) {
+            var hallado = null;
+            (lista || []).forEach(function (p) {
+                var etiqueta = (p.name + (p.model ? ' (' + p.model + ')' : '')).toLowerCase();
+                if (etiqueta === escrito || String(p.name || '').toLowerCase() === escrito) { hallado = p; }
+            });
+            if (hallado) { aplicarProducto($r, hallado); }
+            siguiente();
+        }).fail(siguiente);
+    })();
+}
+
+function filaSinProducto() {
+    var $sin = null;
+    $('#itemRows .item-row').each(function () {
+        var $r = $(this);
+        if (!$.trim($r.find('.pname').val())) { return; }
+        if ($r.find('input[name="product_id"]').val()) { return; }
+        $sin = $r;
+        return false;
+    });
+    return $sin;
+}
+
+function enviar(submittedAction) {
+    // Las filas que nunca se usaron se descartan antes de serializar: enviarlas
+    // con product_id vacío hace que el servidor reciba un renglón sin producto.
+    $('#itemRows .item-row').each(function () {
+        var $r = $(this);
+        if (!$.trim($r.find('.pname').val()) && !$r.find('input[name="product_id"]').val()) { $r.remove(); }
+    });
+    var $filas = $('#itemRows .item-row');
+    if (!$filas.length) { toastr.warning('Agregue al menos un producto'); return; }
+    var allSet = true;
+    $filas.each(function () {
+        if (!$(this).find('input[name="product_id"]').val()) { allSet = false; }
+        if (!num($(this).find('.pqty').val())) { allSet = false; }
+    });
+    if (!allSet) { toastr.warning('Complete producto y cantidad en todas las filas'); return; }
+
+    enviando = true;
+    $.post('/purchase/save', $('#purchaseForm').serialize(), function (r) {
+        enviando = false;
+        if (r.status == 1) {
+            toastr.success(r.msg + ' #' + r.purchase_id);
+            if (submittedAction === 'save_exit') { setTimeout(function () { location.href = '/purchase/details/' + r.purchase_id; }, 800); }
+        } else { toastr.error(r.error || 'Error'); }
+    }).fail(function (x) {
+        enviando = false;
+        toastr.error(x.responseJSON ? x.responseJSON.error : 'Error');
+    });
 }
 
 $(function () {
@@ -278,8 +613,84 @@ $(function () {
     // events
     $('#addRow').on('click', function () { itemRow(); });
     $('#itemRows').on('click', '.del-row', function () { $(this).closest('tr').remove(); calcTotals(); });
-    $('#itemRows').on('input change', '.pqty, .prate, .pdisc, .pvat', function () { calcRow($(this).closest('tr')); });
+    $('#itemRows').on('input change', '.pqty, .pdisc, .pvat', function () { calcRow($(this).closest('tr')); });
+    $('#itemRows').on('input change', '.prate', function () {
+        var $r = $(this).closest('tr');
+        calcRow($r);
+        avisoVariacion($r);
+    });
     $('#discount').on('input change', calcTotals);
+
+    // catálogo y altas rápidas por fila
+    $('#itemRows').on('click', '.btn-picker', function () { abrirCatalogo($(this).closest('tr')); });
+    $('#itemRows').on('click', '.btn-nuevo-prod', function () { abrirNuevoProducto($(this).closest('tr')); });
+    $('#catBuscarBtn').on('click', function () { cargarCatalogo($('#catBuscar').val()); });
+    $('#catBuscar').on('keydown', function (e) { if (e.which === 13) { e.preventDefault(); cargarCatalogo($(this).val()); } });
+    $('#catLista').on('click', '.cat-card', function () {
+        var p = catProductos[$(this).data('idx')];
+        if (!p) { return; }
+        aplicarProducto(pickerRow || ultimaFilaCompra(), p);
+        $('#catalogoProductos').modal('hide');
+    });
+
+    $('#btnNuevoProv').on('click', abrirNuevoProveedor);
+    $('#npGuardar').on('click', function () {
+        var nombre = $.trim($('#np_nombre').val());
+        if (!nombre) { toastr.warning('El nombre del producto es obligatorio'); return; }
+        var $btn = $(this).prop('disabled', true);
+        $.post('/product/quick', {
+            product_name: nombre,
+            product_model: $('#np_modelo').val(),
+            barcode: $('#np_codigo').val(),
+            unit: $('#np_unidad').val(),
+            price: $('#np_precio').val()
+        }, function (r) {
+            $btn.prop('disabled', false);
+            if (!r || r.status != 1) { toastr.error((r && r.error) || 'No se pudo crear el producto'); return; }
+            aplicarProducto(pickerRow || ultimaFilaCompra(), {
+                id: r.product_id, name: r.name || nombre, model: r.model || $('#np_modelo').val(),
+                barcode: r.barcode || $('#np_codigo').val(), price: r.price,
+                last_cost: r.last_cost || 0, stock: r.stock || 0
+            });
+            $('#nuevoProducto').modal('hide');
+            toastr.success(r.existente ? 'Ese producto ya existía: se cargó en la fila' : 'Producto creado y cargado en la fila');
+            // Si el alta vino de un envío pendiente, se retoma el guardado.
+            if (autoIntentos > 0 && autoIntentos < 3 && !filaSinProducto()) {
+                autoIntentos++;
+                resolverNombres(function () { enviar(submittedAction); });
+            }
+        }).fail(function (x) {
+            $btn.prop('disabled', false);
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'No se pudo crear el producto');
+        });
+    });
+
+    $('#npvGuardar').on('click', function () {
+        var nombre = $.trim($('#npv_nombre').val());
+        if (!nombre) { toastr.warning('El nombre del proveedor es obligatorio'); return; }
+        var $btn = $(this).prop('disabled', true);
+        $.post('/supplier/quick', {
+            supplier_name: nombre,
+            rif: $('#npv_rif').val(),
+            mobile: $('#npv_movil').val(),
+            email_address: $('#npv_email').val(),
+            address: $('#npv_direccion').val()
+        }, function (r) {
+            $btn.prop('disabled', false);
+            if (!r || r.status != 1) { toastr.error((r && r.error) || 'No se pudo crear el proveedor'); return; }
+            var $sel = $('#supplier_id');
+            if (!$sel.find('option[value="' + r.supplier_id + '"]').length) {
+                $sel.append($('<option>').val(r.supplier_id).text(r.name));
+            }
+            $sel.val(String(r.supplier_id));
+            if ($sel.data('select2')) { $sel.trigger('change'); }
+            $('#nuevoProveedor').modal('hide');
+            toastr.success(r.existente ? 'Ese proveedor ya existía y quedó seleccionado' : 'Proveedor creado y seleccionado');
+        }).fail(function (x) {
+            $btn.prop('disabled', false);
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'No se pudo crear el proveedor');
+        });
+    });
 
     $('#addPay').on('click', payRow);
     $('#payRows').on('click', '.del-pay', function () { $(this).closest('tr').remove(); calcTotals(); });
@@ -288,22 +699,24 @@ $(function () {
     // ---------- submit ----------
     $('#purchaseForm').on('submit', function (e) {
         e.preventDefault();
+        if (enviando) { return; }
         if (!$('#supplier_id').val()) { toastr.warning('Seleccione un proveedor'); return; }
-        var hasItems = false, allSet = true;
-        $('#itemRows .item-row').each(function () {
-            hasItems = true;
-            if (!$(this).find('input[name="product_id"]').val()) allSet = false;
-            if (!$(this).find('.pqty').val()) allSet = false;
-        });
-        if (!hasItems) { toastr.warning('Agregue al menos un producto'); return; }
-        if (!allSet) { toastr.warning('Complete producto y cantidad en todas las filas'); return; }
 
-        $.post('/purchase/save', $('#purchaseForm').serialize(), function (r) {
-            if (r.status == 1) {
-                toastr.success(r.msg + ' #' + r.purchase_id);
-                if (submittedAction === 'save_exit') setTimeout(function () { location.href = '/purchase/details/' + r.purchase_id; }, 800);
-            } else toastr.error(r.error || 'Error');
-        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+        resolverNombres(function () {
+            var $sin = filaSinProducto();
+            if ($sin) {
+                // Un nombre que el catálogo no conoce: se ofrece darlo de alta
+                // ahora mismo, que es el caso normal cuando llega mercadería
+                // nueva a un proveedor nuevo.
+                var nombre = $.trim($sin.find('.pname').val());
+                if (confirm('«' + nombre + '» no está en el catálogo. ¿Darlo de alta ahora mismo?')) {
+                    autoIntentos = 1;
+                    abrirNuevoProducto($sin, nombre);
+                }
+                return;
+            }
+            enviar(submittedAction);
+        });
     });
 });
 </script>

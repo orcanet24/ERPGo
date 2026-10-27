@@ -21,6 +21,7 @@ func (s *Server) registerSupplierRoutes() {
 	s.mux.HandleFunc("GET /supplier/ledger/{id}", s.supplierLedger)
 	s.mux.HandleFunc("GET /supplier/ledger/{id}/data", s.supplierLedgerData)
 	s.mux.HandleFunc("POST /supplier/previous-balance/{id}", s.supplierPreviousBalance)
+	s.mux.HandleFunc("POST /supplier/quick", s.supplierQuickCreate)
 	s.mux.HandleFunc("GET /supplier/search", s.supplierSearch)
 	s.mux.HandleFunc("GET /supplier/dropdown", s.supplierDropdown)
 }
@@ -118,6 +119,11 @@ func (s *Server) supplierSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idStr := r.FormValue("supplier_id")
+	// El id se DEVUELVE en la respuesta: quien crea un proveedor desde el
+	// formulario de compra —o la IA al cargar una compra de un proveedor
+	// nuevo— necesita usarlo en la misma operación, y sin él habría que
+	// adivinar cuál se acaba de crear.
+	var supplierID int64
 
 	// FISCAL: RIF validado (obligatorio para libro de compras con crédito fiscal)
 	rif := NormalizeRIF(r.FormValue("rif"))
@@ -147,7 +153,7 @@ func (s *Server) supplierSave(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		supplierID, _ := res.LastInsertId()
+		supplierID, _ = res.LastInsertId()
 		// HeadCode under 21110% (Suppliers), seed 21110000001
 		headcode, err := nextHeadCodeTx(tx, "21110", "2111000001")
 		if err != nil {
@@ -162,6 +168,7 @@ func (s *Server) supplierSave(w http.ResponseWriter, r *http.Request) {
 		_, _ = tx.Exec(`INSERT INTO acc_subcode (subTypeId, name, referenceNo, status, created_by, created_date, updated_by)
 			VALUES (4, ?, ?, 1, ?, ?, ?)`, name, supplierID, sessUserID(sess), today(), sessUserID(sess))
 	} else {
+		supplierID, _ = strconv.ParseInt(idStr, 10, 64)
 		_, err = tx.Exec(`
 			UPDATE supplier_information SET supplier_name=?, address=?, address2=?, mobile=?, email_address=?,
 				city=?, state=?, zip=?, country=?, details=?, rif=? WHERE supplier_id=?`,
@@ -177,11 +184,19 @@ func (s *Server) supplierSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Guardado correctamente", "redirect": saveRedirect(r, "/supplier/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Guardado correctamente", "supplier_id": supplierID,
+		"redirect": saveRedirect(r, "/supplier/list")})
 }
 
 func (s *Server) supplierDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// LA REGLA DE NO BORRADO. Un proveedor con compras o con retenciones es
+	// contraparte de documentos fiscales: el libro de compras y las retenciones
+	// emitidas tienen que conservar su nombre y su RIF.
+	if msg := s.guardarBorrado(r, id, "el proveedor", consejoProveedor, referenciasProveedor); msg != "" {
+		jsonError(w, msg, 400)
+		return
+	}
 	tx, err := s.dbFor(r).Begin()
 	if err != nil {
 		jsonError(w, err.Error(), 500)

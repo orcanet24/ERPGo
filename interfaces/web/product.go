@@ -284,16 +284,30 @@ func (s *Server) productDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // productSearch: find products for invoice/purchase line pickers.
+//
+// Busca por nombre, modelo, código de barras y número de serie: en el pasillo y
+// en la factura del proveedor lo que hay a mano es el código, no el nombre
+// exacto del catálogo.
+//
+// Devuelve además `last_cost` —el precio de la última compra— y la imagen: el
+// formulario de compra usa el primero para avisar en el acto de una variación
+// de precio, y la segunda para poder identificar el artículo de un vistazo.
 func (s *Server) productSearch(w http.ResponseWriter, r *http.Request) {
 	term := strings.TrimSpace(r.FormValue("term"))
-	supplier := r.FormValue("supplier_id")
+	supplier := orDefault(r.FormValue("supplier_id"), "0")
+	like := "%" + term + "%"
 	rows, err := s.dbFor(r).Query(`
 		SELECT a.product_id, a.product_name, IFNULL(a.product_model,''), a.price, IFNULL(a.unit,''),
-			IFNULL(sp.supplier_price, a.price) AS supplier_price
+			IFNULL(sp.supplier_price, a.price) AS supplier_price,
+			IFNULL(a.barcode,''), IFNULL(a.image,''),
+			IFNULL((SELECT d.rate FROM product_purchase_details d
+				JOIN product_purchase p ON p.purchase_id = d.purchase_id
+				WHERE d.product_id = a.product_id ORDER BY p.id DESC LIMIT 1), 0) AS last_cost
 		FROM product_information a
 		LEFT JOIN supplier_product sp ON sp.product_id = a.product_id AND sp.supplier_id = ?
-		WHERE a.status = 1 AND (a.product_name LIKE ? OR a.product_model LIKE ?)
-		ORDER BY a.product_name LIMIT 20`, supplier, "%"+term+"%", "%"+term+"%")
+		WHERE a.status = 1 AND (a.product_name LIKE ? OR a.product_model LIKE ?
+			OR IFNULL(a.barcode,'') LIKE ? OR IFNULL(a.serial_no,'') LIKE ?)
+		ORDER BY a.product_name LIMIT 20`, supplier, like, like, like, like)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -301,14 +315,20 @@ func (s *Server) productSearch(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	out := []map[string]interface{}{}
 	for rows.Next() {
-		var pid, name, model, price, unit, sprice sql.NullString
-		_ = rows.Scan(&pid, &name, &model, &price, &unit, &sprice)
+		var pid, name, model, price, unit, sprice, barcode, image sql.NullString
+		var lastCost float64
+		_ = rows.Scan(&pid, &name, &model, &price, &unit, &sprice, &barcode, &image, &lastCost)
 		pidInt, _ := strconv.Atoi(pid.String)
 		stock := s.stockForProduct(r, pidInt)
+		label := name.String
+		if model.String != "" {
+			label += " (" + model.String + ")"
+		}
 		out = append(out, map[string]interface{}{
-			"id": pid.String, "label": name.String + " (" + model.String + ")",
+			"id": pid.String, "label": label,
 			"product_id": pid.String, "name": name.String, "model": model.String,
 			"price": price.String, "supplier_price": sprice.String, "unit": unit.String, "stock": stock,
+			"barcode": barcode.String, "image": image.String, "last_cost": lastCost,
 		})
 	}
 	writeJSON(w, out)
