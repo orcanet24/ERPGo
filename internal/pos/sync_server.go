@@ -108,21 +108,31 @@ func (s *SyncServer) SyncSale(req *SyncSaleRequest) (*SyncSaleResponse, error) {
 	// contingencia con referencia propia por caja. Ver contingenciaRef.
 	controlNo, offlineNo := contingenciaRef(req.TerminalID, req.FiscalNumber, req.SaleLocalID)
 
-	// 1. Verificar si el documento ya existe (idempotencia).
-	if req.FiscalNumber != "" {
-		var existingID int64
-		err := s.db.QueryRow(`
-			SELECT invoice_id FROM invoice
-			WHERE control_no = ? AND series = 'CONT'`,
-			controlNo).Scan(&existingID)
-		if err == nil {
-			return &SyncSaleResponse{
-				Success:      true,
-				RemoteID:     fmt.Sprintf("%d", existingID),
-				Status:       "already_exists",
-				FiscalNumber: req.FiscalNumber,
-			}, nil
-		}
+	// 1. Verificar si la venta ya existe (idempotencia).
+	//
+	// Dos caminos, porque ninguno basta solo:
+	//   - El libro pos_sale_sync por (terminal_id, sale_local_id) es exacto y no
+	//     depende de que exista número fiscal. Es el camino normal de la cola.
+	//   - control_no cubre las ventas que llegaron antes de existir ese libro.
+	//
+	// Antes esto solo se comprobaba si req.FiscalNumber != "": una caja SIN
+	// impresora fiscal (lo habitual en contingencia) duplicaba la factura en
+	// cada reintento tras una respuesta perdida.
+	if existing := s.lookupSaleSync(req.TerminalID, req.SaleLocalID); existing != nil {
+		return existing, nil
+	}
+	var existingID int64
+	if err := s.db.QueryRow(`
+		SELECT invoice_id FROM invoice
+		WHERE control_no = ? AND series = 'CONT'`,
+		controlNo).Scan(&existingID); err == nil {
+		s.recordSaleSync(req, existingID, controlNo)
+		return &SyncSaleResponse{
+			Success:      true,
+			RemoteID:     fmt.Sprintf("%d", existingID),
+			Status:       "already_exists",
+			FiscalNumber: req.FiscalNumber,
+		}, nil
 	}
 
 	// 2. Buscar o crear cliente.
@@ -208,12 +218,57 @@ func (s *SyncServer) SyncSale(req *SyncSaleRequest) (*SyncSaleResponse, error) {
 		s.auditLogger("pos_sync_sale", "pos", "invoice", fmt.Sprintf("%d", invoiceNo), nil, req)
 	}
 
+	// 7. Dejar constancia en el libro de idempotencia de la cola offline.
+	s.recordSaleSync(req, invoiceNo, controlNo)
+
 	return &SyncSaleResponse{
 		Success:      true,
 		RemoteID:     fmt.Sprintf("%d", invoiceNo),
 		Status:       "synced",
 		FiscalNumber: req.FiscalNumber,
 	}, nil
+}
+
+// lookupSaleSync devuelve la respuesta ya registrada para (terminal, venta
+// local), o nil si es la primera vez que se ve. Un error de BD se trata como
+// "no existe": el camino de control_no sigue cubriendo el duplicado.
+func (s *SyncServer) lookupSaleSync(terminalID, saleLocalID string) *SyncSaleResponse {
+	terminalID = strings.TrimSpace(terminalID)
+	saleLocalID = strings.TrimSpace(saleLocalID)
+	if terminalID == "" || saleLocalID == "" {
+		return nil
+	}
+	var invoiceID int64
+	var controlNo sql.NullString
+	err := s.db.QueryRow(`
+		SELECT invoice_id, control_no FROM pos_sale_sync
+		WHERE terminal_id = ? AND sale_local_id = ? LIMIT 1`,
+		terminalID, saleLocalID).Scan(&invoiceID, &controlNo)
+	if err != nil || invoiceID <= 0 {
+		return nil
+	}
+	return &SyncSaleResponse{
+		Success:  true,
+		RemoteID: fmt.Sprintf("%d", invoiceID),
+		Status:   "already_exists",
+	}
+}
+
+// recordSaleSync apunta la venta en pos_sale_sync. Best-effort: si la tabla no
+// existe (base antigua) o hay carrera, no se rompe la sincronización porque el
+// chequeo por control_no sigue vigente.
+func (s *SyncServer) recordSaleSync(req *SyncSaleRequest, invoiceID int64, controlNo string) {
+	terminalID := strings.TrimSpace(req.TerminalID)
+	saleLocalID := strings.TrimSpace(req.SaleLocalID)
+	if terminalID == "" || saleLocalID == "" {
+		return
+	}
+	_, _ = s.db.Exec(`
+		INSERT INTO pos_sale_sync
+			(terminal_id, sale_local_id, invoice_id, invoice_no, control_no, fiscal_number, status)
+		VALUES (?,?,?,?,?,?, 'synced')
+		ON DUPLICATE KEY UPDATE invoice_id = VALUES(invoice_id), control_no = VALUES(control_no)`,
+		terminalID, saleLocalID, invoiceID, invoiceID, controlNo, req.FiscalNumber)
 }
 
 // GetProducts retorna todos los productos activos para sincronización POS.

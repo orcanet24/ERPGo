@@ -81,6 +81,15 @@ func (s *Server) registerPOSSyncRoutes() {
 	s.mux.HandleFunc("POST /api/pos/customers", s.posSyncKeyMiddleware(s.handlePOSCustomersSync))
 	s.mux.HandleFunc("POST /api/pos/validate-key", s.handlePOSValidateKey)
 	s.mux.HandleFunc("GET /api/pos/sync/status", s.posSyncKeyMiddleware(s.handlePOSSyncStatus))
+
+	// Latido e identidad del terminal. Reemplaza a descargar el catálogo entero
+	// cada pocos segundos solo para saber si hay red.
+	s.mux.HandleFunc("GET /api/pos/ping", s.posSyncKeyMiddleware(s.handlePOSPing))
+
+	// Cola de turnos offline. Usa API key (no caduca), no X-POS-Token.
+	s.mux.HandleFunc("POST /api/pos/sync/shift/open", s.posSyncKeyMiddleware(s.handlePOSShiftOpenSync))
+	s.mux.HandleFunc("POST /api/pos/sync/shift/close", s.posSyncKeyMiddleware(s.handlePOSShiftCloseSync))
+	s.mux.HandleFunc("GET /api/pos/sync/shift/status", s.posSyncKeyMiddleware(s.handlePOSShiftStatusSync))
 	// Bloques fiscales offline por caja (reserva, consumo, estado)
 	s.mux.HandleFunc("POST /api/pos/fiscal-block/reserve", s.posSyncKeyMiddleware(s.reserveFiscalBlockHandler))
 	s.mux.HandleFunc("POST /api/pos/fiscal-block/consume", s.posSyncKeyMiddleware(s.consumeFiscalNumberHandler))

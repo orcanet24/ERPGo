@@ -220,16 +220,26 @@ func (s *Server) handlePOSLogin(w http.ResponseWriter, r *http.Request) {
 	var level string
 	_ = controlDB.QueryRow(`SELECT COALESCE(r.level,'employee') FROM sec_userrole ur JOIN sec_role r ON r.id = ur.roleid WHERE ur.user_id = ? LIMIT 1`, userID).Scan(&level)
 
+	// fullname es el nombre que la caja muestra en cabecera. Se calcula aquí y
+	// se manda además de first_name/last_name para que el POS no tenga que
+	// recomponerlo (y para no romper a quien ya lee las partes).
+	fullname := strings.TrimSpace(strings.TrimSpace(firstName.String) + " " + strings.TrimSpace(lastName.String))
+	if fullname == "" {
+		fullname = username
+	}
+
 	writeJSON(w, map[string]interface{}{
 		"token":       token,
 		"expires_at":  expiry.Format(time.RFC3339),
 		"user_id":     userID,
 		"username":    username,
+		"fullname":    fullname,
 		"first_name":  firstName.String,
 		"last_name":   lastName.String,
 		"level":       level,
 		"branch_id":   branchID,
 		"branch_name": branchName.String,
+		"tenant":      tenant,
 	})
 }
 
