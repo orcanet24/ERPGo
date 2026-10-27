@@ -459,6 +459,14 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) purchaseDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// LA REGLA DE NO BORRADO. Una compra registrada movió mercancía, publicó
+	// asiento y declaró IVA; nada de eso se deshace borrando la fila, y lo que
+	// hacía este handler era exactamente eso: borrar los asientos publicados sin
+	// reverso. Si ya tiene movimiento, se anula, no se elimina.
+	if msg := s.guardarBorrado(r, id, "la compra", consejoCompra, referenciasCompra); msg != "" {
+		jsonError(w, msg, 400)
+		return
+	}
 	tx, err := s.dbFor(r).Begin()
 	if err != nil {
 		jsonError(w, err.Error(), 500)

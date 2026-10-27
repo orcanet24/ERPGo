@@ -78,6 +78,23 @@ func RunMigrationsForMySQL(db *sql.DB, cfg ConfigMySQL) error {
 	if err := normalizarCollationMySQL(db, aplicados > 0); err != nil {
 		return err
 	}
+
+	// LA PROTECCIÓN DE BORRADO SE CREA AQUÍ, al final y en cada arranque.
+	//
+	// Este es el punto por donde pasa TODA base de empresa (arranque, alta de
+	// empresa, asistente de instalación), así que ponerlo aquí evita que la
+	// regla dependa de que seis sitios distintos se acuerden de aplicarla. Los
+	// triggers consultan tablas del esquema, de ahí que vaya después de las
+	// migraciones y no antes.
+	//
+	// NO ES FATAL. Un usuario de MySQL sin privilegio TRIGGER no puede crearlos, y
+	// eso no puede impedir que el ERP arranque: se avisa en el log y sigue. Pero
+	// el aviso va en dos líneas porque la consecuencia es real: la base deja de
+	// impedir los borrados con movimiento y sólo quedan las guardas del handler.
+	if err := AplicarProteccionUnaVez(db, "mysql"); err != nil {
+		fmt.Printf("  AVISO: no se pudo activar la proteccion de borrado en la base: %v\n", err)
+		fmt.Println("  La aplicacion arranca igual, pero la base NO esta impidiendo los borrados con movimiento.")
+	}
 	return nil
 }
 

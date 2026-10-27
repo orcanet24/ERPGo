@@ -388,7 +388,20 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 }
 
 // jsonError writes {"error": msg} with a status code.
+//
+// ES EL ÚNICO SITIO POR DONDE SALE UN ERROR AL NAVEGADOR, y por eso traduce aquí
+// lo que la BASE haya impedido: si un borrado choca con una regla de integridad
+// de la base (ver infrastructure/persistence/proteccion_borrado.go), el mensaje
+// que llega del driver es del dialecto del motor —`constraint failed: ... (1811)`,
+// `Error 1451 ...`— y eso no es lo que debe leer una persona. Traducido aquí, la
+// traducción cubre todos los handlers —los de hoy y los de mañana— sin que
+// ninguno tenga que acordarse de hacerla.
 func jsonError(w http.ResponseWriter, msg string, code int) {
+	// 409 y no 500: no es una avería del servidor, es una operación que la base
+	// rechaza por integridad, y el texto explica qué hacer en su lugar.
+	if limpio, impedido := mensajeDeIntegridadParaPantalla(msg); impedido {
+		msg, code = limpio, http.StatusConflict
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	fmt.Fprintf(w, `{"error":%q}`, msg)

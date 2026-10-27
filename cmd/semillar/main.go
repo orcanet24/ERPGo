@@ -70,6 +70,21 @@ func main() {
 	if err := comprobarEsquema(conn); err != nil {
 		log.Fatalf("%v", err)
 	}
+
+	// LA PROTECCIÓN DE BORRADO SE QUITA AQUÍ, Y SE VUELVE A PONER AL FINAL.
+	//
+	// La base impide borrar documentos con movimiento (ver
+	// infrastructure/persistence/proteccion_borrado.go). Este comando existe
+	// justamente para rehacer la empresa demo, así que tiene que borrar esos
+	// documentos; saltarse la regla se escribe de forma explícita —quitar y
+	// volver a poner— y no se descuida. Si el proceso muere a mitad, la regla
+	// queda sin poner hasta el siguiente arranque del ERP, que la vuelve a crear:
+	// el peor caso es una ventana sin la red de la base, nunca un dato borrado por
+	// sorpresa.
+	if err := persistence.QuitarProteccionDeBorrado(conn, "mysql"); err != nil {
+		log.Fatalf("no se pudo quitar la protección de borrado: %v", err)
+	}
+
 	if *vaciar {
 		if err := pedirConfirmacion(nombre); err != nil {
 			log.Fatal(err)
@@ -84,6 +99,13 @@ func main() {
 	inf, err := web.SemillarCarniceriaLara(conn, nombre)
 	if err != nil {
 		log.Fatalf("falló la siembra: %v", err)
+	}
+
+	// Se vuelve a poner la protección para dejar la base como estaba: el ERP la
+	// recrea en el siguiente arranque, pero dejarla puesta aquí evita depender de
+	// eso.
+	if err := persistence.AplicarProteccionDeBorrado(conn, "mysql"); err != nil {
+		log.Fatalf("no se pudo volver a poner la protección de borrado: %v", err)
 	}
 	fmt.Println()
 	fmt.Println(inf.Resumen())

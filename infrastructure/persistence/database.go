@@ -41,7 +41,14 @@ type migFile struct {
 func OpenSQLite(path string) (*sql.DB, error) {
 	// Pragmas go in the DSN so EVERY pooled connection gets them (per-connection
 	// settings like busy_timeout cannot be set from just one connection).
-	dsn := path + "?_txlock=immediate&_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=synchronous(NORMAL)"
+	// `foreign_keys(1)` está aquí por una razón concreta y medida: SQLite trae
+	// las claves foráneas APAGADAS por defecto, así que una FK declarada en el
+	// esquema no impide nada —se comprobó insertando un cliente con su factura y
+	// borrando el cliente: el borrado pasaba y la factura quedaba huérfana—.
+	// Hoy el esquema SQLite no declara ninguna (el conversor las descarta), así
+	// que activarlo no cambia ningún comportamiento existente; lo que hace es que
+	// el día que una se declare, la base la haga cumplir en vez de decorarla.
+	dsn := path + "?_txlock=immediate&_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite database: %w", err)
@@ -114,6 +121,13 @@ func RunMigrationsFor(db *sql.DB) error {
 		filesApplied, filesReused, statements, warnings)
 	if warnings > 0 {
 		fmt.Printf("  WARNING: %d statements did not apply. The app starts anyway, but check this log before trusting the data.\n", warnings)
+	}
+
+	// La protección de borrado se crea aquí, con el esquema ya aplicado: sus
+	// triggers consultan tablas que tienen que existir. Ver
+	// proteccion_borrado.go para por qué es un trigger y no una clave foránea.
+	if err := AplicarProteccionUnaVez(db, "sqlite"); err != nil {
+		fmt.Printf("  AVISO: no se pudo activar la proteccion de borrado en la base: %v\n", err)
 	}
 	return nil
 }

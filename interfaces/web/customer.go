@@ -223,6 +223,13 @@ func (s *Server) customerSave(w http.ResponseWriter, r *http.Request) {
 // customerDelete replicates Customer_model->delete: removes subcode + COA + customer.
 func (s *Server) customerDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// LA REGLA DE NO BORRADO. Sin esto, el cliente desaparecía y sus facturas
+	// quedaban apuntando a un id inexistente: el libro de ventas perdía el
+	// nombre y el RIF, y la CxC perdía el deudor.
+	if msg := s.guardarBorrado(r, id, "el cliente", consejoCliente, referenciasCliente); msg != "" {
+		jsonError(w, msg, 400)
+		return
+	}
 	tx, err := s.dbFor(r).Begin()
 	if err != nil {
 		jsonError(w, err.Error(), 500)
