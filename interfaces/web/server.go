@@ -425,6 +425,10 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	// Cartera / Cuentas por Cobrar
 	s.registerCarteraRoutes()
 	s.registerPagarRoutes()
+	// Alertas financieras (CxC / CxP) y sus canales de salida: van junto a los
+	// módulos porque son su tablero, no un módulo aparte.
+	s.registerFinanceAlertRoutes()
+	s.registerNotifyChannelRoutes()
 	s.registerPOSAPIRoutes()
 	s.registerPOSAdminRoutes()
 	s.registerPOSSyncRoutes()

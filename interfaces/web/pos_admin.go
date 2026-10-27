@@ -139,10 +139,10 @@ func (s *Server) posDashboardSincronizacion(w http.ResponseWriter, r *http.Reque
 
 	// Terminales activas
 	type Terminal struct {
-		TerminalID  string
-		Status      string
-		LastSeen    string
-		IPAddress   string
+		TerminalID string
+		Status     string
+		LastSeen   string
+		IPAddress  string
 	}
 	var terminals []Terminal
 	rows, _ := db.Query("SELECT terminal_id, status, COALESCE(last_seen, ''), COALESCE(ip_address, '') FROM pos_terminal_sessions WHERE status='active' ORDER BY last_seen DESC LIMIT 20")
@@ -158,11 +158,11 @@ func (s *Server) posDashboardSincronizacion(w http.ResponseWriter, r *http.Reque
 
 	// Turnos abiertos
 	type Turn struct {
-		TurnID      int
-		TerminalID  string
-		OpenedAt    string
-		OpenedBy    string
-		TotalSales  float64
+		TurnID     int
+		TerminalID string
+		OpenedAt   string
+		OpenedBy   string
+		TotalSales float64
 	}
 	var turns []Turn
 	// pos_turns no tiene columna `opened_by`: el que abre el turno es
@@ -478,19 +478,19 @@ func (s *Server) handleRegisterList(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		registers = append(registers, map[string]interface{}{
-			"id":            cr.ID,
-			"branch_id":     cr.BranchID,
-			"branch_name":   branchName,
-			"code":          cr.Code,
-			"name":          cr.Name,
-			"description":   desc,
-			"printer_port":  printerPort,
-			"printer_brand": printerBrand,
-			"printer_model": printerModel,
-			"serial_port":   serialPort,
-			"baud_rate":     baudRate,
+			"id":             cr.ID,
+			"branch_id":      cr.BranchID,
+			"branch_name":    branchName,
+			"code":           cr.Code,
+			"name":           cr.Name,
+			"description":    desc,
+			"printer_port":   printerPort,
+			"printer_brand":  printerBrand,
+			"printer_model":  printerModel,
+			"serial_port":    serialPort,
+			"baud_rate":      baudRate,
 			"fiscal_enabled": cr.FiscalEnabled,
-			"status":        status,
+			"status":         status,
 		})
 	}
 	writeJSON(w, registers)
@@ -661,15 +661,15 @@ func (s *Server) handleAPIKeyList(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		keys = append(keys, map[string]interface{}{
-			"id":          ak.ID,
-			"branch_id":   ak.BranchID,
-			"branch_name": ak.BranchName,
-			"api_key":     ak.APIKey,
-			"name":        ak.Name,
-			"description": desc.String,
-			"is_active":   ak.IsActive,
+			"id":           ak.ID,
+			"branch_id":    ak.BranchID,
+			"branch_name":  ak.BranchName,
+			"api_key":      ak.APIKey,
+			"name":         ak.Name,
+			"description":  desc.String,
+			"is_active":    ak.IsActive,
 			"last_used_at": lastUsed.Time,
-			"created_at":  ak.CreatedAt,
+			"created_at":   ak.CreatedAt,
 		})
 	}
 	writeJSON(w, keys)

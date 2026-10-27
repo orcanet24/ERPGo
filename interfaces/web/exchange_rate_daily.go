@@ -520,9 +520,9 @@ func (s *Server) tasaFetchBCV(w http.ResponseWriter, r *http.Request) {
 	}
 	fecha := time.Now().Format("2006-01-02")
 	writeJSON(w, map[string]interface{}{
-		"status":  1,
-		"rate":    rate,
-		"date":    fecha,
+		"status":    1,
+		"rate":      rate,
+		"date":      fecha,
 		"formatted": strconv.FormatFloat(rate, 'f', 3, 64),
 	})
 }

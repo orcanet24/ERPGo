@@ -17,6 +17,18 @@
             <strong>Fin:</strong> {{if .Run.FinishedAt}}{{.Run.FinishedAt}}{{else}}—{{end}}
         </p>
 
+        {{if .Run.NeedsHuman}}
+        <div class="alert {{if .Run.ReviewedBy}}alert-success{{else}}alert-warning{{end}}">
+            {{if .Run.ReviewedBy}}
+            <strong>Revisión humana:</strong> revisada por {{.Run.ReviewedBy}} el {{.Run.ReviewedAt}}.
+            {{else}}
+            <strong>Requiere revisión humana.</strong> Esta corrida ejecutó una acción crítica (pago, voucher o anulación).
+            Las acciones siguen siendo reversibles con «Revertir»; revísalas y márcalas como vistas.
+            <button class="btn btn-warning btn-xs" onclick="reviewRun({{.Run.ID}})"><i class="fa fa-check"></i> Marcar como revisada</button>
+            {{end}}
+        </div>
+        {{end}}
+
         {{if .Run.FinalReport}}
         <div class="panel panel-default">
             <div class="panel-heading"><strong>Informe final</strong></div>
@@ -55,6 +67,11 @@
 
 {{define "pagejs"}}
 <script>
+function reviewRun(id) {
+    $.post('/ai/tasks/runs/' + id + '/review', function (r) {
+        if (r.status === 1) { location.reload(); } else { alert(r.error || 'Error al marcar la revisión'); }
+    });
+}
 function undoRun(id) {
     if (!confirm('¿Revertir TODAS las acciones de esta tarea?')) return;
     $.post('/ai/tasks/runs/' + id + '/undo', function (r) {

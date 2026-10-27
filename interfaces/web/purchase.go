@@ -16,6 +16,9 @@ func (s *Server) registerPurchaseRoutes() {
 	s.mux.HandleFunc("GET /purchase/add", s.purchaseForm)
 	s.mux.HandleFunc("GET /purchase/edit/{id}", s.purchaseEdit)
 	s.mux.HandleFunc("POST /purchase/save", s.purchaseSave)
+	// Comprobación previa del candado: si esa compra ya está, se dice ANTES de
+	// escribir nada (y el guardado la bloquea igual, por el índice único).
+	s.mux.HandleFunc("POST /purchase/dup-check", s.purchaseDupCheck)
 	s.mux.HandleFunc("POST /purchase/delete/{id}", s.purchaseDelete)
 	s.mux.HandleFunc("GET /purchase/details/{id}", s.purchaseDetails)
 }
@@ -47,7 +50,8 @@ func (s *Server) purchaseListData(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := s.dbFor(r).Query(`
 		SELECT a.purchase_id, a.chalan_no, a.supplier_id, s.supplier_name,
-			a.grand_total_amount, a.paid_amount, a.due_amount, a.purchase_date, a.status
+			a.grand_total_amount, a.paid_amount, a.due_amount, a.purchase_date, a.status,
+			IFNULL(a.document_kind,'factura') AS document_kind
 		FROM product_purchase a
 		JOIN supplier_information s ON s.supplier_id = a.supplier_id
 		`+where+`
@@ -62,17 +66,18 @@ func (s *Server) purchaseListData(w http.ResponseWriter, r *http.Request) {
 	list := []map[string]interface{}{}
 	for rows.Next() {
 		var pid int64
-		var chalan, sname, pdate sql.NullString
+		var chalan, sname, pdate, dkind sql.NullString
 		var sid int64
 		var total, paid, due float64
 		var status int
-		if err := rows.Scan(&pid, &chalan, &sid, &sname, &total, &paid, &due, &pdate, &status); err != nil {
+		if err := rows.Scan(&pid, &chalan, &sid, &sname, &total, &paid, &due, &pdate, &status, &dkind); err != nil {
 			continue
 		}
 		list = append(list, map[string]interface{}{
 			"id": pid, "chalan": chalan.String, "supplier_id": sid, "supplier": sname.String,
 			"total": money(total), "paid": money(paid), "due": money(due),
 			"date": pdate.String, "status": status,
+			"document_kind": CompraKind(dkind.String), "kind_label": EtiquetaCompra(dkind.String),
 		})
 	}
 	writeJSON(w, map[string]interface{}{
@@ -95,9 +100,10 @@ func (s *Server) purchaseForm(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 	}
 	s.render(w, r, "purchase_form.html", map[string]interface{}{
-		"Title":     "Nueva Compra",
-		"ControlNo": "",
-		"Methods":   methods,
+		"Title":        "Nueva Compra",
+		"ControlNo":    "",
+		"DocumentKind": CompraFactura,
+		"Methods":      methods,
 	})
 }
 
@@ -108,9 +114,11 @@ func (s *Server) purchaseEdit(w http.ResponseWriter, r *http.Request) {
 	var chalan, pdate, pdetails sql.NullString
 	var sid int64
 	var total, paid, due, discount float64
+	var dkind sql.NullString
 	err := s.dbFor(r).QueryRow(`SELECT purchase_id, chalan_no, supplier_id, grand_total_amount, paid_amount,
-		due_amount, total_discount, purchase_date, purchase_details FROM product_purchase WHERE purchase_id = ?`, id).
-		Scan(&pid, &chalan, &sid, &total, &paid, &due, &discount, &pdate, &pdetails)
+		due_amount, total_discount, purchase_date, purchase_details, IFNULL(document_kind,'factura')
+		FROM product_purchase WHERE purchase_id = ?`, id).
+		Scan(&pid, &chalan, &sid, &total, &paid, &due, &discount, &pdate, &pdetails, &dkind)
 	if err != nil {
 		http.Error(w, "Compra no encontrada", 404)
 		return
@@ -155,16 +163,17 @@ func (s *Server) purchaseEdit(w http.ResponseWriter, r *http.Request) {
 	_ = s.dbFor(r).QueryRow(`SELECT IFNULL(control_no,'') FROM product_purchase WHERE purchase_id = ?`, pid).Scan(&controlNo)
 
 	s.render(w, r, "purchase_form.html", map[string]interface{}{
-		"Title":     "Editar Compra",
-		"EditID":    pid,
-		"Chalan":    chalan.String,
-		"ControlNo": controlNo.String,
-		"Supplier":  sid,
-		"PDate":     pdate.String,
-		"PDetails":  pdetails.String,
-		"Grand":     total,
-		"Details":   details,
-		"Methods":   methods,
+		"Title":        "Editar Compra",
+		"EditID":       pid,
+		"Chalan":       chalan.String,
+		"ControlNo":    controlNo.String,
+		"DocumentKind": CompraKind(dkind.String),
+		"Supplier":     sid,
+		"PDate":        pdate.String,
+		"PDetails":     pdetails.String,
+		"Grand":        total,
+		"Details":      details,
+		"Methods":      methods,
 	})
 }
 
@@ -203,6 +212,45 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 	grandTotal := parseMoney(r.FormValue("grand_total_price"))
 	paidAmount := parseMoney(r.FormValue("paid_amount"))
 	dueAmount := parseMoney(r.FormValue("due_amount"))
+
+	// ---------------------------------------------------------------
+	// CLASIFICACIÓN DEL DOCUMENTO Y CANDADO CONTRA DUPLICADOS.
+	// ---------------------------------------------------------------
+	//
+	// UNA FACTURA Y UNA ORDEN NO SON LO MISMO. La factura del proveedor es un
+	// documento fiscal —da crédito de IVA y obliga a retenciones—; una nota de
+	// entrega o una orden meten mercancía y generan deuda, pero no dan crédito
+	// fiscal. Hasta ahora las dos se guardaban igual y el Libro de Compras las
+	// tomaba a todas, así que una nota de entrega aparecía como IVA inexistente.
+	//
+	// Una factura CON IVA sin número de factura no se acepta: es un crédito que el
+	// SENIAT no reconoce y una retención sin documento que la respalde. Se pide el
+	// número o que se clasifique como lo que es; no se bloquea nada más.
+	docKind := CompraKind(r.FormValue("document_kind"))
+	controlNo := strings.TrimSpace(r.FormValue("control_no"))
+	chalanNo := strings.TrimSpace(r.FormValue("chalan_no"))
+	if docKind == CompraFactura && chalanNo == "" && parseMoney(r.FormValue("total_vat_amnt")) > 0 {
+		jsonError(w, "Esta compra va clasificada como FACTURA y trae IVA, pero no tiene número de factura del proveedor: sin el número no hay crédito fiscal que declarar ni retención que respaldar. Escríbalo, o clasifíquela como nota de entrega / orden de compra si todavía no llegó la factura.", 400)
+		return
+	}
+
+	// EL HASH: la identidad de la compra (proveedor + tipo + números + renglones).
+	hashCompra := hashDeCompra(supplierID, r.FormValue("supplier_rif"), docKind, controlNo, chalanNo,
+		compraLineasDeFormulario(r), grandTotal)
+
+	// EL CANDADO, ANTES DE ESCRIBIR NADA. Si esa compra ya está registrada, no se
+	// crea otra: se responde cuál es y desde cuándo. El intento queda en la pista
+	// de auditoría, porque un duplicado a medias es lo que descuadra el stock y las
+	// cuentas por pagar, y saber quién lo intentó es parte del arreglo.
+	if existente, dup := s.compraExistente(r, hashCompra, supplierID, controlNo, chalanNo); dup {
+		s.appendAudit(r, createBy, clientIP(r), "duplicate_blocked", "Compras", "product_purchase",
+			fmt.Sprint(existente["purchase_id"]), nil, map[string]interface{}{
+				"supplier_id": supplierID, "chalan_no": chalanNo, "control_no": controlNo,
+				"document_kind": docKind, "total": grandTotal,
+			})
+		writeJSON(w, compraDuplicadaRespuesta(existente))
+		return
+	}
 
 	var sumPay float64
 	for _, a := range payAmounts {
@@ -265,17 +313,28 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO product_purchase (purchase_id, chalan_no, supplier_id, grand_total_amount, paid_amount,
 			due_amount, total_discount, invoice_discount, total_vat_amnt, purchase_date, purchase_details,
 			status, payment_type, is_credit, control_no, supplier_rif, warehouse_id,
-			currency_code, exchange_rate, total_amount_usd)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)`,
-		purchaseID, r.FormValue("chalan_no"), supplierID, grandTotal, paidAmount, dueAmount,
+			currency_code, exchange_rate, total_amount_usd, document_kind, purchase_hash)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?)`,
+		purchaseID, chalanNo, supplierID, grandTotal, paidAmount, dueAmount,
 		parseMoney(r.FormValue("discount")), parseMoney(r.FormValue("total_discount")),
 		parseMoney(r.FormValue("total_vat_amnt")),
 		orDefault(r.FormValue("purchase_date"), today()),
 		r.FormValue("purchase_details"), paymentType, isCredit,
-		strings.TrimSpace(r.FormValue("control_no")),
+		controlNo,
 		NormalizeRIF(r.FormValue("supplier_rif")),
 		orDefault(r.FormValue("warehouse_id"), "WH-MAIN"),
-		currencyCode, tasaBCV, totalAmountUSD); err != nil {
+		currencyCode, tasaBCV, totalAmountUSD, docKind, hashCompra); err != nil {
+		// CARRERA: dos cargas de la misma compra a la vez, o un reenvío que se coló
+		// entre la comprobación de arriba y esta escritura. El índice único decidió,
+		// así que se responde con la compra que quedó en vez de con un error de base
+		// que no dice nada al operador ni al agente.
+		if compraEsDuplicadoDeClave(err) {
+			_ = tx.Rollback()
+			if existente, dup := s.compraExistente(r, hashCompra, supplierID, controlNo, chalanNo); dup {
+				writeJSON(w, compraDuplicadaRespuesta(existente))
+				return
+			}
+		}
 		jsonError(w, err.Error(), 500)
 		return
 	}
@@ -291,16 +350,38 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 	comment := "Purchase Voucher for supplier"
 	purchaseCOA := pre.PurchaseCode
 
+	// LA CUENTA DEL PROVEEDOR, NO LA GENERAL.
+	//
+	// El mayor del proveedor (/supplier/ledger) y la columna de saldo del listado
+	// leen la subcuenta del proveedor en acc_coa (la que crea su alta bajo 21110).
+	// Los asientos se hacían contra la cuenta GENERAL de proveedores, con el
+	// detalle en subType/subCode: cada proveedor tenía su cuenta en cero y su libro
+	// decía «Sin movimientos» para siempre.
+	//
+	// Se resuelve una vez para todos los renglones, y se crea si le falta —caso de
+	// los proveedores cargados desde el PHP original—, para que la deuda tenga
+	// dónde asentarse.
+	headSupplier, subSupplier, err := s.cuentaProveedorTx(tx, supplierID)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
 	if len(payAmounts) > 0 && len(payTypes) > 0 {
 		if payTypes[0] == "0" {
-			// full credit: Credit purchaseCode, RevCodde=supplierCode
-			sub := s.subcodeID(r, supplierID, 4)
+			// COMPRA A CRÉDITO: DÉBITO a la cuenta de compras, CRÉDITO a la del
+			// proveedor. El signo estaba invertido (la fila se armaba con `Credit:`
+			// sobre la cuenta de compras y la doble partida de approveVoucher la
+			// convertía en un DÉBITO al proveedor), así que la deuda del proveedor
+			// nacía RESTANDO en su libro. La venta a crédito lo hace bien y sirve de
+			// espejo: «Debit: pre.CustomerCode» (invoice.go) — la deuda del tercero
+			// va en el lado que le corresponde.
 			vno := nextVoucherNoTx(tx, "JV")
 			_ = s.insertVoucherRowTx(r, tx, VoucherRow{
 				VNo: vno, Vtype: "JV", ReferenceNo: fmt.Sprintf("%d", purchaseID),
-				COAID: purchaseCOA, RevCodde: pre.SupplierCode,
+				COAID: purchaseCOA, RevCodde: headSupplier,
 				Narration: narration, Comment: comment,
-				Credit: grandTotal, SubType: 4, SubCode: sub,
+				Debit: grandTotal, SubType: 4, SubCode: subSupplier,
 			}, createBy)
 		} else {
 			// El select del formulario manda el ID del método de pago
@@ -325,13 +406,14 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 				}, createBy)
 			}
 			if dueAmount > 0 {
-				sub := s.subcodeID(r, supplierID, 4)
+				// Lo que queda a crédito, igual que arriba: débito a compras y
+				// crédito al proveedor (antes iba al revés y contra la cuenta general).
 				vno := nextVoucherNoTx(tx, "JV")
 				_ = s.insertVoucherRowTx(r, tx, VoucherRow{
 					VNo: vno, Vtype: "JV", ReferenceNo: fmt.Sprintf("%d", purchaseID),
-					COAID: purchaseCOA, RevCodde: pre.SupplierCode,
+					COAID: purchaseCOA, RevCodde: headSupplier,
 					Narration: narration, Comment: comment,
-					Credit: dueAmount, SubType: 4, SubCode: sub,
+					Debit: dueAmount, SubType: 4, SubCode: subSupplier,
 				}, createBy)
 			}
 		}
@@ -342,23 +424,27 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 		// no llegaba a `acc_vaucher` en absoluto. La mercadería entraba al
 		// almacén y el costo no aparecía en ninguna parte: el inventario era un
 		// número que solo existía en los lotes.
+		// Los dos renglones iban con `Credit:` sobre la cuenta de compras, que en
+		// la doble partida deja DÉBITO en la cuenta contraria: la compra se
+		// acreditaba (bajando el costo) y salían débitos en caja y en el proveedor.
+		// Aquí se asienta como en la rama de multi-pago, que ya lo hacía bien: la
+		// cuenta de compras al DÉBITO y el dinero que sale al crédito.
 		if sumPay > 0 {
 			vno := nextVoucherNoTx(tx, "DV")
 			_ = s.insertVoucherRowTx(r, tx, VoucherRow{
 				VNo: vno, Vtype: "DV", ReferenceNo: fmt.Sprintf("%d", purchaseID),
 				COAID: purchaseCOA, RevCodde: pre.CashCode,
 				Narration: narration, Comment: comment,
-				Credit: sumPay,
+				Debit: sumPay,
 			}, createBy)
 		}
 		if dueAmount > 0 {
-			sub := s.subcodeID(r, supplierID, 4)
 			vno := nextVoucherNoTx(tx, "JV")
 			_ = s.insertVoucherRowTx(r, tx, VoucherRow{
 				VNo: vno, Vtype: "JV", ReferenceNo: fmt.Sprintf("%d", purchaseID),
-				COAID: purchaseCOA, RevCodde: pre.SupplierCode,
+				COAID: purchaseCOA, RevCodde: headSupplier,
 				Narration: narration, Comment: comment,
-				Credit: dueAmount, SubType: 4, SubCode: sub,
+				Debit: dueAmount, SubType: 4, SubCode: subSupplier,
 			}, createBy)
 		}
 	}

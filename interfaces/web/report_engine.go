@@ -51,22 +51,22 @@ const (
 // Cuando está presente, el motor calcula las etiquetas y los datos a partir de
 // las columnas que devuelve el SQL, y el frontend dibuja el gráfico con Chart.js.
 type ReportChart struct {
-	Type       string `json:"type"`       // line | bar | pie | doughnut
-	XKey       string `json:"x_key"`      // clave declarada en columns para el eje X
-	YKey       string `json:"y_key"`      // clave declarada en columns para el eje Y
-	YLabel     string `json:"y_label"`    // etiqueta del dataset (opcional)
-	Title      string `json:"title"`      // título del gráfico (opcional)
+	Type       string `json:"type"`    // line | bar | pie | doughnut
+	XKey       string `json:"x_key"`   // clave declarada en columns para el eje X
+	YKey       string `json:"y_key"`   // clave declarada en columns para el eje Y
+	YLabel     string `json:"y_label"` // etiqueta del dataset (opcional)
+	Title      string `json:"title"`   // título del gráfico (opcional)
 	Stacked    bool   `json:"stacked,omitempty"`
 	ShowLegend bool   `json:"show_legend,omitempty"`
 }
 
 // ReportRunChart es el dataset ya procesado que consume Chart.js.
 type ReportRunChart struct {
-	Type    string                  `json:"type"`
-	Title   string                  `json:"title,omitempty"`
-	Labels  []string                `json:"labels"`
+	Type     string                  `json:"type"`
+	Title    string                  `json:"title,omitempty"`
+	Labels   []string                `json:"labels"`
 	Datasets []ReportRunChartDataset `json:"datasets"`
-	Stacked bool                    `json:"stacked,omitempty"`
+	Stacked  bool                    `json:"stacked,omitempty"`
 }
 
 type ReportRunChartDataset struct {
@@ -400,8 +400,8 @@ func buildReportChart(cfg *ReportChart, claves, keys []string, data [][]interfac
 	}
 
 	return &ReportRunChart{
-		Type:  cfg.Type,
-		Title: cfg.Title,
+		Type:   cfg.Type,
+		Title:  cfg.Title,
 		Labels: labels,
 		Datasets: []ReportRunChartDataset{
 			{Label: yLabel, Data: yData},

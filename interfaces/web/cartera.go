@@ -23,13 +23,35 @@ func (s *Server) registerCarteraRoutes() {
 	s.mux.HandleFunc("POST /cartera/delete/{id}", s.carteraDelete)
 	s.mux.HandleFunc("POST /cartera/collect", s.carteraCollect)
 	s.mux.HandleFunc("GET /cartera/statement/{customer_id}", s.carteraStatement)
+	// El saldo por cliente, el reparto de un cobro entre varias facturas y el
+	// listado de facturas abiertas de un cliente. Es lo que convierte la lista de
+	// cobros en un módulo de cartera: ver cuánto debe cada quién y en qué se fue
+	// cada pago.
+	s.mux.HandleFunc("GET /cartera/por-cobrar", s.carteraPorCobrar)
+	s.mux.HandleFunc("GET /cartera/facturas/{customer_id}", s.carteraFacturasCliente)
+	s.mux.HandleFunc("POST /cartera/cobrar", s.carteraCobrar)
 }
 
 // carteraList renderiza la página de cuentas por cobrar.
 func (s *Server) carteraList(w http.ResponseWriter, r *http.Request) {
+	// La cartera maneja plata que se espera cobrar y crea cobros con su asiento: se
+	// entra con el permiso del libro de clientes, igual que el resto del sistema.
+	if !s.exigirPermiso(w, r, "read", "customer_ledger") {
+		return
+	}
 	s.render(w, r, "cartera_list.html", map[string]interface{}{
-		"Title":  "Cuentas por Cobrar",
-		"Module": "cartera",
+		"Title":         "Cuentas por Cobrar",
+		"Module":        "cartera",
+		"Customers":     s.pbListaClientes(r),
+		"Methods":       s.pbListaMetodos(r),
+		"PuedeCobrar":   s.hasPermission(r, "customer_ledger", "create"),
+		"PuedeBorrar":   s.hasPermission(r, "customer_ledger", "delete"),
+		"PuedeClientes": s.hasPermission(r, "add_customer", "create"),
+		// El aviso al cliente sale con el mismo permiso que registrar un cobro: quien
+		// puede cobrar puede reclamar. La pantalla recibe de los canales SOLO id,
+		// nombre y tipo; las credenciales nunca viajan al navegador.
+		"PuedeAvisar": s.hasPermission(r, "customer_ledger", "create"),
+		"Canales":     s.notifyOpciones(s.dbFor(r)),
 	})
 }
 

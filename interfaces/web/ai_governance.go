@@ -71,10 +71,17 @@ var aiForbiddenWriteTables = []string{
 
 // GovernanceDecision es el veredicto del guardián para una acción.
 type GovernanceDecision struct {
-	Allowed    bool
-	Risk       RiskLevel
-	Reason     string
-	NeedsHuman bool // si además de permitirse, exige aprobación humana
+	Allowed bool
+	Risk    RiskLevel
+	Reason  string
+	// Rule dice QUÉ regla decidió, para que el bloqueo sea diagnosticable y el
+	// agente sepa que no debe reintentar: catálogo, tablas, permisos, operador o
+	// nivel-1. Antes todos los bloqueos se reportaban como "nivel-1", así que un
+	// permiso faltante y una tabla prohibida se leían igual.
+	Rule string
+	// NeedsHuman indica que la acción, además de permitirse, exige revisión
+	// humana. Se persiste con la corrida (ver ai_task_run.needs_human).
+	NeedsHuman bool
 }
 
 // aiRiskSeverity ordena los niveles de riesgo.
@@ -99,13 +106,18 @@ func aiAtLeast(r RiskLevel, min RiskLevel) bool {
 
 // aiGuardAction es el punto único por donde pasa TODA acción de la IA. Se llama
 // al inicio de aiDispatchTool, antes de ejecutar nada.
-func aiGuardAction(toolName string, args map[string]interface{}, operatorEnabled bool) GovernanceDecision {
+//
+// gate son los permisos del rol del agente, resueltos una vez por corrida. Se
+// pasan como valor y no se consultan aquí para que el guardián siga siendo una
+// función comprobable sin base de datos.
+func aiGuardAction(toolName string, args map[string]interface{}, operatorEnabled bool, gate aiRoleGate) GovernanceDecision {
 	tool, known := aiToolByName[toolName]
 	if !known {
 		// Herramienta no declarada: se rechaza por omisión. Una whitelist es
 		// segura; una blacklist obliga a perseguir cada caso nuevo.
 		return GovernanceDecision{
 			Risk:   RiskCritical,
+			Rule:   "catalogo",
 			Reason: fmt.Sprintf("herramienta '%s' no está registrada en el catálogo de riesgos; el guardián la rechaza por omisión", toolName),
 		}
 	}
@@ -120,6 +132,7 @@ func aiGuardAction(toolName string, args map[string]interface{}, operatorEnabled
 		}
 		return GovernanceDecision{
 			Risk:   RiskCritical,
+			Rule:   "tablas",
 			Reason: fmt.Sprintf("%s '%s' está prohibido a los agentes por regla del sistema", accion, t),
 		}
 	}
@@ -131,13 +144,33 @@ func aiGuardAction(toolName string, args map[string]interface{}, operatorEnabled
 	if tool.OperatorOnly && !operatorEnabled {
 		return GovernanceDecision{
 			Risk:   tool.Risk,
+			Rule:   "operador",
 			Reason: "modo operador desactivado para este agente",
+		}
+	}
+
+	// PERMISOS DEL ROL. Es el hueco que quedaba abierto: el modo operador se
+	// comprobaba, y el permiso concreto del rol no. Un agente con operador activo
+	// podía llamar voucher.create o payment.record aunque su rol no tuviera ese
+	// permiso en la interfaz, cuando los documentos del módulo prometen
+	// "operator_enabled Y permisos CRUD del rol".
+	//
+	// Solo se exige a las herramientas que declaran Permission (las que escriben).
+	// Las lecturas ya están acotadas por el departamento del rol en el guardián de
+	// SQL; doblarlas aquí no añade seguridad y rompería el diseñador de informes,
+	// que usa al agente por defecto para LEER.
+	if !gate.allowsTool(tool) {
+		return GovernanceDecision{
+			Risk:   tool.Risk,
+			Rule:   "permisos",
+			Reason: gate.explainPermission(tool),
 		}
 	}
 
 	return GovernanceDecision{
 		Allowed:    true,
 		Risk:       tool.Risk,
+		Rule:       "nivel-1",
 		NeedsHuman: tool.Risk == RiskCritical,
 	}
 }

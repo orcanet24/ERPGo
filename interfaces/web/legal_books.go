@@ -56,7 +56,7 @@ func (s *Server) bookPurchasesData(w http.ResponseWriter, r *http.Request) {
 			IFNULL(p.total_vat_amnt,0) AS vat_amount, 0 AS exempt, '' AS retention_no
 		FROM product_purchase p
 		LEFT JOIN supplier_information s ON s.supplier_id = p.supplier_id
-		WHERE p.purchase_date BETWEEN ? AND ?
+		WHERE p.purchase_date BETWEEN ? AND ? AND IFNULL(p.document_kind,'factura') = 'factura'
 		ORDER BY p.purchase_date ASC, p.id ASC`, startDate, endDate)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
@@ -80,9 +80,20 @@ func (s *Server) bookPurchasesData(w http.ResponseWriter, r *http.Request) {
 		totalVat += vat
 		totalExempt += exempt
 	}
+	// LO QUE NO ENTRA AL LIBRO, CONTADO. Las notas de entrega y las órdenes de
+	// compra quedan fuera (no son crédito fiscal) pero no se ocultan: el libro dice
+	// cuántas dejó fuera, para que un descuadre contra el sistema no parezca un
+	// error de la consulta.
+	var noFiscales int
+	_ = s.dbFor(r).QueryRow(`SELECT COUNT(*) FROM product_purchase p
+		WHERE p.purchase_date BETWEEN ? AND ? AND IFNULL(p.document_kind,'factura') <> 'factura'`,
+		startDate, endDate).Scan(&noFiscales)
+
 	writeJSON(w, map[string]interface{}{
 		"data": list, "total_base": totalBase, "total_vat": totalVat,
-		"total_exempt": totalExempt,
+		"total_exempt": totalExempt, "facturas": len(list),
+		"excluidas_no_fiscales": noFiscales,
+		"nota":                  "Solo se listan las compras clasificadas como FACTURA. Las notas de entrega y las órdenes de compra generan deuda e inventario, pero no crédito fiscal, así que no entran al libro ni a las retenciones.",
 	})
 }
 
@@ -99,7 +110,7 @@ func (s *Server) bookPurchasesPrint(w http.ResponseWriter, r *http.Request) {
 			IFNULL(p.total_vat_amnt,0) AS vat_amount, 0 AS exempt, '' AS retention_no
 		FROM product_purchase p
 		LEFT JOIN supplier_information s ON s.supplier_id = p.supplier_id
-		WHERE p.purchase_date BETWEEN ? AND ?
+		WHERE p.purchase_date BETWEEN ? AND ? AND IFNULL(p.document_kind,'factura') = 'factura'
 		ORDER BY p.purchase_date ASC, p.id ASC`, startDate, endDate)
 	if err != nil {
 		jsonError(w, err.Error(), 500)

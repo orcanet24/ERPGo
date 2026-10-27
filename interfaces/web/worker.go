@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,6 +26,12 @@ const queueAIKind = "ai_task"
 type aiTaskPayload struct {
 	TaskID  int64 `json:"task_id"`
 	AgentID int64 `json:"agent_id"`
+	// Slot es la ranura de programación calculada al ENCOLAR, no al ejecutar.
+	//
+	// Tiene que viajar en el payload: entre el tick de las 6:55 y la ejecución
+	// pueden pasar minutos, y recalcularla al ejecutar daría otra ranura (u otro
+	// día) y abriría la puerta a la corrida duplicada que esto cierra.
+	Slot string `json:"slot"`
 }
 
 // startQueue levanta el motor de tareas sobre la BD de control y registra el
@@ -101,7 +108,13 @@ func (s *Server) runQueuedAITask(ctx context.Context, t queue.Task) error {
 		return err
 	}
 
-	if _, err := s.aiExecuteTask(sess, task); err != nil {
+	if _, err := s.aiExecuteTask(sess, task, p.Slot); err != nil {
+		// Ranura tomada: la tarea ya corrió en este período. NO es un fallo y no
+		// debe reintentarse: devolver el error haría que la cola la reintentara
+		// tres veces para volver a chocar con la misma ranura.
+		if errors.Is(err, errAIRunSlotTaken) {
+			return nil
+		}
 		return err
 	}
 	return nil
@@ -194,10 +207,17 @@ func (s *Server) enqueueDueAITasksOf(tenant string, db *sql.DB, nowT time.Time) 
 		if status == "running" {
 			continue
 		}
+		// La ranura se calcula aquí, en el momento de encolar, y viaja con la
+		// tarea. Es la clave única que impide que esta misma tarea se encole otra
+		// vez en el mismo período.
+		slot := aiRunSlot(t, nowT)
+		if slot == "" {
+			continue
+		}
 		// Backpressure: si la cola está llena, esta tarea espera al siguiente
 		// ciclo. No es un motivo para tumbar el scheduler ni para descartar trabajo.
 		_, err := s.queue.Enqueue(queueAIKind, tenant, aiTaskPayload{
-			TaskID: t.ID, AgentID: t.AgentID,
+			TaskID: t.ID, AgentID: t.AgentID, Slot: slot,
 		})
 		// El error se imprime y no se descarta. Una tarea de IA que no se
 		// encola es trabajo que no se hace, y con el descarte el síntoma es

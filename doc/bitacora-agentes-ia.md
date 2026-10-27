@@ -18,7 +18,7 @@ secuencias operativas de forma autónoma (modo operador), con:
 | ORC24 = `https://ia.orcanet1724.click/v1`, estándar OpenAI-compatible | constante de código; test verifica la URL exacta |
 | Reglas de seguridad **ocultas en el binario** | const `aiSystemCoreRules`, solo viaja como system prompt, jamás se expone en UI |
 | Agente = **usuario real con rol RBAC** | cada agente crea `users` + `user_login` (`username="agente.<slug>"`, password aleatoria, `status=0` = no puede loguearse) + `sec_userrole` |
-| Operador **sin aprobación humana por acción** | tareas con instrucciones claras y secuencias; el servidor Go valida y ejecuta cada tool |
+| Operador **sin aprobación humana por acción**, con **marca de revisión persistida** | el servidor Go valida y ejecuta cada tool; las acciones críticas (pagos, vouchers, anulaciones) marcan la corrida (`ai_task_run.needs_human`) y un administrador la da por revisada desde la propia corrida |
 | Todo **auditable y reversible** | `s.aiAudit()` → `audit_log` (cadena de hash) con ip="ia"; journal de compensaciones por corrida |
 | Agente de IT por defecto | `aiDefaultITAgent()` = primer agente activo (lo usa "Ayúdame con la IA" del diseñador) |
 
@@ -108,6 +108,23 @@ agente (IA). Introspección dual MySQL/SQLite vía `s.isSQLite()`.
 | `invoice.post` | contra-asiento `undoUnpostInvoice` (nunca DELETE financiero) |
 | `payment.record` | `undoReversePayment` |
 | `voucher.create` | contra-asiento `undoContraVoucher` |
+
+**Permisos del rol en el despacho** (ver [ai_permissions.go](../interfaces/web/ai_permissions.go)).
+Cada herramienta que ESCRIBE declara su permiso (`aiToolDef.Permission`: directorio + acción)
+junto a su riesgo, y el guardián lo exige con el mismo criterio que la web (admin/master
+todo, `employee` solo lectura, el resto según `role_permission`, consultando las dos bases).
+Antes ninguna `ai_*.go` llamaba a `hasPermission`: un agente con operador activo podía crear
+un voucher aunque su rol no tuviera ese permiso en la interfaz. Las lecturas siguen
+acotadas por el departamento del rol, que es su candado.
+
+**Idempotencia** (ver [ai_idempotency.go](../interfaces/web/ai_idempotency.go) y
+`migrations/schema_z_ai_governance.sql`). Toda herramienta de escritura reclama una clave en
+`ai_tool_execution` antes de escribir: con `external_ref` la clave es la referencia del
+documento (una sola vez, aunque pasen los días) y sin ella es el ámbito de la corrida
+(ranura de programación o tarea+día), que cubre el reintento de la cola y un segundo
+«Ejecutar ahora». Revertir la corrida libera sus claves. Además, una tarea programada reclama
+su período en `ai_run_slot`, así que el ticker de 5 minutos ya no la reejecuta dentro de la
+misma hora.
 
 Contabilidad append-only: la reversión usa `nextVoucherNoTx` + `insertVoucherRowTx`
 + `predefineAccount` + `subcodeID(ref,3)` (mismas convenciones del ERP). El botón

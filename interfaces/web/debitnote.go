@@ -153,9 +153,9 @@ func (s *Server) debitNoteForm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.render(w, r, "debitnote_form.html", map[string]interface{}{
-		"Title":    "Nueva Nota de Débito",
+		"Title":     "Nueva Nota de Débito",
 		"Customers": opts,
-		"Invoices": invOpts,
+		"Invoices":  invOpts,
 	})
 }
 

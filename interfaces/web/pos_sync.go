@@ -291,10 +291,10 @@ func (s *Server) handlePOSSyncStatus(w http.ResponseWriter, r *http.Request) {
 // posClienteSync es un cliente que el terminal creó OFFLINE en su SQLite y
 // manda al reponerse la conexión.
 type posClienteSync struct {
-	LocalID string `json:"local_id"`          // id del cliente en el terminal
-	RIF     string `json:"rif"`               // cédula/RIF; el reductor de duplicados
-	Nombre  string `json:"name"`              // nombre
-	Telefono string `json:"phone"`            // móvil opcional
+	LocalID  string `json:"local_id"` // id del cliente en el terminal
+	RIF      string `json:"rif"`      // cédula/RIF; el reductor de duplicados
+	Nombre   string `json:"name"`     // nombre
+	Telefono string `json:"phone"`    // móvil opcional
 }
 
 // posClienteSyncResp es la resolución de UN cliente: o se creó, o la caja ya

@@ -77,6 +77,11 @@ type aiTaskRun struct {
 	Steps       []aiStep
 	FinalReport string
 	CanUndo     bool
+	// NeedsHuman llega de la BASE (ai_task_run.needs_human), no de una variable
+	// del runner: es lo que hace que la marca sobreviva al proceso y al reinicio.
+	NeedsHuman bool
+	ReviewedBy string
+	ReviewedAt string
 }
 
 type aiStep struct {
@@ -108,6 +113,7 @@ func (s *Server) registerAITaskRoutes() {
 	s.mux.HandleFunc("POST /ai/tasks/run/{id}", s.aiTaskRunNow)
 	s.mux.HandleFunc("GET /ai/tasks/runs/{id}", s.aiTaskRunView)
 	s.mux.HandleFunc("POST /ai/tasks/runs/{id}/undo", s.aiTaskUndo)
+	s.mux.HandleFunc("POST /ai/tasks/runs/{id}/review", s.aiTaskRunReview)
 }
 
 func (s *Server) aiTaskList(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +126,11 @@ func (s *Server) aiTaskListData(w http.ResponseWriter, r *http.Request) {
 	for _, t := range tasks {
 		var lastRun sql.NullString
 		var lastStatus sql.NullString
-		_ = s.dbFor(r).QueryRow(`SELECT id, status FROM ai_task_run WHERE task_id = ? ORDER BY id DESC LIMIT 1`, t.ID).Scan(&lastRun, &lastStatus)
+		var needsHuman sql.NullInt64
+		var reviewedBy sql.NullString
+		_ = s.dbFor(r).QueryRow(`SELECT id, status, IFNULL(needs_human,0), IFNULL(reviewed_by,'')
+			FROM ai_task_run WHERE task_id = ? ORDER BY id DESC LIMIT 1`, t.ID).
+			Scan(&lastRun, &lastStatus, &needsHuman, &reviewedBy)
 		item := map[string]interface{}{
 			"id": t.ID, "name": t.Name, "agent": t.AgentName, "schedule": t.ScheduleType,
 			"schedule_value": t.ScheduleValue, "enabled": t.Enabled == 1,
@@ -128,6 +138,9 @@ func (s *Server) aiTaskListData(w http.ResponseWriter, r *http.Request) {
 		if lastRun.Valid {
 			item["last_run_id"] = lastRun.String
 			item["last_status"] = lastStatus.String
+			// pending_review es «marcada y todavía sin revisar»: es lo que el
+			// listado tiene que mostrar, no la marca histórica.
+			item["pending_review"] = needsHuman.Int64 == 1 && reviewedBy.String == ""
 		}
 		out = append(out, item)
 	}
@@ -248,10 +261,17 @@ func (s *Server) aiTaskRunNow(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "La tarea está deshabilitada", 400)
 		return
 	}
-	runID, err := s.aiExecuteTask(s.sessionFromRequest(r), task)
+	// Disparo manual: sin ranura de período. Un humano pidió ejecutar ahora, y
+	// negarlo por «ya corrió hoy» sería confundir la intención con un reintento.
+	// Lo que sí se deduplica es el DOCUMENTO, en el libro de idempotencia.
+	runID, err := s.aiExecuteTask(s.sessionFromRequest(r), task, "")
 	if err != nil {
 		if errors.Is(err, errAIRunnerBusy) {
 			jsonError(w, err.Error(), 429)
+			return
+		}
+		if errors.Is(err, errAIRunSlotTaken) {
+			jsonError(w, err.Error(), 409)
 			return
 		}
 		jsonError(w, err.Error(), 500)
@@ -292,8 +312,12 @@ func (s *Server) aiLoadRun(sess *SessionData, id int64) (aiTaskRun, bool) {
 	var status, started sql.NullString
 	var finished sql.NullString
 	var stepsRaw, report sql.NullString
-	err := s.dbForSession(sess).QueryRow(`SELECT task_id, agent_id, status, started_at, finished_at, steps, final_report
-		FROM ai_task_run WHERE id = ?`, id).Scan(&taskID, &agentID, &status, &started, &finished, &stepsRaw, &report)
+	var needsHuman sql.NullInt64
+	var reviewedBy, reviewedAt sql.NullString
+	err := s.dbForSession(sess).QueryRow(`SELECT task_id, agent_id, status, started_at, finished_at, steps, final_report,
+		IFNULL(needs_human,0), IFNULL(reviewed_by,''), reviewed_at
+		FROM ai_task_run WHERE id = ?`, id).
+		Scan(&taskID, &agentID, &status, &started, &finished, &stepsRaw, &report, &needsHuman, &reviewedBy, &reviewedAt)
 	if err != nil {
 		return aiTaskRun{}, false
 	}
@@ -303,8 +327,11 @@ func (s *Server) aiLoadRun(sess *SessionData, id int64) (aiTaskRun, bool) {
 		ID: id, TaskID: taskID, TaskName: task.Name, AgentID: agentID, AgentName: agent.Name,
 		Status: status.String, StartedAt: started.String, FinishedAt: finished.String,
 		Steps: aiStepList(stepsRaw), FinalReport: report.String,
+		NeedsHuman: needsHuman.Int64 == 1, ReviewedBy: reviewedBy.String, ReviewedAt: reviewedAt.String,
 	}
-	run.CanUndo = run.Status == "done"
+	// También se revierte una corrida fallida: es la que deja escrituras
+	// parciales, y era la única que el botón no ofrecía.
+	run.CanUndo = run.Status == "done" || run.Status == "failed"
 	return run, true
 }
 
@@ -338,7 +365,12 @@ func (s *Server) aiTaskUndo(w http.ResponseWriter, r *http.Request) {
 }
 
 // aiExecuteTask es el bucle principal del runner. Devuelve el run_id.
-func (s *Server) aiExecuteTask(sess *SessionData, task aiTask) (int64, error) {
+//
+// runSlot es la ranura de programación (ver aiRunSlot). Vacío = disparo manual.
+// La ranura impide que la MISMA tarea se ejecute dos veces en el MISMO período;
+// la deduplicación de los DOCUMENTOS la lleva el libro de idempotencia de las
+// herramientas (ai_idempotency.go), que es otra cosa y cubre otros caminos.
+func (s *Server) aiExecuteTask(sess *SessionData, task aiTask, runSlot string) (int64, error) {
 	agent, found := s.loadAIAgentByID(sess, task.AgentID)
 	if !found {
 		return 0, fmt.Errorf("agente no encontrado")
@@ -352,14 +384,36 @@ func (s *Server) aiExecuteTask(sess *SessionData, task aiTask) (int64, error) {
 		return 0, errAIRunnerBusy
 	}
 	defer aiRunnerRunning.Store(0)
-	res, err := s.dbForSession(sess).Exec(`INSERT INTO ai_task_run (task_id, agent_id, status, started_at) VALUES (?,?, 'running', ?)`,
+
+	db := s.dbForSession(sess)
+
+	// RANURA DE PROGRAMACIÓN. Reclamarla es lo que corta la duplicación: antes la
+	// decisión era comparar la hora del reloj, verdadera en las doce vueltas del
+	// ticker dentro de esa hora, y una tarea «daily» corría hasta doce veces.
+	if runSlot != "" {
+		claimed, err := s.aiClaimRunSlot(db, runSlot, task.ID)
+		if err != nil {
+			return 0, err
+		}
+		if !claimed {
+			return 0, errAIRunSlotTaken
+		}
+	}
+
+	res, err := db.Exec(`INSERT INTO ai_task_run (task_id, agent_id, status, started_at) VALUES (?,?, 'running', ?)`,
 		task.ID, agent.ID, aiAgentClock().Format("2006-01-02 15:04:05"))
 	if err != nil {
+		s.aiReleaseRunSlot(db, runSlot)
 		return 0, err
 	}
 	runID, _ := res.LastInsertId()
 
-	journal := &aiRunJournal{}
+	journal := &aiRunJournal{
+		runID:   runID,
+		taskID:  task.ID,
+		agentID: agent.ID,
+		scope:   aiRunScope(task, runSlot),
+	}
 	steps := []aiStep{}
 	report, runErr := s.aiRunLoop(sess, agent, task, &steps, journal)
 
@@ -374,10 +428,24 @@ func (s *Server) aiExecuteTask(sess *SessionData, task aiTask) (int64, error) {
 		}
 		steps = append(steps, aiStep{Type: "error", Output: runErr.Error(), At: aiRunnerStartedAt()})
 	}
+	// La ranura se libera si la corrida falla: un fallo del proveedor a las 6:00 no
+	// puede dejar la tarea diaria sin reintento hasta mañana. Si termina bien, la
+	// ranura queda tomada y el resto de la hora no vuelve a ejecutarla.
+	if status == "failed" {
+		s.aiReleaseRunSlot(db, runSlot)
+	}
+
+	// La marca de revisión humana se guarda con la corrida. Antes vivía en un campo
+	// sin exportar y se perdía al serializar el journal: el agente ejecutaba un
+	// pago y la marca se evaporaba.
+	needsHuman := 0
+	if journal.NeedsHuman {
+		needsHuman = 1
+	}
 	journalJSON, _ := json.Marshal(journal)
 	stepsJSON, _ := json.Marshal(steps)
-	_, _ = s.dbForSession(sess).Exec(`UPDATE ai_task_run SET status=?, finished_at=?, steps=?, final_report=?, undo_journal=? WHERE id=?`,
-		status, aiAgentClock().Format("2006-01-02 15:04:05"), string(stepsJSON), finalReport, string(journalJSON), runID)
+	_, _ = db.Exec(`UPDATE ai_task_run SET status=?, finished_at=?, steps=?, final_report=?, undo_journal=?, needs_human=? WHERE id=?`,
+		status, aiAgentClock().Format("2006-01-02 15:04:05"), string(stepsJSON), finalReport, string(journalJSON), needsHuman, runID)
 	return runID, runErr
 }
 
@@ -387,7 +455,19 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 	if !ok {
 		return "", fmt.Errorf("el proveedor del agente no tiene API key configurada")
 	}
-	sess = &SessionData{UserID: agent.UserID, Username: aiAgentUsername(nil, agent), Fullname: agent.Name, UserLevel: "agent"}
+	// El rol del agente se resuelve ANTES de cambiar la sesión: aquí todavía viene
+	// la empresa (TenantCode), y el rol vive en la base de la empresa o en la de
+	// control. Después de esta línea la sesión es la identidad mínima del agente
+	// para los prompts, no para resolver permisos.
+	gate := s.aiBuildRoleGate(sess, agent)
+	tenant := ""
+	if sess != nil {
+		tenant = sess.TenantCode
+	}
+	// TenantCode viaja a la sesión del runner: las herramientas resuelven la base
+	// por sesión (dbForSession), y perderla hacía que una tarea encolada de la
+	// empresa A pudiera escribir contra la empresa activa del proceso.
+	sess = &SessionData{UserID: agent.UserID, Username: aiAgentUsername(nil, agent), Fullname: agent.Name, UserLevel: "agent", TenantCode: tenant}
 
 	roleName := agent.RoleName
 	if roleName == "" {
@@ -424,7 +504,7 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 	// Una fila por llamada al modelo. Un agente da hasta maxSteps llamadas y cada
 	// una se cobra, así que el registro va justo después de cada respuesta.
 	for step := 1; step <= maxSteps; step++ {
-		content, toolCalls, usage, err := aiCallChatWithTools(p, model, messages, aiToolsJSON(agent.OperatorEnabled == 1))
+		content, toolCalls, usage, err := aiCallChatWithTools(p, model, messages, aiToolsJSON(agent.OperatorEnabled == 1, gate))
 		// Se registra aunque este paso falle: los tokens gastados hasta el
 		// fallo también son consumo facturable.
 		s.recordAIUsage(s.dbForSession(sess), aiUsageEvent{
@@ -452,7 +532,7 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 		var toolResults []string
 		for _, tc := range toolCalls {
 			payload := aiToolPayload{Name: tc.Name, Args: aiArgumentosDeHerramienta(tc.Arguments, tc.Name)}
-			out, execErr := s.aiDispatchTool(sess, agent, payload, journal)
+			out, execErr := s.aiDispatchTool(sess, agent, payload, journal, gate)
 			if execErr != nil {
 				out = string(mustJSON(aiToolError{execErr.Error()}))
 			}

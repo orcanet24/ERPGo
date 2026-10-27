@@ -20,10 +20,23 @@
                         <small class="help-block">Si no está en la lista, créelo aquí: queda seleccionado en esta compra.</small>
                     </div>
                 </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label for="document_kind">Tipo de documento</label>
+                        <select class="form-control" id="document_kind" name="document_kind">
+                            <option value="factura" {{if eq .DocumentKind "factura"}}selected{{end}}>Factura del proveedor (crédito fiscal)</option>
+                            <option value="nota_entrega" {{if eq .DocumentKind "nota_entrega"}}selected{{end}}>Nota de entrega</option>
+                            <option value="orden" {{if eq .DocumentKind "orden"}}selected{{end}}>Orden de compra</option>
+                            <option value="sin_documento" {{if eq .DocumentKind "sin_documento"}}selected{{end}}>Sin documento</option>
+                        </select>
+                        <small class="help-block">Solo la factura entra al Libro de Compras (IVA) y a retenciones. La nota de entrega y la orden meten mercancía y generan deuda, sin crédito fiscal.</small>
+                    </div>
+                </div>
                 <div class="col-md-2">
                     <div class="form-group">
                         <label for="chalan_no">N° Factura del proveedor</label>
                         <input type="text" class="form-control" id="chalan_no" name="chalan_no" placeholder="Ej: 000123" value="{{.Chalan}}">
+                        <small class="help-block">Obligatorio si el documento es factura con IVA.</small>
                     </div>
                 </div>
                 <div class="col-md-2">
@@ -147,9 +160,19 @@
 <div class="modal fade" id="catalogoProductos" tabindex="-1" role="dialog">
     <div class="modal-dialog modal-lg" role="document">
         <div class="modal-content">
-            <div class="modal-header">
-                <button type="button" class="close" data-dismiss="modal" aria-label="Cerrar">&times;</button>
-                <h4 class="modal-title"><i class="fa fa-search"></i> Catálogo de productos</h4>
+            <div class="modal-header" style="display:flex;align-items:center;gap:10px">
+                <h4 class="modal-title" style="flex:1 1 auto;margin:0"><i class="fa fa-search"></i> Catálogo de productos</h4>
+                <!-- Fichas (foto grande) o lista (muchas filas a la vista): quien
+                     reconoce el artículo por su aspecto quiere fichas; quien viene
+                     con el código de barras quiere ver cuarenta de un vistazo. -->
+                <div class="btn-group btn-group-sm" id="catVista" role="group" aria-label="Cómo ver el catálogo">
+                    <button type="button" class="btn btn-default active" data-vista="fichas"
+                            title="Fichas con foto"><i class="fa fa-th-large"></i> Fichas</button>
+                    <button type="button" class="btn btn-default" data-vista="lista"
+                            title="Lista compacta"><i class="fa fa-list"></i> Lista</button>
+                </div>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Cerrar"
+                        style="float:none;margin:0;opacity:1">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="input-group" style="margin-bottom:10px">
@@ -280,6 +303,11 @@ var pickerRow = null;
 var autoIntentos = 0;
 var enviando = false;
 var catProductos = [];
+// Vista elegida dentro del catálogo ('fichas' o 'lista') y si ya hay datos
+// pintados, para no repintar un modal que nunca se abrió.
+var catVista = 'fichas';
+var catCargado = false;
+try { catVista = localStorage.getItem('erp_catalogo_vista') || 'fichas'; } catch (e) { catVista = 'fichas'; }
 
 // ---------- product rows ----------
 function itemRow(preset) {
@@ -435,20 +463,57 @@ function cargarCatalogo(term) {
 
 function pintarCatalogo(lista) {
     catProductos = lista || [];
+    catCargado = true;
     var $c = $('#catLista').empty();
     if (!catProductos.length) {
         $c.append('<div class="col-xs-12 text-muted">Sin resultados. Puede darlo de alta con el botón verde de la fila.</div>');
         return;
     }
+    if (catVista === 'lista') { pintarComoLista($c); } else { pintarComoFichas($c); }
+}
+
+// rutaFoto arma la dirección de la foto del producto.
+//
+// Las imágenes se guardan bajo la carpeta «uploads» y así se leen en el detalle
+// del producto (/uploads/...). El catálogo las pedía como «/nombre.jpg», que no
+// existe: el navegador mostraba el icono de imagen rota y parecía que el
+// producto no tenía foto. Si el registro ya trae la carpeta, no se repite.
+function rutaFoto(im) {
+    var r = String(im || '').replace(/^\/+/, '');
+    if (!r) { return ''; }
+    if (r.indexOf('uploads/') !== 0) { r = 'uploads/' + r; }
+    return '/' + r;
+}
+
+// marcadorFoto es el recuadro con el cubo que ocupa el sitio de la foto.
+function marcadorFoto(alto, icono) {
+    return '<div class="text-center text-muted" style="height:' + alto + 'px;line-height:' + alto + 'px">' +
+        '<i class="fa ' + icono + '"></i></div>';
+}
+
+// fotoRota cambia por el marcador la foto que no se pudo cargar: un archivo
+// borrado no debe dejar un icono de imagen rota en medio del catálogo.
+function fotoRota(img) {
+    var alto = parseInt(img.getAttribute('data-alto') || '110', 10);
+    var d = document.createElement('div');
+    d.innerHTML = marcadorFoto(alto, img.getAttribute('data-icono') || 'fa-cube fa-3x');
+    img.parentNode.replaceChild(d.firstChild, img);
+}
+
+function htmlFoto(p, alto, icono) {
+    var r = rutaFoto(p.image);
+    if (!r) { return marcadorFoto(alto, icono); }
+    return '<img src="' + r + '" alt="" data-alto="' + alto + '" data-icono="' + icono + '" ' +
+        'style="width:100%;height:' + alto + 'px;object-fit:cover" onerror="fotoRota(this)">';
+}
+
+function pintarComoFichas($c) {
     catProductos.forEach(function (p, i) {
-        var foto = p.image
-            ? '<img src="/' + p.image + '" alt="" style="width:100%;height:110px;object-fit:cover">'
-            : '<div class="text-center text-muted" style="height:110px;line-height:110px"><i class="fa fa-cube fa-3x"></i></div>';
         var ultimo = num(p.last_cost) > 0 ? num(p.last_cost).toFixed(2) : 'sin historial';
         $c.append(
             '<div class="col-xs-6 col-sm-4 col-md-3">' +
                 '<div class="panel panel-bd cat-card" data-idx="' + i + '" style="cursor:pointer;margin-bottom:10px">' +
-                    foto +
+                    htmlFoto(p, 110, 'fa-cube fa-3x') +
                     '<div class="panel-body" style="padding:8px">' +
                         '<strong>' + escapeHtml(p.name) + '</strong><br>' +
                         '<small class="text-muted">' + escapeHtml(p.model || '') +
@@ -459,6 +524,38 @@ function pintarCatalogo(lista) {
                 '</div>' +
             '</div>');
     });
+}
+
+// La lista lleva la foto pequeña a la izquierda: alcanza para reconocer el
+// artículo y deja sitio para ver muchos más sin bajar.
+function pintarComoLista($c) {
+    var filas = '';
+    catProductos.forEach(function (p, i) {
+        var ultimo = num(p.last_cost) > 0 ? num(p.last_cost).toFixed(2) : '—';
+        filas +=
+            '<tr class="cat-card" data-idx="' + i + '" style="cursor:pointer">' +
+                '<td style="width:52px;padding:4px">' + htmlFoto(p, 40, 'fa-cube') + '</td>' +
+                '<td><strong>' + escapeHtml(p.name) + '</strong>' +
+                    (p.model ? '<br><small class="text-muted">' + escapeHtml(p.model) + '</small>' : '') + '</td>' +
+                '<td><small>' + escapeHtml(p.barcode || '—') + '</small></td>' +
+                '<td><small>' + escapeHtml(p.category || '—') + '</small></td>' +
+                '<td class="text-right">' + num(p.price).toFixed(2) + '</td>' +
+                '<td class="text-right">' + num(p.stock).toFixed(2) + '</td>' +
+                '<td class="text-right ' + (num(p.last_cost) > 0 ? 'text-info' : 'text-muted') + '">' + ultimo + '</td>' +
+                '<td class="text-center"><button type="button" class="btn btn-primary btn-xs">Elegir</button></td>' +
+            '</tr>';
+    });
+    $c.append(
+        '<div class="col-xs-12 table-responsive">' +
+            '<table class="table table-condensed table-hover" style="margin-bottom:0">' +
+                '<thead><tr>' +
+                    '<th></th><th>Producto</th><th>Código</th><th>Categoría</th>' +
+                    '<th class="text-right">Precio</th><th class="text-right">Stock</th>' +
+                    '<th class="text-right">Última compra</th><th></th>' +
+                '</tr></thead>' +
+                '<tbody>' + filas + '</tbody>' +
+            '</table>' +
+        '</div>');
 }
 
 // ---------- altas rápidas ----------
@@ -561,17 +658,44 @@ function enviar(submittedAction) {
     });
     if (!allSet) { toastr.warning('Complete producto y cantidad en todas las filas'); return; }
 
+    // EL CANDADO, ANTES DE ENVIAR. Se pregunta al servidor si esa compra ya está
+    // cargada —mismo proveedor, mismos renglones, mismos números de factura y de
+    // control— y, si lo está, se muestra CUÁL es en vez de dejar que el guardado
+    // falle. El candado de verdad es el índice único del servidor: si esta
+    // comprobación no responde, se envía igual y el servidor decide.
+    var avisarDuplicada = function (chk) {
+        swal({
+            title: "Esa compra ya está registrada",
+            text: chk.msg || "La compra existe con los mismos datos.",
+            type: "warning",
+            showCancelButton: true,
+            confirmButtonText: "Ver la compra",
+            cancelButtonText: "Cerrar"
+        }, function () {
+            if (chk.purchase_id) { location.href = '/purchase/details/' + chk.purchase_id; }
+        });
+    };
+    var enviarCompra = function (datos) {
+        enviando = true;
+        $.post('/purchase/save', datos, function (r) {
+            enviando = false;
+            if (r && r.duplicate) { avisarDuplicada(r); return; }
+            if (r.status == 1) {
+                toastr.success(r.msg + ' #' + r.purchase_id);
+                if (submittedAction === 'save_exit') { setTimeout(function () { location.href = '/purchase/details/' + r.purchase_id; }, 800); }
+            } else { toastr.error(r.error || 'Error'); }
+        }).fail(function (x) {
+            enviando = false;
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'Error');
+        });
+    };
+
     enviando = true;
-    $.post('/purchase/save', $('#purchaseForm').serialize(), function (r) {
-        enviando = false;
-        if (r.status == 1) {
-            toastr.success(r.msg + ' #' + r.purchase_id);
-            if (submittedAction === 'save_exit') { setTimeout(function () { location.href = '/purchase/details/' + r.purchase_id; }, 800); }
-        } else { toastr.error(r.error || 'Error'); }
-    }).fail(function (x) {
-        enviando = false;
-        toastr.error(x.responseJSON ? x.responseJSON.error : 'Error');
-    });
+    var datos = $('#purchaseForm').serialize();
+    $.post('/purchase/dup-check', datos, function (chk) {
+        if (chk && chk.duplicate) { enviando = false; avisarDuplicada(chk); return; }
+        enviarCompra(datos);
+    }).fail(function () { enviarCompra(datos); });
 }
 
 $(function () {
@@ -631,6 +755,20 @@ $(function () {
         if (!p) { return; }
         aplicarProducto(pickerRow || ultimaFilaCompra(), p);
         $('#catalogoProductos').modal('hide');
+    });
+
+    // Fichas o lista: se recuerda la elección y se repinta lo que ya está
+    // cargado, sin volver a pedir el catálogo al servidor.
+    function marcarVistaCatalogo() {
+        $('#catVista button').removeClass('active')
+            .filter('[data-vista="' + catVista + '"]').addClass('active');
+    }
+    marcarVistaCatalogo();
+    $('#catVista').on('click', 'button', function () {
+        catVista = ($(this).data('vista') === 'lista') ? 'lista' : 'fichas';
+        try { localStorage.setItem('erp_catalogo_vista', catVista); } catch (e) { }
+        marcarVistaCatalogo();
+        if (catCargado) { pintarCatalogo(catProductos); }
     });
 
     $('#btnNuevoProv').on('click', abrirNuevoProveedor);

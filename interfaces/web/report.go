@@ -134,7 +134,7 @@ func (s *Server) reportStock(w http.ResponseWriter, r *http.Request) {
 
 	type StockItem struct {
 		ID, Name, Model, Category, Unit, Price string
-		Stock                                   float64
+		Stock                                  float64
 	}
 	items := []StockItem{}
 	for rows.Next() {

@@ -587,7 +587,11 @@ func (s *Server) reportTemplateAIHelp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task := aiTask{AgentID: agent.ID, Name: "Ayuda de diseño de informe", Instructions: req.Request}
-	journal := &aiRunJournal{}
+	// Ámbito propio por invocación: esta acción es interactiva y de una sola
+	// pasada, no una corrida programada. Sin él, todas estas peticiones
+	// compartirían el ámbito vacío y la segunda persona que pidiera guardar la
+	// misma plantilla recibiría «ya se ejecutó» en vez de su plantilla.
+	journal := &aiRunJournal{scope: "adhoc:" + now()}
 	steps := []aiStep{}
 	report, runErr := s.aiRunLoop(s.sessionFromRequest(r), agent, task, &steps, journal)
 	if runErr != nil {

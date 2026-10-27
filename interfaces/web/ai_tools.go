@@ -102,23 +102,25 @@ type aiToolDef struct {
 	// igual. Las lecturas nunca lo llevan.
 	OperatorOnly bool
 
+	// Permission es el permiso del rol que exige la herramienta. Vive aquí, junto
+	// al riesgo, por la misma razón que el riesgo: cuando la clasificación estaba
+	// en un segundo sitio, una herramienta nueva quedó sin clasificar y el guardián
+	// la bloqueó en producción. Una sola lista no puede desincronizarse de sí
+	// misma. Las que escriben lo declaran; las lecturas y las propuestas no,
+	// porque su puerta es otra (departamento del rol / revisión humana).
+	//
+	// Directorio Y acción: la misma tabla que limita a un empleado en la interfaz
+	// (sub_module.directory → role_permission). Es el «Nivel 2» del diseño: el
+	// interruptor de operador dice «este agente puede operar»; este campo dice
+	// «puede operar ESTO». La acción importa —crear un comprobante y anularlo no
+	// son el mismo permiso— y por eso no basta con declarar el directorio.
+	Permission aiToolPermission
+
 	// Run ejecuta la herramienta. nil significa "declarada pero todavía sin
 	// implementar": el Nivel 1 sí la clasifica, pero el dispatcher responde que no
 	// está disponible. Declarar antes de implementar es lo que permite que la
 	// gobernanza exista para herramientas futuras sin abrirle la puerta antes.
 	Run func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (string, error)
-
-	// Perm es el permiso de la MATRIZ DE ROLES (sub_module.directory) que el rol
-	// del agente tiene que tener para que la herramienta se ejecute. Es el
-	// Nivel 2: el interruptor de operador dice "este agente puede operar"; este
-	// campo dice "puede operar ESTO", con la misma tabla que limita a un
-	// empleado en la interfaz (role_permission).
-	//
-	// Vacío significa "sin comprobación de rol": las herramientas de lectura y
-	// las que existían antes de que el Nivel 2 se declarara aquí. Se deja vacío
-	// a propósito en lo ya existente para no cambiar, de un día para otro, lo
-	// que un agente ya podía hacer.
-	Perm string
 }
 
 // aiToolRegistry es la fuente de verdad del catálogo de herramientas. Agregar
@@ -151,13 +153,14 @@ var aiToolRegistry = []aiToolDef{
 		Name:        "report.save_template",
 		Description: "Crea una plantilla de informe reutilizable a partir de un JSON de definición. Soporta gráfico embebidos con el campo chart (type, x_key, y_key, y_label, title).",
 		Risk:        RiskDraft,
+		Permission:  aiToolPermission{Directory: "custom_reports", Action: "create"},
 		Parameters: aiParameterSchema(map[string]interface{}{
 			"name":        map[string]string{"type": "string", "description": "Nombre visible del informe."},
 			"description": map[string]string{"type": "string", "description": "Descripción breve para el menú."},
 			"definition":  map[string]string{"type": "string", "description": "JSON de definición: {title,sql,columns:[{key,label}],totals:[keys],params:[{name,label,type}],chart:{type,line|bar|pie|doughnut),x_key,y_key,y_label,title}}. SOLO SELECT. Tablas fiscales (acc_transaction, audit_log) son solo lectura."},
 		}, "name", "definition"),
-		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, _ *aiRunJournal) (string, error) {
-			return s.aiToolSaveTemplate(sess, agent, args)
+		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (string, error) {
+			return s.aiToolSaveTemplate(sess, agent, args, journal)
 		},
 	},
 	{
@@ -198,10 +201,12 @@ var aiToolRegistry = []aiToolDef{
 		Description:  "Crea una factura en BORRADOR (sin efecto contable hasta publicarse). Devuelve el número de borrador para publicar luego.",
 		Risk:         RiskDraft,
 		OperatorOnly: true,
+		Permission:   aiToolPermission{Directory: "new_invoice", Action: "create"},
 		Parameters: aiParameterSchema(map[string]interface{}{
-			"customer_id": map[string]string{"type": "integer", "description": "ID del cliente."},
-			"date":        map[string]string{"type": "string", "description": "Fecha AAAA-MM-DD."},
-			"items":       map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"product_id": map[string]string{"type": "string"}, "quantity": map[string]string{"type": "number"}, "rate": map[string]string{"type": "number"}}, "required": []string{"product_id"}}}}, "customer_id", "items"),
+			"external_ref": map[string]string{"type": "string", "description": "Identificador del documento de origen (número de listado, correo, orden de compra). Úsalo SIEMPRE que la factura nazca de un listado: es lo que impide cargarla dos veces."},
+			"customer_id":  map[string]string{"type": "integer", "description": "ID del cliente."},
+			"date":         map[string]string{"type": "string", "description": "Fecha AAAA-MM-DD."},
+			"items":        map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"product_id": map[string]string{"type": "string"}, "quantity": map[string]string{"type": "number"}, "rate": map[string]string{"type": "number"}}, "required": []string{"product_id"}}}}, "customer_id", "items"),
 		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (string, error) {
 			return s.aiToolInvoiceDraft(sess, agent, args, journal)
 		},
@@ -211,7 +216,11 @@ var aiToolRegistry = []aiToolDef{
 		Description:  "Publica un borrador de factura creado con invoice.create_draft (genera asientos contables).",
 		Risk:         RiskExecute,
 		OperatorOnly: true,
-		Parameters:   aiParameterSchema(map[string]interface{}{"draft_id": map[string]string{"type": "integer", "description": "ID del borrador."}}, "draft_id"),
+		Permission:   aiToolPermission{Directory: "new_invoice", Action: "update"},
+		Parameters: aiParameterSchema(map[string]interface{}{
+			"draft_id":     map[string]string{"type": "integer", "description": "ID del borrador."},
+			"external_ref": map[string]string{"type": "string", "description": "Identificador del documento de origen, si la publicación corresponde a uno."},
+		}, "draft_id"),
 		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (string, error) {
 			return s.aiToolInvoicePost(sess, agent, args, journal)
 		},
@@ -221,10 +230,12 @@ var aiToolRegistry = []aiToolDef{
 		Description:  "Registra el cobro de una factura pendiente: abona paid_amount, reduce due_amount y crea el asiento contable del cobro.",
 		Risk:         RiskCritical,
 		OperatorOnly: true,
+		Permission:   aiToolPermission{Directory: "manage_invoice", Action: "update"},
 		Parameters: aiParameterSchema(map[string]interface{}{
-			"invoice_id": map[string]string{"type": "integer", "description": "Número de factura."},
-			"amount":     map[string]string{"type": "number", "description": "Monto cobrado."},
-			"note":       map[string]string{"type": "string", "description": "Referencia/observación del cobro."},
+			"external_ref": map[string]string{"type": "string", "description": "Referencia del cobro en su origen (número de transferencia, recibo, aviso del banco). Si se repite, el cobro no se duplica."},
+			"invoice_id":   map[string]string{"type": "integer", "description": "Número de factura."},
+			"amount":       map[string]string{"type": "number", "description": "Monto cobrado."},
+			"note":         map[string]string{"type": "string", "description": "Referencia/observación del cobro."},
 		}, "invoice_id", "amount"),
 		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (string, error) {
 			return s.aiToolPaymentRecord(sess, agent, args, journal)
@@ -235,11 +246,13 @@ var aiToolRegistry = []aiToolDef{
 		Description:  "Crea un voucher contable (asiento de diario) con líneas débito/crédito balanceadas.",
 		Risk:         RiskCritical,
 		OperatorOnly: true,
+		Permission:   aiToolPermission{Directory: "vouchers", Action: "create"},
 		Parameters: aiParameterSchema(map[string]interface{}{
-			"vtype": map[string]string{"type": "string", "description": "Tipo: JV (diario), CV (contra), DV (diario de banco)."},
-			"ref":   map[string]string{"type": "string", "description": "Referencia (opcional)."},
-			"note":  map[string]string{"type": "string", "description": "Narración del asiento."},
-			"lines": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"coa_id": map[string]string{"type": "integer"}, "debit": map[string]string{"type": "number"}, "credit": map[string]string{"type": "number"}}}},
+			"external_ref": map[string]string{"type": "string", "description": "Referencia del documento de origen (número de comprobante, acta, factura externa). Si se repite, el asiento no se duplica."},
+			"vtype":        map[string]string{"type": "string", "description": "Tipo: JV (diario), CV (contra), DV (diario de banco)."},
+			"ref":          map[string]string{"type": "string", "description": "Referencia (opcional)."},
+			"note":         map[string]string{"type": "string", "description": "Narración del asiento."},
+			"lines":        map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"coa_id": map[string]string{"type": "integer"}, "debit": map[string]string{"type": "number"}, "credit": map[string]string{"type": "number"}}}},
 		}, "vtype", "lines"),
 		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (string, error) {
 			return s.aiToolVoucherCreate(sess, agent, args, journal)
@@ -341,6 +354,7 @@ var aiToolRegistry = []aiToolDef{
 		Description:  "Anula una factura mediante nota de crédito.",
 		Risk:         RiskCritical,
 		OperatorOnly: true,
+		Permission:   aiToolPermission{Directory: "manage_invoice", Action: "delete"},
 		Parameters:   aiParameterSchema(map[string]interface{}{"invoice_id": map[string]string{"type": "integer", "description": "Número de factura."}}, "invoice_id"),
 	},
 	{
@@ -348,6 +362,7 @@ var aiToolRegistry = []aiToolDef{
 		Description:  "Postea un voucher contable ya balanceado.",
 		Risk:         RiskExecute,
 		OperatorOnly: true,
+		Permission:   aiToolPermission{Directory: "vouchers", Action: "update"},
 		Parameters:   aiParameterSchema(map[string]interface{}{"vno": map[string]string{"type": "string", "description": "Número de voucher."}}, "vno"),
 	},
 	{
@@ -355,6 +370,7 @@ var aiToolRegistry = []aiToolDef{
 		Description:  "Crea o actualiza un cliente.",
 		Risk:         RiskDraft,
 		OperatorOnly: true,
+		Permission:   aiToolPermission{Directory: "manage_customer", Action: "update"},
 		Parameters:   aiParameterSchema(map[string]interface{}{"customer_id": map[string]string{"type": "integer"}, "name": map[string]string{"type": "string"}}, "name"),
 	},
 	{
@@ -363,7 +379,7 @@ var aiToolRegistry = []aiToolDef{
 			"Úselo antes de registrar una compra de un proveedor que no está en el sistema.",
 		Risk:         RiskDraft,
 		OperatorOnly: true,
-		Perm:         "add_supplier",
+		Permission:   aiToolPermission{Directory: "add_supplier", Action: "create"},
 		Parameters: aiParameterSchema(map[string]interface{}{
 			"supplier_id": map[string]string{"type": "integer", "description": "ID del proveedor a actualizar. Omitir para crear."},
 			"name":        map[string]string{"type": "string", "description": "Razón social del proveedor."},
@@ -383,7 +399,7 @@ var aiToolRegistry = []aiToolDef{
 			"nombre+modelo). Úselo para los artículos de una compra que todavía no están cargados.",
 		Risk:         RiskDraft,
 		OperatorOnly: true,
-		Perm:         "create_product",
+		Permission:   aiToolPermission{Directory: "create_product", Action: "create"},
 		Parameters: aiParameterSchema(map[string]interface{}{
 			"product_id":    map[string]string{"type": "string", "description": "ID del producto a actualizar. Omitir para crear."},
 			"name":          map[string]string{"type": "string", "description": "Nombre del producto."},
@@ -401,17 +417,24 @@ var aiToolRegistry = []aiToolDef{
 		Name: "purchase.create",
 		Description: "Registra una compra completa —cabeza, renglones con lote y vencimiento, y su asiento contable— " +
 			"por el mismo camino que el formulario del sistema. Los productos que falten se pueden dar de alta " +
-			"en la misma llamada. Devuelve la alerta de variación de precio frente a la última compra.",
+			"en la misma llamada. Devuelve la alerta de variación de precio frente a la última compra. " +
+			"CLASIFIQUE el documento con document_kind: solo 'factura' da crédito fiscal de IVA y obliga a " +
+			"retenciones. El sistema tiene un CANDADO contra duplicados: si esa misma compra ya estaba " +
+			"registrada (mismo proveedor, mismos renglones y mismos números de factura y control) NO se crea " +
+			"otra y la respuesta trae status 'duplicate' con el número de la compra que ya existe. Antes de " +
+			"cargar un listado, use purchase.find para ver qué ya está registrado.",
 		Risk:         RiskExecute,
 		OperatorOnly: true,
-		Perm:         "add_purchase",
+		Permission:   aiToolPermission{Directory: "add_purchase", Action: "create"},
 		Parameters: aiParameterSchema(map[string]interface{}{
+			"external_ref":  map[string]string{"type": "string", "description": "Referencia de la compra en su origen (número de listado, correo, orden de compra). Si se repite, la compra no se duplica."},
 			"supplier_id":   map[string]string{"type": "integer", "description": "ID del proveedor."},
 			"supplier_name": map[string]string{"type": "string", "description": "Nombre del proveedor si no se conoce el ID: se busca y, si no existe, se crea."},
 			"supplier_rif":  map[string]string{"type": "string", "description": "RIF del proveedor (necesario si hay que crearlo)."},
 			"date":          map[string]string{"type": "string", "description": "Fecha de la compra AAAA-MM-DD. Por omisión, hoy."},
 			"chalan_no":     map[string]string{"type": "string", "description": "N° de factura del proveedor."},
 			"control_no":    map[string]string{"type": "string", "description": "N° de control fiscal."},
+			"document_kind": map[string]string{"type": "string", "description": "Tipo de documento: 'factura' (factura del proveedor: es la ÚNICA con crédito fiscal de IVA y retenciones), 'nota_entrega' (entra mercancía y genera deuda, sin crédito fiscal), 'orden' (orden de compra) o 'sin_documento'. Por omisión 'factura'."},
 			"details":       map[string]string{"type": "string", "description": "Observaciones."},
 			"discount":      map[string]string{"type": "number", "description": "Descuento global de la compra."},
 			"items":         map[string]interface{}{"type": "array", "description": "Renglones: product_id o barcode o name, quantity, rate, batch_no, expiry_date, discount_per, vat_per."},
@@ -422,10 +445,30 @@ var aiToolRegistry = []aiToolDef{
 		},
 	},
 	{
+		Name: "purchase.find",
+		Description: "Busca compras YA registradas por proveedor, número de factura, número de control o fechas, y dice para " +
+			"cada una su tipo de documento, sus saldos y si tiene asiento. Úsela ANTES de cargar un listado de compras: " +
+			"ver que una compra ya está es la forma de no duplicarla.",
+		Risk: RiskRead,
+		Parameters: aiParameterSchema(map[string]interface{}{
+			"supplier_id":   map[string]string{"type": "integer", "description": "ID del proveedor (opcional)."},
+			"supplier_name": map[string]string{"type": "string", "description": "Nombre o parte del nombre del proveedor (opcional)."},
+			"chalan_no":     map[string]string{"type": "string", "description": "N° de factura del proveedor (opcional)."},
+			"control_no":    map[string]string{"type": "string", "description": "N° de control fiscal (opcional)."},
+			"date_from":     map[string]string{"type": "string", "description": "Desde AAAA-MM-DD (opcional)."},
+			"date_to":       map[string]string{"type": "string", "description": "Hasta AAAA-MM-DD (opcional)."},
+			"limit":         map[string]string{"type": "integer", "description": "Máximo de filas (por omisión 25, máximo 100)."},
+		}),
+		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, _ *aiRunJournal) (string, error) {
+			return s.aiToolPurchaseFind(sess, agent, args)
+		},
+	},
+	{
 		Name:         "payment.create",
 		Description:  "Registra un pago a proveedor o cobro sin factura asociada.",
 		Risk:         RiskCritical,
 		OperatorOnly: true,
+		Permission:   aiToolPermission{Directory: "manage_invoice", Action: "create"},
 		Parameters:   aiParameterSchema(map[string]interface{}{"amount": map[string]string{"type": "number"}, "note": map[string]string{"type": "string"}}, "amount"),
 	},
 	{
@@ -433,6 +476,7 @@ var aiToolRegistry = []aiToolDef{
 		Description:  "Calcula una corrida de nómina SIN publicarla (queda en borrador).",
 		Risk:         RiskCritical,
 		OperatorOnly: true,
+		Permission:   aiToolPermission{Directory: "hr_payroll", Action: "create"},
 		Parameters:   aiParameterSchema(map[string]interface{}{"period": map[string]string{"type": "string", "description": "Período AAAA-MM."}}, "period"),
 	},
 	{
@@ -440,7 +484,116 @@ var aiToolRegistry = []aiToolDef{
 		Description:  "Publica una corrida de nómina: genera los recibos y los asientos contables.",
 		Risk:         RiskCritical,
 		OperatorOnly: true,
+		Permission:   aiToolPermission{Directory: "hr_payroll_post", Action: "create"},
 		Parameters:   aiParameterSchema(map[string]interface{}{"run_id": map[string]string{"type": "integer", "description": "ID de la corrida."}}, "run_id"),
+	},
+
+	// ---------- Cartera: cobranza y cuentas por pagar ----------
+	//
+	// Estas herramientas son el trabajo REPETITIVO de cartera: ver quién se
+	// atrasó, decidir si es anormal y avisar. Las dos que escriben hacia afuera
+	// llevan RiskCritical a propósito: se ejecutan, quedan auditadas y la corrida
+	// se marca para revisión humana (needs_human), porque son la única salida de
+	// datos del sistema hacia un tercero.
+	{
+		Name: "finance.receivables",
+		Description: "Cuentas por cobrar: saldos, antigüedad, indicadores (vencido, días de cobro, concentración) y la " +
+			"lista de ALERTAS abiertas —la misma que ve el operador en pantalla—. Úsela para saber a quién hay que " +
+			"reclamarle y por qué antes de escribirle a nadie.",
+		Risk: RiskRead,
+		Parameters: aiParameterSchema(map[string]interface{}{
+			"limit":          map[string]string{"type": "integer", "description": "Máximo de alertas a devolver (por omisión 25, máximo 200)."},
+			"include_closed": map[string]string{"type": "string", "description": "'1' para incluir también las alertas ya cerradas o resueltas."},
+		}),
+		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, _ *aiRunJournal) (string, error) {
+			return s.aiToolFinanceReceivables(sess, agent, args)
+		},
+	},
+	{
+		Name: "finance.payables",
+		Description: "Cuentas por pagar: documentos y servicios con saldo, antigüedad, indicadores y alertas abiertas, " +
+			"incluidos los comprobantes de retención de IVA que todavía no se le enviaron al proveedor.",
+		Risk: RiskRead,
+		Parameters: aiParameterSchema(map[string]interface{}{
+			"limit": map[string]string{"type": "integer", "description": "Máximo de alertas a devolver (por omisión 25, máximo 200)."},
+		}),
+		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, _ *aiRunJournal) (string, error) {
+			return s.aiToolFinancePayables(sess, agent, args)
+		},
+	},
+	{
+		Name: "finance.scan_alerts",
+		Description: "Recalcula las alertas de cartera y de cuentas por pagar sin esperar a que alguien abra la pantalla. " +
+			"Cierra las que ya no se cumplen y abre las nuevas. Es idempotente: repetirlo no duplica alertas.",
+		Risk:         RiskExecute,
+		OperatorOnly: true,
+		Permission:   aiToolPermission{Directory: "customer_ledger", Action: "read"},
+		Parameters: aiParameterSchema(map[string]interface{}{
+			"scope": map[string]string{"type": "string", "description": "'cxc', 'cxp' o vacío para los dos."},
+		}),
+		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, _ *aiRunJournal) (string, error) {
+			return s.aiToolFinanceScan(sess, agent, args)
+		},
+	},
+	{
+		Name: "customer.request_payment",
+		Description: "Le reclama el pago a un cliente por un canal de aviso configurado (correo, SMS o webhook). " +
+			"El destinatario sale SIEMPRE de la ficha del cliente: no se puede indicar una dirección. El canal debe estar " +
+			"habilitado para agentes por el administrador, y hay enfriamiento e idempotencia para no repetir el aviso. " +
+			"Devuelve a quién se le mandó y si salió.",
+		Risk:         RiskCritical,
+		OperatorOnly: true,
+		Permission:   aiToolPermission{Directory: "customer_ledger", Action: "create"},
+		Parameters: aiParameterSchema(map[string]interface{}{
+			"alert_id":     map[string]string{"type": "integer", "description": "ID de la alerta de finance.receivables. Es la vía recomendada: trae el motivo redactado con los números del sistema."},
+			"customer_id":  map[string]string{"type": "integer", "description": "ID del cliente, si la cuenta no genera alerta."},
+			"channel_kind": map[string]string{"type": "string", "description": "'email', 'sms' o 'webhook'. Opcional: por omisión, el primer canal habilitado para agentes."},
+			"channel":      map[string]string{"type": "string", "description": "Nombre exacto del canal, si hay más de uno del mismo tipo."},
+			"subject":      map[string]string{"type": "string", "description": "Asunto. Si se omite, el sistema lo redacta con los datos de la deuda."},
+			"message":      map[string]string{"type": "string", "description": "Texto del aviso. Si se omite, el sistema lo redacta (recomendado: no invente cifras)."},
+			"external_ref": map[string]string{"type": "string", "description": "Referencia del reclamo en su origen (gestión, llamada, correo recibido). Si se repite, el aviso no se duplica."},
+		}),
+		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, _ *aiRunJournal) (string, error) {
+			return s.aiToolCustomerRequestPayment(sess, agent, args)
+		},
+	},
+	{
+		Name: "supplier.send_retention",
+		Description: "Le envía a un proveedor el resumen de sus comprobantes de retención de IVA de un período, por un canal " +
+			"de aviso configurado. El destinatario sale de la ficha del proveedor. Al enviarlo, la alerta de retención " +
+			"pendiente se cierra sola.",
+		Risk:         RiskCritical,
+		OperatorOnly: true,
+		Permission:   aiToolPermission{Directory: "supplier_payment", Action: "create"},
+		Parameters: aiParameterSchema(map[string]interface{}{
+			"supplier_id":  map[string]string{"type": "integer", "description": "ID del proveedor."},
+			"purchase_id":  map[string]string{"type": "integer", "description": "Compra del proveedor, si no se conoce su ID."},
+			"period":       map[string]string{"type": "string", "description": "Período AAAA-MM. Si se omite, se envía el último con retenciones registradas."},
+			"channel_kind": map[string]string{"type": "string", "description": "'email', 'sms' o 'webhook'. Opcional."},
+			"channel":      map[string]string{"type": "string", "description": "Nombre exacto del canal, si hay varios del mismo tipo."},
+			"subject":      map[string]string{"type": "string", "description": "Asunto. Opcional."},
+			"message":      map[string]string{"type": "string", "description": "Texto. Si se omite, el sistema lo redacta con los comprobantes reales."},
+		}),
+		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, _ *aiRunJournal) (string, error) {
+			return s.aiToolSupplierSendRetention(sess, agent, args)
+		},
+	},
+	{
+		Name: "notify.event",
+		Description: "Manda un evento a un webhook configurado, para que otra herramienta haga algo con él (crear una tarea de " +
+			"cobranza, avisar por otra vía, dejar el registro en un tablero). El evento queda registrado en Mensajes enviados.",
+		Risk:         RiskExecute,
+		OperatorOnly: true,
+		Permission:   aiToolPermission{Directory: "setting", Action: "read"},
+		Parameters: aiParameterSchema(map[string]interface{}{
+			"event":        map[string]string{"type": "string", "description": "Nombre del evento, ej. 'cobranza.mora_anormal'."},
+			"data":         map[string]string{"type": "string", "description": "Carga útil en JSON (objeto)."},
+			"channel":      map[string]string{"type": "string", "description": "Nombre del canal webhook habilitado para agentes. Opcional si solo hay uno."},
+			"external_ref": map[string]string{"type": "string", "description": "Referencia del evento en su origen, para no entregarlo dos veces."},
+		}, "event"),
+		Run: func(s *Server, sess *SessionData, agent aiAgent, args map[string]interface{}, _ *aiRunJournal) (string, error) {
+			return s.aiToolNotifyEvent(sess, agent, args)
+		},
 	},
 }
 
@@ -460,13 +613,20 @@ var aiToolByName = func() map[string]aiToolDef {
 // No se anuncian las herramientas declaradas sin implementar (Run == nil):
 // ofrecerle al modelo una herramienta que solo puede devolver error gasta
 // tokens, confunde al agente y entrena al usuario a esperar algo que no pasa.
-func aiCatalogForPhase(operator bool) []aiToolSchema {
+func aiCatalogForPhase(operator bool, gate aiRoleGate) []aiToolSchema {
 	tools := make([]aiToolSchema, 0, len(aiToolRegistry))
 	for _, t := range aiToolRegistry {
 		if t.Run == nil {
 			continue
 		}
 		if t.OperatorOnly && !operator {
+			continue
+		}
+		// No se anuncia lo que el guardián va a rechazar. El filtro es el MISMO
+		// predicado que usa el guardián (gate.allowsTool), así que catálogo y
+		// despacho no pueden discrepar: ofrecer una herramienta sin permiso gasta
+		// pasos, tokens y la confianza del usuario en el informe.
+		if !gate.allowsTool(t) {
 			continue
 		}
 		tools = append(tools, aiToolSchema{
@@ -553,8 +713,8 @@ func aiHerramientaRegistrada(nombre string) bool {
 }
 
 // aiToolsJSON serializa el catálogo para la petición al proveedor.
-func aiToolsJSON(operator bool) string {
-	lista := aiCatalogForPhase(operator)
+func aiToolsJSON(operator bool, gate aiRoleGate) string {
+	lista := aiCatalogForPhase(operator, gate)
 	wire := make([]aiToolWire, 0, len(lista))
 	for _, t := range lista {
 		w := aiToolWire{Type: "function"}
@@ -570,10 +730,40 @@ func aiToolsJSON(operator bool) string {
 // aiRunJournal es el registro de acciones revertibles de una corrida.
 type aiRunJournal struct {
 	Actions []aiJournalAction `json:"actions"`
-	// needsHuman se activa si el agente intentó una acción crítica (nómina,
-	// pagos, anulaciones). La corrida queda marcada para que un humano la
-	// revise, aunque el agente tuviera permisos de operador.
-	needsHuman bool
+
+	// NeedsHuman marca la corrida para revisión humana: el agente ejecutó (o
+	// intentó) una acción crítica —nómina, pagos, anulaciones—.
+	//
+	// EXPORTADO Y CON ETIQUETA A PROPÓSITO. Antes era `needsHuman bool`: sin
+	// exportar y sin tag, encoding/json lo ignoraba al persistir el journal, así
+	// que la marca que el guardián sí calculaba no llegaba ni a la base ni a la
+	// pantalla. Un campo que solo existe en memoria no es una marca de
+	// aprobación: es una intención.
+	NeedsHuman bool `json:"needs_human"`
+
+	// Contexto de ejecución, sin exportar: no forma parte del journal persistido
+	// y se rellena al abrir la corrida. Es lo que permite calcular la clave de
+	// idempotencia de cada herramienta.
+	runID   int64
+	taskID  int64
+	agentID int64
+	scope   string
+}
+
+// idemScope es el ámbito de deduplicación de la corrida: la ranura de
+// programación o, en un disparo manual, la tarea y el día.
+//
+// NO incluye el run_id, y es deliberado: si lo incluyera, el reintento de la
+// cola —que abre otra corrida— volvería a escribir todo, que es exactamente el
+// fallo que esto cierra.
+func (j *aiRunJournal) idemScope() string {
+	if j == nil {
+		return ""
+	}
+	if j.scope != "" {
+		return j.scope
+	}
+	return "run:" + fmt.Sprintf("%d", j.runID)
 }
 
 type aiJournalAction struct {
@@ -613,7 +803,7 @@ type aiToolBlocked struct {
 
 // aiDispatchTool valida y ejecuta una herramienta. agent debe estar activo y
 // verificado por el llamador; operatorEnablement se pasa explícito.
-func (s *Server) aiDispatchTool(sess *SessionData, agent aiAgent, p aiToolPayload, journal *aiRunJournal) (string, error) {
+func (s *Server) aiDispatchTool(sess *SessionData, agent aiAgent, p aiToolPayload, journal *aiRunJournal, gate aiRoleGate) (string, error) {
 	operator := agent.OperatorEnabled == 1
 
 	// El modelo devuelve el nombre tal y como se lo announce en el catálogo (con
@@ -624,19 +814,24 @@ func (s *Server) aiDispatchTool(sess *SessionData, agent aiAgent, p aiToolPayloa
 	// GUARDIÁN DE NIVEL 1: se ejecuta ANTES de cualquier acción, en código, no
 	// en el prompt. Es el único punto por donde pasa toda operación de un agente,
 	// de modo que ninguna ruta (tarea, informe, modo operador) pueda saltárselo.
-	verdict := aiGuardAction(p.Name, p.Args, operator)
+	verdict := aiGuardAction(p.Name, p.Args, operator, gate)
 	if !verdict.Allowed {
+		rule := verdict.Rule
+		if rule == "" {
+			rule = "nivel-1"
+		}
 		return string(mustJSON(aiToolBlocked{
 			Error:   verdict.Reason,
 			Blocked: true,
-			Rule:    "nivel-1",
+			Rule:    rule,
 			Tool:    p.Name,
 		})), nil
 	}
-	// Las acciones críticas (nómina, pagos, anulaciones) se marcan para exigir
-	// aprobación humana aunque el agente tenga permisos de operador.
+	// Las acciones críticas (nómina, pagos, anulaciones) se marcan para que un
+	// humano las revise aunque el agente tenga permisos de operador. La marca
+	// viaja en el journal y se PERSISTE con la corrida (ai_task_run.needs_human).
 	if verdict.NeedsHuman && journal != nil {
-		journal.needsHuman = true
+		journal.NeedsHuman = true
 	}
 
 	// NIVEL 2: el permiso del ROL del agente. Sin esto, "modo operador activo"
@@ -735,7 +930,14 @@ func (s *Server) aiToolListTemplates(sess *SessionData) (string, error) {
 }
 
 // aiToolSaveTemplate valida + guarda la plantilla con el create_by del agente.
-func (s *Server) aiToolSaveTemplate(sess *SessionData, agent aiAgent, args map[string]interface{}) (string, error) {
+func (s *Server) aiToolSaveTemplate(sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (out string, err error) {
+	db := s.dbForSession(sess)
+	claim := s.aiClaimTool(db, journal, "report.save_template", aiStrParam(args, "external_ref"), args)
+	if claim.Skip {
+		return claim.Result, nil
+	}
+	defer func() { s.aiFinishTool(db, claim, out, err) }()
+
 	name := aiStrParam(args, "name")
 	definition := aiStrParam(args, "definition")
 	desc := aiStrParam(args, "description")
@@ -788,7 +990,14 @@ func (s *Server) aiToolRunPreview(sess *SessionData, agent aiAgent, args map[str
 
 // ---------- Operador: borrador de factura ----------
 
-func (s *Server) aiToolInvoiceDraft(sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (string, error) {
+func (s *Server) aiToolInvoiceDraft(sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (out string, err error) {
+	db := s.dbForSession(sess)
+	claim := s.aiClaimTool(db, journal, "invoice.create_draft", aiStrParam(args, "external_ref"), args)
+	if claim.Skip {
+		return claim.Result, nil
+	}
+	defer func() { s.aiFinishTool(db, claim, out, err) }()
+
 	customerID := int64(aiNumParam(args, "customer_id"))
 	if customerID <= 0 {
 		return string(mustJSON(aiToolError{"customer_id inválido."})), nil
@@ -877,7 +1086,14 @@ func (s *Server) aiToolInvoiceDraft(sess *SessionData, agent aiAgent, args map[s
 }
 
 // aiToolInvoicePost publica un borrador usando el flujo contable estándar.
-func (s *Server) aiToolInvoicePost(sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (string, error) {
+func (s *Server) aiToolInvoicePost(sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (out string, err error) {
+	db := s.dbForSession(sess)
+	claim := s.aiClaimTool(db, journal, "invoice.post", aiStrParam(args, "external_ref"), args)
+	if claim.Skip {
+		return claim.Result, nil
+	}
+	defer func() { s.aiFinishTool(db, claim, out, err) }()
+
 	draftID := int64(aiNumParam(args, "draft_id"))
 	if draftID <= 0 {
 		return string(mustJSON(aiToolError{"draft_id inválido."})), nil
@@ -885,7 +1101,7 @@ func (s *Server) aiToolInvoicePost(sess *SessionData, agent aiAgent, args map[st
 	var isDraft string
 	var customerID int64
 	var total float64
-	err := s.dbForSession(sess).QueryRow(`SELECT is_draft, customer_id, total_amount FROM invoice WHERE invoice = ?`, draftID).Scan(&isDraft, &customerID, &total)
+	err = s.dbForSession(sess).QueryRow(`SELECT is_draft, customer_id, total_amount FROM invoice WHERE invoice = ?`, draftID).Scan(&isDraft, &customerID, &total)
 	if err != nil {
 		return string(mustJSON(aiToolError{"Borrador no encontrado."})), nil
 	}
@@ -929,7 +1145,14 @@ func (s *Server) aiToolInvoicePost(sess *SessionData, agent aiAgent, args map[st
 
 // ---------- Operador: cobro ----------
 
-func (s *Server) aiToolPaymentRecord(sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (string, error) {
+func (s *Server) aiToolPaymentRecord(sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (out string, err error) {
+	db := s.dbForSession(sess)
+	claim := s.aiClaimTool(db, journal, "payment.record", aiStrParam(args, "external_ref"), args)
+	if claim.Skip {
+		return claim.Result, nil
+	}
+	defer func() { s.aiFinishTool(db, claim, out, err) }()
+
 	invoiceID := int64(aiNumParam(args, "invoice_id"))
 	amount := round2(aiNumParam(args, "amount"))
 	if invoiceID <= 0 || amount <= 0 {
@@ -937,7 +1160,7 @@ func (s *Server) aiToolPaymentRecord(sess *SessionData, agent aiAgent, args map[
 	}
 	var due, paid float64
 	var customerID int64
-	err := s.dbForSession(sess).QueryRow(`SELECT due_amount, paid_amount, customer_id FROM invoice WHERE invoice = ? AND is_draft = 'no'`, invoiceID).Scan(&due, &paid, &customerID)
+	err = s.dbForSession(sess).QueryRow(`SELECT due_amount, paid_amount, customer_id FROM invoice WHERE invoice = ? AND is_draft = 'no'`, invoiceID).Scan(&due, &paid, &customerID)
 	if err != nil {
 		return string(mustJSON(aiToolError{"Factura no encontrada o en borrador."})), nil
 	}
@@ -988,7 +1211,14 @@ type aiVoucherLine struct {
 	Credit float64 `json:"credit"`
 }
 
-func (s *Server) aiToolVoucherCreate(sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (string, error) {
+func (s *Server) aiToolVoucherCreate(sess *SessionData, agent aiAgent, args map[string]interface{}, journal *aiRunJournal) (out string, err error) {
+	db := s.dbForSession(sess)
+	claim := s.aiClaimTool(db, journal, "voucher.create", aiStrParam(args, "external_ref"), args)
+	if claim.Skip {
+		return claim.Result, nil
+	}
+	defer func() { s.aiFinishTool(db, claim, out, err) }()
+
 	vtype := strings.ToUpper(aiStrParam(args, "vtype"))
 	if vtype == "" {
 		vtype = "JV"
@@ -1070,8 +1300,11 @@ func (s *Server) aiUndoLastRun(sess *SessionData, agent aiAgent, runID int64) er
 	if err := s.dbForSession(sess).QueryRow(`SELECT status, COALESCE(undo_journal,'') FROM ai_task_run WHERE id = ? AND agent_id = ?`, runID, agent.ID).Scan(&status, &raw); err != nil {
 		return fmt.Errorf("corrida no encontrada")
 	}
-	if status != "done" {
-		return fmt.Errorf("solo se pueden revertir corridas completadas (estado actual: %s)", status)
+	// Se admiten 'done' Y 'failed'. Antes solo 'done', y justo la corrida que más
+	// necesita compensación —la que murió a mitad de trabajo dejando escrituras
+	// parciales— era la única que no se podía revertir desde la interfaz.
+	if status != "done" && status != "failed" {
+		return fmt.Errorf("solo se pueden revertir corridas terminadas (estado actual: %s)", status)
 	}
 	var j aiRunJournal
 	if raw.Valid && strings.TrimSpace(raw.String) != "" {
@@ -1104,6 +1337,11 @@ func (s *Server) aiUndoLastRun(sess *SessionData, agent aiAgent, runID int64) er
 	if _, err := s.dbForSession(sess).Exec(`UPDATE ai_task_run SET status='reverted', undo_journal=? WHERE id=?`, mustJSON(&aiRunJournal{}), runID); err != nil {
 		return err
 	}
+	// Las claves de idempotencia de esta corrida quedan libres: sus documentos ya
+	// no existen, así que una nueva ejecución debe poder crearlos. Sin esto,
+	// revertir una corrida y volver a lanzar la tarea devolvería «ya se ejecutó»
+	// y no crearía nada, que es el fallo opuesto y también caro.
+	_, _ = s.dbForSession(sess).Exec(`UPDATE ai_tool_execution SET status='undone', updated_at=? WHERE run_id = ?`, now(), runID)
 	s.aiAudit(sess, creator, "task.reverted", "ai_operator", "ai_task_run", fmt.Sprintf("%d", runID), nil, map[string]interface{}{"actions": len(j.Actions)})
 	return nil
 }

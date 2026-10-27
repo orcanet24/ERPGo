@@ -31,19 +31,19 @@ type ReserveBlockRequest struct {
 
 // ReserveBlockResponse es la respuesta con el bloque asignado.
 type ReserveBlockResponse struct {
-	Success   bool   `json:"success"`
-	Message   string `json:"message"`
-	BlockID   int64  `json:"block_id"`
-	BlockStart int64 `json:"block_start"`
-	BlockEnd  int64  `json:"block_end"`
-	UsedCount int    `json:"used_count"`
+	Success    bool   `json:"success"`
+	Message    string `json:"message"`
+	BlockID    int64  `json:"block_id"`
+	BlockStart int64  `json:"block_start"`
+	BlockEnd   int64  `json:"block_end"`
+	UsedCount  int    `json:"used_count"`
 }
 
 // ConsumeFiscalNumberRequest consume un número fiscal del bloque.
 type ConsumeFiscalNumberRequest struct {
-	TerminalID   string `json:"terminal_id"`
-	BlockID      int64  `json:"block_id"`
-	SaleLocalID  int64  `json:"sale_local_id"`
+	TerminalID  string `json:"terminal_id"`
+	BlockID     int64  `json:"block_id"`
+	SaleLocalID int64  `json:"sale_local_id"`
 }
 
 // ConsumeFiscalNumberResponse devuelve el número fiscal consumido.

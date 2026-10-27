@@ -18,7 +18,7 @@ package web
 //
 //  1. El interruptor de operador (OperatorOnly): sin él la herramienta no se
 //     anuncia al modelo ni se ejecuta.
-//  2. Los permisos del ROL (campo Perm de aiToolDef): el agente tiene el rol que
+//  2. Los permisos del ROL (campo Permission de aiToolDef): el agente tiene el rol que
 //     el administrador le asignó, y ese rol tiene que tener el permiso en la
 //     matriz de Roles y Permisos (role_permission). Sin permiso la acción se
 //     bloquea con el motivo escrito, no con un error genérico.
@@ -38,12 +38,18 @@ import (
 
 // aiPermisoDenegado devuelve el motivo del bloqueo, o "" si el rol del agente
 // tiene el permiso que declara la herramienta.
+//
+// Hoy el guardián ya comprueba el permiso antes de ejecutar (ai_permissions.go),
+// así que esto es una segunda barrera para quien llame a la herramienta por una
+// vía que no pase por el despacho. Lee la MISMA declaración (Permission) y no una
+// copia: una lista paralela de permisos se desincroniza igual que se
+// desincronizaba la de riesgos.
 func (s *Server) aiPermisoDenegado(sess *SessionData, agent aiAgent, tool string) string {
 	def, ok := aiToolByName[tool]
-	if !ok || def.Perm == "" {
+	if !ok || def.Permission.Directory == "" {
 		return ""
 	}
-	if s.aiPuedePermiso(sess, def.Perm) {
+	if s.aiPuedePermiso(sess, def.Permission.Directory) {
 		return ""
 	}
 	rol := strings.TrimSpace(agent.RoleName)
@@ -52,7 +58,7 @@ func (s *Server) aiPermisoDenegado(sess *SessionData, agent aiAgent, tool string
 	}
 	return fmt.Sprintf("su rol «%s» no tiene el permiso «%s» (crear) en Roles y Permisos, "+
 		"así que el sistema no acepta esta operación del agente. "+
-		"Pida al administrador que lo conceda a ese rol, o use un agente cuyo rol sí lo tenga.", rol, def.Perm)
+		"Pida al administrador que lo conceda a ese rol, o use un agente cuyo rol sí lo tenga.", rol, def.Permission.Directory)
 }
 
 // aiPuedePermiso comprueba un permiso de la matriz para la identidad del agente.
@@ -453,6 +459,10 @@ func (s *Server) aiToolPurchaseCreate(sess *SessionData, agent aiAgent, args map
 	campos.Set("purchase_date", fecha)
 	campos.Set("chalan_no", strings.TrimSpace(aiStrParam(args, "chalan_no")))
 	campos.Set("control_no", strings.TrimSpace(aiStrParam(args, "control_no")))
+	// LA CLASIFICACIÓN VIAJA CON LA COMPRA. Si el agente no la declara, cae en
+	// 'factura' (lo mismo que las compras ya cargadas): lo que NO puede pasar es
+	// que una nota de entrega entre al libro de compras como crédito fiscal.
+	campos.Set("document_kind", CompraKind(aiStrParam(args, "document_kind")))
 	campos.Set("purchase_details", strings.TrimSpace(aiStrParam(args, "details")))
 	campos.Set("discount", strconv.FormatFloat(descFactura, 'f', 2, 64))
 	campos.Set("total_discount", strconv.FormatFloat(round2(descTotal+descFactura), 'f', 2, 64))
@@ -465,6 +475,19 @@ func (s *Server) aiToolPurchaseCreate(sess *SessionData, agent aiAgent, args map
 	codigo, datos, cuerpo := s.respuestaDeHandler(sess, campos, s.purchaseSave)
 	if codigo >= 400 {
 		return string(mustJSON(aiToolError{mensajeDeError(datos, cuerpo)})), nil
+	}
+	// EL CANDADO RESPONDIENDO AL AGENTE. No es un error: es el sistema diciendo
+	// «esa compra ya está». Se devuelve el número de la que existe para que el
+	// agente la reporte en vez de reintentar inventando otra carga.
+	if dup, _ := datos["duplicate"].(bool); dup {
+		return string(mustJSON(map[string]interface{}{
+			"status":      "duplicate",
+			"duplicate":   true,
+			"purchase_id": datos["purchase_id"],
+			"purchase":    datos["purchase"],
+			"msg":         datos["msg"],
+			"note":        "esa compra YA estaba registrada: no se creó otra. No vuelva a cargarla; si de verdad es otra compra, cambie el número de factura o de control, o el tipo de documento.",
+		})), nil
 	}
 	purchaseID := int64(0)
 	if v, ok := datos["purchase_id"].(float64); ok {

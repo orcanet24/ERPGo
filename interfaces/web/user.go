@@ -510,8 +510,8 @@ func (s *Server) userPhotoSave(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, map[string]interface{}{
 		"status": 1,
-		"msg":     "Foto guardada",
-		"photo":   result.Path,
+		"msg":    "Foto guardada",
+		"photo":  result.Path,
 	})
 }
 

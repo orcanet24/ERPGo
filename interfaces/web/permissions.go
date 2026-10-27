@@ -339,6 +339,46 @@ func isAdminRoute(path string) bool {
 	return false
 }
 
+// exigirPermiso aplica la MATRIZ DEL ROL a la ACCIÓN REAL de la ruta y responde
+// 403 cuando no la concede. Devuelve true si el handler puede seguir.
+//
+// POR QUÉ HACE FALTA ALGO MÁS QUE EL MIDDLEWARE. El middleware deduce la acción
+// del MÉTODO HTTP, y con eso «ver, editar, insertar o borrar» no se puede
+// expresar: /supplier/save inserta o edita según venga el id, y
+// /supplier/delete/{id} es un POST del que el método sólo dice «create». Las
+// tres operaciones —alta, edición y borrado— quedaban bajo el mismo permiso, así
+// que un rol con «editar proveedor» podía además crear y borrar. Aquí se
+// comprueba la acción de verdad, en el único sitio donde se conoce: el handler.
+//
+// La puerta es la MISMA que usa el resto del sistema (hasPermission): master y
+// admin tienen todo, «employee» es solo lectura —igual que canAccessModule— y el
+// resto depende de role_permission, mirando empresa y control. Y se admiten
+// varios directorios (OR) porque hay pantallas que sirven a dos módulos: la
+// lista de proveedores la abre tanto quien gestiona proveedores como quien los da
+// de alta, y el buscador lo usan también los formularios de compra.
+func (s *Server) exigirPermiso(w http.ResponseWriter, r *http.Request, accion string, directorios ...string) bool {
+	sess := s.sessionFromRequest(r)
+	if sess == nil {
+		jsonError(w, "No autorizado. Inicie sesión.", http.StatusUnauthorized)
+		return false
+	}
+	// «employee» es solo lectura: es la regla del sistema (cabecera de este
+	// archivo) y canAccessModule ya la aplica al módulo. Sin repetirla aquí, un
+	// rol de empleado con la casilla marcada en la matriz podría escribir por
+	// esta puerta y no por la del módulo.
+	if accion != "read" && sess.UserLevel == "employee" {
+		jsonError(w, "Su rol es de solo lectura: no puede "+accion+" en este módulo.", http.StatusForbidden)
+		return false
+	}
+	for _, dir := range directorios {
+		if dir != "" && s.hasPermission(r, dir, accion) {
+			return true
+		}
+	}
+	jsonError(w, fmt.Sprintf("Su rol no tiene el permiso «%s» (%s) en Roles y Permisos.", strings.Join(directorios, "» o «"), accion), http.StatusForbidden)
+	return false
+}
+
 // isCrossTenantRoute verifica si la ruta puede acceder datos entre empresas
 func isCrossTenantRoute(path string) bool {
 	for prefix := range crossTenantRoutes {

@@ -28,6 +28,53 @@
             </div>
         </div>
 
+        <!-- Resumen por DOCUMENTOS: es el estado de la deuda aunque el asiento
+             todavía esté pendiente de aprobar. El saldo contable que cierra la
+             tabla sale del libro; estos tres números salen de las compras. -->
+        <div class="row" style="margin-bottom:10px">
+            <div class="col-sm-3">
+                <div class="panel panel-bd" style="margin-bottom:8px">
+                    <div class="panel-body" style="padding:8px">
+                        <small class="text-muted">Compras</small><br>
+                        <strong id="docCompras">{{.Documentos.Compras}}</strong>
+                    </div>
+                </div>
+            </div>
+            <div class="col-sm-3">
+                <div class="panel panel-bd" style="margin-bottom:8px">
+                    <div class="panel-body" style="padding:8px">
+                        <small class="text-muted">Pagado en la compra</small><br>
+                        <strong id="docPagado">{{.Documentos.Pagado}}</strong>
+                    </div>
+                </div>
+            </div>
+            <div class="col-sm-3">
+                <div class="panel panel-bd" style="margin-bottom:8px">
+                    <div class="panel-body" style="padding:8px">
+                        <small class="text-muted">Por pagar (compras)</small><br>
+                        <strong class="text-danger" id="docPorPagar">{{.Documentos.PorPagar}}</strong>
+                    </div>
+                </div>
+            </div>
+            <div class="col-sm-3">
+                <div class="panel panel-bd" style="margin-bottom:8px">
+                    <div class="panel-body" style="padding:8px">
+                        <small class="text-muted">Saldo contable</small><br>
+                        <strong id="saldoContable">0.00</strong>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {{if not .ConCuenta}}
+        <div class="alert alert-warning">
+            <i class="fa fa-exclamation-triangle"></i>
+            Este proveedor todavía no tiene cuenta contable propia, así que su libro no puede mostrar
+            movimientos. La cuenta se crea sola con la próxima compra; hasta entonces la deuda se ve
+            arriba, por documentos.
+        </div>
+        {{end}}
+
         <div class="print-area">
             <div class="text-center" style="margin-bottom:10px">
                 <h4 style="margin:0">{{.Company.CompanyName}}</h4>
@@ -55,6 +102,10 @@
                     </tr>
                 </tfoot>
             </table>
+            <p class="help-block">
+                Un crédito (la compra) aumenta lo que se le debe; un débito (el pago, el saldo anterior
+                cargado al revés o una nota de crédito) lo reduce. El balance es el saldo corrido de su cuenta.
+            </p>
         </div>
     </div>
 </div>
@@ -76,7 +127,10 @@ $(function () {
         $.getJSON(url, { from: from || '', to: to || '' }, function (r) {
             var body = $('#ledgerTable tbody').empty();
             if (!r.data || !r.data.length) {
-                body.append('<tr><td colspan="7" class="text-center">Sin movimientos</td></tr>');
+                var nota = r.sin_cuenta
+                    ? 'Sin cuenta contable todavía: la deuda se ve arriba, por documentos.'
+                    : 'Sin movimientos en el período.';
+                body.append('<tr><td colspan="7" class="text-center text-muted">' + nota + '</td></tr>');
             } else {
                 $.each(r.data, function (i, row) {
                     var date = (row.date || '').split('T')[0];
@@ -96,6 +150,12 @@ $(function () {
             $('#totalDebit').text(fmt(r.total_debit));
             $('#totalCredit').text(fmt(r.total_credit));
             $('#totalBalance').text(fmt(r.balance));
+            $('#saldoContable').text(fmt(r.balance));
+            if (r.documentos) {
+                $('#docCompras').text(fmt(r.documentos.Compras));
+                $('#docPagado').text(fmt(r.documentos.Pagado));
+                $('#docPorPagar').text(fmt(r.documentos.PorPagar));
+            }
         }).fail(function (x) {
             toastr.error(x.responseJSON ? x.responseJSON.error : 'Error al cargar el mayor');
         });

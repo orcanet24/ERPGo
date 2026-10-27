@@ -93,8 +93,8 @@ func (s *Server) invoiceForm(w http.ResponseWriter, r *http.Request) {
 	methods := s.paymentMethods(r)
 	canCreate := s.hasPermission(r, "add_customer", "create") || s.hasPermission(r, "manage_customer", "create")
 	s.render(w, r, "invoice_form.html", map[string]interface{}{
-		"Title":            "Nueva Factura",
-		"Methods":          methods,
+		"Title":             "Nueva Factura",
+		"Methods":           methods,
 		"CanCreateCustomer": canCreate,
 	})
 }

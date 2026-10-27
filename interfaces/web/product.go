@@ -878,7 +878,7 @@ func (s *Server) categoryReorder(w http.ResponseWriter, r *http.Request) {
 				resto = append(resto, cid)
 			}
 		}
-			donde := 0 // soltar frente a todo: índice 0
+		donde := 0 // soltar frente a todo: índice 0
 		if !primero {
 			donde = -1
 			for i, cid := range resto {

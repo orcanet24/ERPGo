@@ -114,8 +114,8 @@ func (s *Server) orderToDelivery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]interface{}{
-		"status": 1,
-		"msg":    "Pedido convertido a nota de entrega",
+		"status":            1,
+		"msg":               "Pedido convertido a nota de entrega",
 		"delivery_order_id": deliveryOrderID,
 	})
 }

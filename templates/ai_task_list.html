@@ -32,6 +32,7 @@ $(function () {
             }},
             { data: null, render: function (d) {
                 if (!d.last_run_id) return '<span class="label label-default">Sin ejecutar</span>';
+                if (d.pending_review) return '<span class="label label-warning" title="Ejecutó una acción crítica y nadie la ha revisado">requiere revisión</span>';
                 var cls = { done: 'label-success', failed: 'label-danger', running: 'label-info', reverted: 'label-warning' }[d.last_status] || 'label-default';
                 return '<span class="label ' + cls + '">' + (d.last_status || '') + '</span>';
             }},
