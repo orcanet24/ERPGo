@@ -249,7 +249,7 @@ func escribirMetaRespaldo(dir, zipName string, m backupMeta) error {
 }
 
 func leerMetaRespaldo(dir, zipName string) (*backupMeta, error) {
-	b, err := os.ReadFile(filepath.Join(dir, zipName + ".meta.json"))
+	b, err := os.ReadFile(filepath.Join(dir, zipName+".meta.json"))
 	if err != nil {
 		return nil, err
 	}
@@ -345,6 +345,7 @@ func (s *Server) ultimoRespaldoEstado(tenant string) map[string]interface{} {
 	}
 	return estado
 }
+
 // databaseBackupStatus expone el estado del ciclo de respaldos: si está
 // activo, cada cuánto, y el último respaldo verificado de la empresa activa.
 func (s *Server) databaseBackupStatus(w http.ResponseWriter, r *http.Request) {

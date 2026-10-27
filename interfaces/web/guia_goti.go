@@ -51,32 +51,32 @@ var guiToursDemo = []guiaTourSemilla{
 		Pasos: []guiaPasoSemilla{
 			{
 				Orden: 1, Url: "/", Selector: "",
-				Titulo: "Bienvenido a ERPGo. Empecemos por una venta completa.",
+				Titulo:  "Bienvenido a ERPGo. Empecemos por una venta completa.",
 				Mensaje: "Vamos a crear un cliente, agregarle productos y facturar. Cuando estés en el panel, sigue el globo: iremos paso a paso.",
 			},
 			{
 				Orden: 2, Url: "/customer/add", Selector: "#content",
 				DependsOnOrden: 1,
-				Titulo: "Primer paso: dar de alta un Cliente",
-				Mensaje: "Un cliente necesita, al menos, RIF y nombre. Sin cliente no hay factura: ERPGo exige RIF por exigencia del SENIAT.",
+				Titulo:         "Primer paso: dar de alta un Cliente",
+				Mensaje:        "Un cliente necesita, al menos, RIF y nombre. Sin cliente no hay factura: ERPGo exige RIF por exigencia del SENIAT.",
 			},
 			{
 				Orden: 3, Url: "/product/add", Selector: "#content",
 				DependsOnOrden: 2,
-				Titulo: "Segundo paso: crear un Producto",
-				Mensaje: "Con nombre, precio y el impuesto (IVA o exento). El mantenedor ya trae los porcentajes de impuestos que usas en español.",
+				Titulo:         "Segundo paso: crear un Producto",
+				Mensaje:        "Con nombre, precio y el impuesto (IVA o exento). El mantenedor ya trae los porcentajes de impuestos que usas en español.",
 			},
 			{
 				Orden: 4, Url: "/invoice/new", Selector: "#content",
 				DependsOnOrden: 3,
-				Titulo: "Tercer paso: la Factura (carrito)",
-				Mensaje: "Busca el cliente que creaste, agrégale el producto, ajusta la cantidad y OBSERVA el total. Puedes también revisar el final de la mecanografía: el sistema calcula la tasa de cambio del día si es en USD.",
+				Titulo:         "Tercer paso: la Factura (carrito)",
+				Mensaje:        "Busca el cliente que creaste, agrégale el producto, ajusta la cantidad y OBSERVA el total. Puedes también revisar el final de la mecanografía: el sistema calcula la tasa de cambio del día si es en USD.",
 			},
 			{
 				Orden: 5, Url: "/invoice/new", Selector: "#btnCharge",
 				DependsOnOrden: 4,
-				Titulo: "Cobrar la factura",
-				Mensaje: "Cuando el total cuadra, presiona Cobrar. Puedes ver que el recibo aparece con número de factura y número de control fiscal: eso es tu respaldo ante el SENIAT.",
+				Titulo:         "Cobrar la factura",
+				Mensaje:        "Cuando el total cuadra, presiona Cobrar. Puedes ver que el recibo aparece con número de factura y número de control fiscal: eso es tu respaldo ante el SENIAT.",
 				// Verificación: después de cobrar existe la última factura con detalle.
 				CheckSQL: "SELECT COUNT(*) > 0 FROM invoice_details WHERE invoice_id = (SELECT MAX(invoice_id) FROM invoice)",
 				CheckMsg: "¿Ya cobraste una factura? No vemos ningún renglón en la última factura.",
@@ -84,8 +84,8 @@ var guiToursDemo = []guiaTourSemilla{
 			{
 				Orden: 6, Url: "/invoice/list", Selector: "#dataTables_wrapper",
 				DependsOnOrden: 5,
-				Titulo: "¡La factura quedó registrada!",
-				Mensaje: "Ya tienes una venta operada de punta a punta. El siguiente módulo que te recomendamos es el POS (Cobrar con caja) o la rutina del cierre del mes.",
+				Titulo:         "¡La factura quedó registrada!",
+				Mensaje:        "Ya tienes una venta operada de punta a punta. El siguiente módulo que te recomendamos es el POS (Cobrar con caja) o la rutina del cierre del mes.",
 			},
 		},
 	},
@@ -95,7 +95,7 @@ var guiToursDemo = []guiaTourSemilla{
 func (s *Server) registerGuiaRoutes() {
 	s.mux.HandleFunc("GET /guia/active", s.guiaActive)
 	s.mux.HandleFunc("POST /guia/progress", s.guiaProgress)
-	s.mux.HandleFunc("GET /guia/demo-estado", s.guiaDemoEstado)   // admin
+	s.mux.HandleFunc("GET /guia/demo-estado", s.guiaDemoEstado)  // admin
 	s.mux.HandleFunc("POST /guia/demo-marcar", s.guiaDemoMarcar) // admin
 }
 
@@ -426,7 +426,7 @@ func (s *Server) guiaPasosDelTour(db *sql.DB, tourID int64, userID string) ([]ma
 	return pasos, rows.Err()
 }
 
-// guiaPasoActual: el primer paso no done/skip (o '' si el tour terminó).
+// guiaPasoActual: el primer paso no done/skip (o ” si el tour terminó).
 func (s *Server) guiaPasoActual(pasos []map[string]interface{}) int64 {
 	for _, p := range pasos {
 		if b, _ := p["done"].(bool); b {
