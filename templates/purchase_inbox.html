@@ -1,0 +1,228 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Documentos recibidos
+                <a href="/purchase/add" class="btn btn-primary btn-sm pull-right"><i class="fa fa-plus"></i> Nueva Compra</a>
+                <a href="/purchase/list" class="btn btn-default btn-sm pull-right" style="margin-right:6px"><i class="fa fa-list"></i> Compras</a>
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+
+        <!-- RECEPCIÓN. Arrastrar el archivo del proveedor y listo: el documento
+             se guarda, se lee lo que se pueda leer y queda propuesto en una
+             compra. Aquí NO se registra nada: el candado anti-duplicado corre al
+             guardar la compra, igual que si se cargó a mano. -->
+        <div class="well" style="border:2px dashed #b9c7d6; text-align:center; padding:16px; margin-bottom:15px">
+            <p style="margin-bottom:10px">
+                <i class="fa fa-cloud-upload fa-2x" style="color:#5b7f9e"></i><br>
+                <b>Recibir un documento del proveedor</b><br>
+                <small class="text-muted">XML fiscal, PDF o foto de la factura (máximo 10 MB). Se guarda y se propone en una compra; nada se registra sin que alguien lo confirme.</small>
+            </p>
+            <input type="file" id="inboxArchivo" accept=".xml,.pdf,.jpg,.jpeg,.png,.webp">
+            <p id="inboxEstado" class="help-block" style="margin-top:8px; margin-bottom:0"></p>
+        </div>
+
+        <!-- Lo que se pudo leer del último archivo subido, con el enlace para
+             seguir: revisar y guardar. -->
+        <div id="inboxPropuesta"></div>
+
+        <ul class="nav nav-tabs" style="margin-bottom:12px">
+            <li {{if eq .Estado "leido"}}class="active"{{end}}>
+                <a href="/purchase/inbox?estado=leido">Pendientes <span class="badge">{{index .Contadores "leido"}}</span></a></li>
+            <li {{if eq .Estado "cargado"}}class="active"{{end}}>
+                <a href="/purchase/inbox?estado=cargado">Cargados <span class="badge">{{index .Contadores "cargado"}}</span></a></li>
+            <li {{if eq .Estado "descartado"}}class="active"{{end}}>
+                <a href="/purchase/inbox?estado=descartado">Descartados <span class="badge">{{index .Contadores "descartado"}}</span></a></li>
+            <li {{if eq .Estado "todos"}}class="active"{{end}}>
+                <a href="/purchase/inbox?estado=todos">Todos <span class="badge">{{index .Contadores "todos"}}</span></a></li>
+        </ul>
+
+        <table class="table table-striped table-bordered" id="inboxTabla">
+            <thead>
+                <tr>
+                    <th>Recibido</th>
+                    <th>Documento</th>
+                    <th>Tipo</th>
+                    <th>Proveedor</th>
+                    <th>N° factura / Control</th>
+                    <th class="text-right">Total</th>
+                    <th>Lectura</th>
+                    <th>Estado</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+            {{range .Filas}}
+                <tr data-id="{{.ID}}">
+                    <td>{{.Creado}}</td>
+                    <td>
+                        <a href="/purchase/inbox/file/{{.ID}}" target="_blank" rel="noopener">
+                            <i class="fa {{if eq .Formato "xml"}}fa-code{{else if eq .Formato "pdf"}}fa-file-pdf-o{{else}}fa-file-image-o{{end}}"></i>
+                            {{.OrigName}}
+                        </a>
+                        <br><small class="text-muted">{{.Bytes}} bytes</small>
+                    </td>
+                    <td>
+                        <span class="label {{if eq .Kind "factura"}}label-success{{else if eq .Kind "nota_entrega"}}label-info{{else}}label-default{{end}}">
+                            {{kindLabel .Kind}}
+                        </span>
+                    </td>
+                    <td>
+                        {{if .RIF}}<b>{{.RIF}}</b><br>{{end}}
+                        {{.Prov}}
+                    </td>
+                    <td>
+                        {{.Numero}}
+                        {{if .Control}}<br><small class="text-muted">Ctrl {{.Control}}</small>{{end}}
+                        {{if .Fecha}}<br><small class="text-muted">{{.Fecha}}</small>{{end}}
+                    </td>
+                    <td class="text-right">{{money .Total}}</td>
+                    <td>
+                        {{if eq .Extrac "xml"}}
+                            <span class="label label-success">XML leído</span>
+                        {{else}}
+                            <span class="label label-warning">OCR pendiente</span>
+                        {{end}}
+                        {{if .Notas}}<br><small class="text-muted">{{.Notas}}</small>{{end}}
+                    </td>
+                    <td>
+                        {{if eq .Estado "cargado"}}
+                            <span class="label label-success">Cargado</span>
+                        {{else if eq .Estado "descartado"}}
+                            <span class="label label-default">Descartado</span>
+                        {{else}}
+                            <span class="label label-warning">Pendiente</span>
+                        {{end}}
+                    </td>
+                    <td>
+                        {{if eq .Estado "leido"}}
+                            <a class="btn btn-primary btn-xs" href="/purchase/add?inbox_id={{.ID}}" title="Proponer esta compra con el documento">
+                                <i class="fa fa-arrow-right"></i> Cargar en compra
+                            </a>
+                            <button class="btn btn-default btn-xs do-discard" data-id="{{.ID}}" title="Marcar como descartado">
+                                <i class="fa fa-ban"></i>
+                            </button>
+                        {{else if eq .Estado "cargado"}}
+                            <a class="btn btn-info btn-xs" href="/purchase/details/{{.Linked}}" title="Ver la compra">
+                                <i class="fa fa-eye"></i> Compra #{{.Linked}}
+                            </a>
+                        {{else}}
+                            <small class="text-muted">—</small>
+                        {{end}}
+                    </td>
+                </tr>
+            {{else}}
+                <tr><td colspan="9" class="text-center text-muted">No hay documentos en esta vista.</td></tr>
+            {{end}}
+            </tbody>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+(function () {
+    'use strict';
+
+    // ---------- recepción ----------
+    function pintarPropuesta(r) {
+        var campos = (r.campos || []).join(', ');
+        var faltan = (r.faltan || []).join(', ');
+        var html =
+            '<div class="alert alert-success">' +
+            '<p style="margin-bottom:6px"><i class="fa fa-check"></i> ' +
+            '<b>Documento recibido</b> ' +
+            (r.proveedor ? ' · ' + escapeInbox(r.proveedor) : '') +
+            (r.rif ? ' · RIF ' + escapeInbox(r.rif) : '') +
+            (r.numero ? ' · factura N° ' + escapeInbox(r.numero) : '') +
+            (r.control ? ' · control ' + escapeInbox(r.control) : '') +
+            (r.fecha ? ' · ' + escapeInbox(r.fecha) : '') +
+            (r.lineas ? ' · ' + r.lineas + ' renglón(es)' : '') +
+            '</p>' +
+            (campos ? '<p style="margin-bottom:6px"><b>Se leyó:</b> ' + escapeInbox(campos) + '</p>' : '') +
+            (faltan ? '<p style="margin-bottom:6px"><b>Falta confirmar:</b> ' + escapeInbox(faltan) + '</p>' : '') +
+            '<a class="btn btn-primary btn-sm" href="' + escapeInbox(r.ir) + '">' +
+            '<i class="fa fa-arrow-right"></i> Revisar y cargar en compra</a> ' +
+            '<button type="button" class="btn btn-default btn-sm" id="inboxCerrarPropuesta">Cerrar</button>' +
+            '</div>';
+        $('#inboxPropuesta').html(html);
+    }
+
+    function escapeInbox(s) {
+        return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function subir(archivo) {
+        if (!archivo) { return; }
+        var fd = new FormData();
+        fd.append('documento', archivo);
+        $('#inboxEstado').text('Recibiendo ' + archivo.name + '…');
+        $('#inboxArchivo').prop('disabled', true);
+        $.ajax({
+            url: '/purchase/inbox', type: 'POST', data: fd,
+            processData: false, contentType: false,
+            success: function (r) {
+                $('#inboxArchivo').prop('disabled', false).val('');
+                $('#inboxEstado').text('');
+                if (r.status === 'duplicate') {
+                    toastr.warning(r.msg || 'Ese archivo ya se había recibido.');
+                    setTimeout(function () { location.href = r.ir; }, 700);
+                    return;
+                }
+                if (r.status !== 'ok') { toastr.error(r.error || 'No se pudo recibir el documento'); return; }
+                toastr.success('Documento recibido');
+                pintarPropuesta(r);
+                refrescarTabla();
+            },
+            error: function (x) {
+                $('#inboxArchivo').prop('disabled', false);
+                $('#inboxEstado').text('');
+                toastr.error(x.responseJSON ? x.responseJSON.error : 'No se pudo recibir el documento');
+            }
+        });
+    }
+
+    // refrescarTabla vuelve a pedir la MISMA vista al servidor y se queda solo
+    // con el cuerpo de la tabla: la lista sigue siendo una sola fuente de
+    // verdad (el render del servidor) y la página no se recarga entera.
+    function refrescarTabla() {
+        $.get(location.pathname + location.search, function (html) {
+            var doc = new DOMParser().parseFromString(html, 'text/html');
+            var cuerpo = doc.querySelector('#inboxTabla tbody');
+            if (cuerpo) { document.querySelector('#inboxTabla tbody').innerHTML = cuerpo.innerHTML; }
+            var tabs = doc.querySelectorAll('.nav-tabs li');
+            var mios = document.querySelectorAll('.nav-tabs li');
+            for (var i = 0; i < mios.length && i < tabs.length; i++) { mios[i].outerHTML = tabs[i].outerHTML; }
+        });
+    }
+
+    $(function () {
+        $('#inboxArchivo').on('change', function () { subir(this.files && this.files[0]); });
+
+        $('#inboxPropuesta').on('click', '#inboxCerrarPropuesta', function () {
+            $('#inboxPropuesta').empty();
+        });
+
+        $('#inboxTabla').on('click', '.do-discard', function () {
+            var id = $(this).data('id');
+            swal({
+                title: '¿Descartar este documento?',
+                text: 'No se borra el archivo: queda marcado como descartado, con su traza.',
+                type: 'warning', showCancelButton: true,
+                confirmButtonText: 'Descartar',
+                confirmButtonColor: ERPGo.appearance.css('--erp-danger', '#9c3333')
+            }, function () {
+                $.post('/purchase/inbox/' + id + '/discard', function (r) {
+                    if (r.status == 1) { toastr.success(r.msg); refrescarTabla(); }
+                    else { toastr.error(r.error || 'No se pudo descartar'); }
+                }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'No se pudo descartar'); });
+            });
+        });
+    });
+})();
+</script>
+{{end}}
