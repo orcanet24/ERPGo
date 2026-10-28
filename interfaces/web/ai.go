@@ -59,6 +59,10 @@ func (s *Server) registerAIRoutes() {
 	s.mux.HandleFunc("POST /ai/report-types/delete", s.aiReportTypeDelete)
 	// Providers (multi-vendor, OpenAI-compatible)
 	s.mux.HandleFunc("GET /ai/providers", s.aiProviderList)
+	// Lista de modelos para el formulario: catálogo curado por vendor, y para
+	// OpenAI/Anthropic cruzado con la lista viva del proveedor. Nunca devuelve
+	// la URL de un proveedor.
+	s.mux.HandleFunc("POST /ai/models", s.aiModelsList)
 	s.mux.HandleFunc("POST /ai/providers/save", s.aiProviderSave)
 	s.mux.HandleFunc("POST /ai/providers/delete/{id}", s.aiProviderDelete)
 	s.mux.HandleFunc("POST /ai/providers/activate/{id}", s.aiProviderActivate)

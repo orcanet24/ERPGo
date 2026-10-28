@@ -87,10 +87,15 @@ func aiSystemPrompt(roleName, schemaMap string) string {
 // resuelve con aiVendorBaseURL(). Una URL guardada en la BD (columna
 // base_url) se ignora por completo para estos vendors.
 //
-// `anthropic` se retiró (migración schema_zzz_ai_usage.sql): el cliente es
-// OpenAI-compatible y la API de Anthropic usa otro endpoint, otras cabeceras
-// y otro formato de respuesta, así que ese vendor nunca funcionó.
-var aiAllowedVendors = []string{"openai", "orc24"}
+// `anthropic` volvió (oct-2026): Anthropic publica una CAPA de compatibilidad
+// OpenAI en su propio dominio —`POST /v1/chat/completions` con
+// `Authorization: Bearer`— que es exactamente lo único que habla este cliente.
+// Se retiró en su momento porque la API NATIVA exige `/v1/messages`, cabecera
+// `x-api-key` y `anthropic-version`, y devuelve `content[]` en vez de
+// `choices[]`: con el cliente original ese vendor daba 401/404 garantizado.
+// Con la capa compatible el código no cambia ni un byte, y se puede ofrecer sin
+// anunciar algo que no funciona.
+var aiAllowedVendors = []string{"openai", "anthropic", "orc24"}
 
 // aiDefaultVendor es el proveedor de las instalaciones nuevas: ORC24 es la vía
 // operativa (OpenAI rechaza llamadas desde Venezuela) y la que el proyecto
@@ -102,15 +107,70 @@ const aiDefaultVendor = "orc24"
 // el endpoint se deriva SIEMPRE de esta tabla.
 var aiVendorBaseURL = map[string]string{
 	"openai": "https://api.openai.com/v1",
+	// Anthropic por su capa de compatibilidad OpenAI (ver aiAllowedVendors).
+	"anthropic": "https://api.anthropic.com/v1",
 	// ORC24: plataforma de IA propia (orcanet1724.click), estándar
 	// OpenAI-compatible (chat completions + tool_calls).
 	"orc24": "https://ia.orcanet1724.click/v1",
 }
 
-// aiVendorLabel es el nombre para mostrar en la UI.
+// aiVendorLabel es el nombre para mostrar en la UI. Solo el nombre: la URL del
+// proveedor NO se muestra en ninguna pantalla ni se devuelve en ninguna
+// respuesta JSON — es un dato del binario, no del usuario.
 var aiVendorLabel = map[string]string{
-	"openai": "OpenAI",
-	"orc24":  "ORC24",
+	"openai":    "OpenAI",
+	"anthropic": "Anthropic",
+	"orc24":     "ORC24",
+}
+
+// aiVendorModels es el catálogo CURADO de modelos por vendor. Compilado como
+// la URL: es lo que el formulario OFRECE y el filtro que aplica la lista de
+// modelos (`POST /ai/models`) sobre lo que el proveedor devuelve.
+//
+// Tres reglas de negocio, escritas como listas:
+//
+//   - ORC24: un modelo, `orc24`. Es nuestra infraestructura y nuestro producto;
+//     se responde de memoria y sin salir a la red, porque no depende de nadie.
+//   - OpenAI: solo los modelos grandes. Quedan FUERA los pequeños (mini, nano)
+//     y la línea económica Luna: no es lo que se quiere ofrecer ni facturar.
+//   - Anthropic: solo los emblemáticos —Opus, Sonnet y Fable—. Haiku es la
+//     línea rápida y barata, y queda fuera por el mismo criterio.
+//
+// Un modelo fuera del catálogo no se ofrece AUNQUE el proveedor lo devuelva:
+// la lista remota sirve para saber cuáles siguen vivos, no para ensanchar lo
+// que se puede elegir.
+var aiVendorModels = map[string][]string{
+	"orc24":     {"orc24"},
+	"openai":    {"gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-5.5", "gpt-5.4"},
+	"anthropic": {"claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"},
+}
+
+// aiVendorModelPorDefecto es el modelo con el que se guarda un proveedor nuevo
+// de cada vendor (y el que sustituye a un modelo vacío en tiempo de ejecución).
+var aiVendorModelPorDefecto = map[string]string{
+	"orc24":     "orc24",
+	"openai":    "gpt-5.5",
+	"anthropic": "claude-sonnet-5-5",
+}
+
+// aiModelsDeVendor devuelve una copia del catálogo del vendor (nunca nil para
+// un vendor de la whitelist).
+func aiModelsDeVendor(vendor string) []string {
+	v := aiNormalizeVendor(vendor)
+	cat := aiVendorModels[v]
+	salida := make([]string, len(cat))
+	copy(salida, cat)
+	return salida
+}
+
+// aiModelPorDefecto devuelve el modelo por defecto del vendor. Un vendor
+// desconocido ya quedó normalizado a ORC24 por aiNormalizeVendor.
+func aiModelPorDefecto(vendor string) string {
+	v := aiNormalizeVendor(vendor)
+	if m := strings.TrimSpace(aiVendorModelPorDefecto[v]); m != "" {
+		return m
+	}
+	return aiVendorModelPorDefecto[aiDefaultVendor]
 }
 
 // aiValidVendor indica si el vendor está en la whitelist.

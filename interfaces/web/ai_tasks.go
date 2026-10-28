@@ -494,7 +494,7 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 		model = strings.TrimSpace(p.Model)
 	}
 	if model == "" {
-		model = aiDefaultModel
+		model = aiModelPorDefecto(p.Vendor)
 	}
 
 	maxSteps := agent.MaxSteps

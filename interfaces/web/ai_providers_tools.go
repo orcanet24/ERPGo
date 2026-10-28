@@ -62,7 +62,7 @@ func aiCallChatWithTools(p aiProvider, model string, messages []map[string]strin
 		model = strings.TrimSpace(p.Model)
 	}
 	if model == "" {
-		model = aiDefaultModel
+		model = aiModelPorDefecto(p.Vendor)
 	}
 	maxTokens := p.MaxTokens
 	if maxTokens <= 0 {

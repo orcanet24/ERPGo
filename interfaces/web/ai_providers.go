@@ -20,10 +20,12 @@ const (
 	aiNoProviderMsg = "No hay ningún proveedor de IA activo. Ve a Configuración IA y activa o añade uno."
 	// aiOpenAIBaseURL is the endpoint used by the legacy single-row ai_setting.
 	aiOpenAIBaseURL = "https://api.openai.com/v1"
-	// aiDefaultModel is used when a legacy row carries no model.
-	aiDefaultModel = "gpt-4o-mini"
-	aiTimeout      = 60 * time.Second
-	aiMaxBody      = 8 << 20
+	// aiDefaultModel was the fallback for a row with no model; per-vendor
+	// defaults now live in ai_rules.go (aiModelPorDefecto), because ORC24's
+	// default is `orc24` and an OpenAI default of gpt-4o-mini would contradict
+	// the curated catalog (small models are not offered).
+	aiTimeout = 60 * time.Second
+	aiMaxBody = 8 << 20
 )
 
 // aiProvider mirrors one row of ai_providers. La URL base SIEMPRE se resuelve
@@ -162,7 +164,7 @@ func (s *Server) loadActiveProvider(sess *SessionData) (aiProvider, bool) {
 			return aiProvider{}, false
 		}
 		if strings.TrimSpace(legacy.Model) == "" {
-			legacy.Model = aiDefaultModel
+			legacy.Model = aiModelPorDefecto("openai")
 		}
 		return aiProvider{
 			Name:           "OpenAI (configuración heredada)",
@@ -283,7 +285,6 @@ func (s *Server) aiProviderList(w http.ResponseWriter, r *http.Request) {
 			"name":         p.Name,
 			"vendor":       p.Vendor,
 			"vendor_label": aiVendorLabel[p.Vendor],
-			"base_url":     p.BaseURL,
 			"has_key":      strings.TrimSpace(p.APIKey) != "",
 			"model":        p.Model,
 			"temperature":  p.Temperature,
@@ -292,6 +293,159 @@ func (s *Server) aiProviderList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, out)
+}
+
+// ---------- Modelos ----------
+
+// aiModelsList answers POST /ai/models: qué modelos puede elegir el usuario
+// para un vendor.
+//
+// Tres reglas, en el orden en que se aplican:
+//
+//  1. NUNCA devuelve la URL de un proveedor. El endpoint es un dato del
+//     binario —se resuelve con aiVendorURL— y la pantalla solo tiene que
+//     mostrar modelos, no dónde están.
+//  2. ORC24 responde del catálogo compilado y SIN salir a la red: es nuestra
+//     infraestructura y su modelo único es `orc24`.
+//  3. OpenAI y Anthropic se consultan (GET /models con la clave que traiga el
+//     formulario, o la guardada del proveedor si se está editando) y el
+//     resultado se CRUZA con el catálogo curado: solo lo que el proveedor
+//     confirma vivo Y el catálogo aprueba. Si la consulta falla —sin clave,
+//     sin red, proveedor caído— se devuelve el catálogo con `source=catalogo`
+//     y el motivo, en vez de dejar el formulario sin modelos que ofrecer.
+func (s *Server) aiModelsList(w http.ResponseWriter, r *http.Request) {
+	if s.sessionFromRequest(r) == nil {
+		aiJSONError(w, "Sesión inválida", 401)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		aiJSONError(w, "Formulario inválido", 400)
+		return
+	}
+	vendor := aiNormalizeVendor(r.FormValue("vendor"))
+	respuesta := map[string]interface{}{
+		"status":       "success",
+		"vendor":       vendor,
+		"vendor_label": aiVendorLabel[vendor],
+		"models":       aiModelsDeVendor(vendor),
+		"source":       "catalogo",
+	}
+
+	if vendor == aiDefaultVendor {
+		// ORC24: hardcodeado a propósito — sin consulta, sin clave, sin red.
+		writeJSON(w, respuesta)
+		return
+	}
+
+	apiKey := strings.TrimSpace(r.FormValue("api_key"))
+	if apiKey == "" {
+		// Editando un proveedor ya guardado: la clave no viaja en el formulario
+		// (la BD no la devuelve por JSON), así que se lee aquí, en el servidor.
+		if pid, err := strconv.ParseInt(strings.TrimSpace(r.FormValue("provider_id")), 10, 64); err == nil && pid > 0 {
+			_ = s.dbFor(r).QueryRow(`SELECT IFNULL(api_key,'') FROM ai_providers WHERE id = ?`, pid).Scan(&apiKey)
+		}
+	}
+	if apiKey == "" {
+		respuesta["nota"] = "Sin API key no se pudo consultar la lista del proveedor: se muestran los modelos del catálogo."
+		writeJSON(w, respuesta)
+		return
+	}
+
+	remotos, err := aiModelosRemoto(vendor, apiKey)
+	if err != nil {
+		respuesta["nota"] = "No se pudo consultar la lista de modelos (" + err.Error() + "): se muestran los del catálogo."
+		writeJSON(w, respuesta)
+		return
+	}
+	aprobados := aiFiltrarModelos(aiModelsDeVendor(vendor), remotos)
+	if len(aprobados) == 0 {
+		// El proveedor respondió, pero nada de lo que ofrece coincide con lo que
+		// este sistema aprueba: el catálogo sigue siendo la oferta.
+		respuesta["nota"] = "El proveedor no devuelve ninguno de los modelos aprobados: se muestran los del catálogo."
+		writeJSON(w, respuesta)
+		return
+	}
+	respuesta["models"] = aprobados
+	respuesta["source"] = "remoto"
+	writeJSON(w, respuesta)
+}
+
+// aiModelosRemoto consulta GET {vendor}/models y devuelve sus ids.
+//
+// Los errores que salen de aquí son SIEMPRE genéricos: van a una pantalla, y ni
+// ahí ni en el log de la respuesta debe aparecer la URL del proveedor ni nada
+// que la contenga (un error de red de Go incluye el endpoint completo).
+func aiModelosRemoto(vendor, apiKey string) ([]string, error) {
+	base := aiVendorURL(vendor)
+	if base == "" {
+		return nil, fmt.Errorf("proveedor no permitido")
+	}
+	endpoint := strings.TrimRight(base, "/") + "/models"
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo preparar la consulta")
+	}
+	req.Header.Set("Accept", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	client, err := aiGuardedClient(endpoint, 15*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo validar la conexión con el proveedor")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo contactar con el proveedor")
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, aiMaxBody))
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo leer la respuesta del proveedor")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		switch resp.StatusCode {
+		case 401, 403:
+			return nil, fmt.Errorf("la API key fue rechazada")
+		default:
+			return nil, fmt.Errorf("el proveedor contestó HTTP %d", resp.StatusCode)
+		}
+	}
+	// El sobre es el de OpenAI —y lo es también en la capa compatible de
+	// Anthropic y en ORC24: {"data":[{"id":...}]}. No se distingue vendor
+	// porque el formato es el mismo y una rama por proveedor sería código que
+	// nadie prueba.
+	var lista struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &lista); err != nil {
+		return nil, fmt.Errorf("respuesta ilegible del proveedor")
+	}
+	ids := make([]string, 0, len(lista.Data))
+	for _, m := range lista.Data {
+		if id := strings.TrimSpace(m.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+// aiFiltrarModelos devuelve los modelos del catálogo que además están vivos en
+// la lista remota. El orden es el del CATÁLOGO: la oferta manda, la lista
+// remota solo confirma que el modelo sigue existiendo.
+func aiFiltrarModelos(catalogo, remotos []string) []string {
+	vivos := make(map[string]bool, len(remotos))
+	for _, m := range remotos {
+		vivos[strings.ToLower(strings.TrimSpace(m))] = true
+	}
+	salida := []string{}
+	for _, m := range catalogo {
+		if vivos[strings.ToLower(m)] {
+			salida = append(salida, m)
+		}
+	}
+	return salida
 }
 
 // aiProviderSave upserts a provider (id = 0 creates a new one).
