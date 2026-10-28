@@ -3,6 +3,10 @@
     <div class="btn-group">
         <button class="btn btn-default btn-sm" onclick="window.print()"><i class="fa fa-print"></i> Imprimir</button>
         <a href="/invoice/edit/{{.IID}}" class="btn btn-warning btn-sm"><i class="fa fa-pencil"></i> Editar</a>
+        {{if .Fiscal}}{{if .Fiscal.tiene}}
+        {{if .Fiscal.pdf}}<a class="btn btn-default btn-sm" href="{{.Fiscal.pdf}}" target="_blank" title="Documento fiscal digital"><i class="fa fa-file-pdf-o"></i> PDF fiscal</a>{{end}}
+        {{if .Fiscal.xml}}<a class="btn btn-default btn-sm" href="{{.Fiscal.xml}}" target="_blank" title="XML firmado por la imprenta"><i class="fa fa-file-code-o"></i> XML</a>{{end}}
+        {{end}}{{end}}
         <a href="/invoice/list" class="btn btn-primary btn-sm"><i class="fa fa-arrow-left"></i> Volver</a>
     </div>
 </div>

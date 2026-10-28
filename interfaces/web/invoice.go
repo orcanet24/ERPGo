@@ -81,6 +81,26 @@ func (s *Server) invoiceListData(w http.ResponseWriter, r *http.Request) {
 			"date": date.String, "draft": draft.String, "status": status,
 		})
 	}
+
+	// El documento fiscal digital de CADA factura, resuelto EN LOTE: una lista de
+	// hasta 1000 filas no puede hacer 1000 consultas (ver diLoteDocs). El campo
+	// `doc` lleva el enlace al PDF/XML —la copia del ERP si existe, si no la del
+	// proveedor— y solo aparece cuando la imprenta ya respondió.
+	numeros := make([]int64, 0, len(list))
+	for _, fila := range list {
+		if n, ok := fila["invoice_no"].(int64); ok {
+			numeros = append(numeros, n)
+		}
+	}
+	docs := s.diDocsDeFacturasDeLaPetición(r, numeros)
+	for _, fila := range list {
+		n, _ := fila["invoice_no"].(int64)
+		if d, ok := docs[n]; ok {
+			pk, _ := fila["id"].(int64)
+			fila["doc"] = s.diJSONDoc(pk, d)
+		}
+	}
+
 	writeJSON(w, map[string]interface{}{
 		"draw": draw, "recordsTotal": total, "recordsFiltered": filtered, "data": list,
 	})
@@ -936,17 +956,18 @@ func (s *Server) invoiceDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) invoiceDetails(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var iid, custID int64
+	var iid, custID, invNo int64
 	var date, details, ctrl, custRIF, series sql.NullString
 	var igtf float64
 	var total, paid, due, discount, vat, tax, shipping float64
 	var paymentType int
 	err := s.dbFor(r).QueryRow(`SELECT invoice_id, customer_id, date, total_amount, paid_amount, due_amount,
 		invoice_discount, total_vat_amnt, total_tax, shipping_cost, invoice_details, payment_type,
-		IFNULL(control_no,''), IFNULL(customer_rif,''), series, IFNULL(igtf_amount,0)
+		IFNULL(control_no,''), IFNULL(customer_rif,''), series, IFNULL(igtf_amount,0),
+		IFNULL(invoice,0)
 		FROM invoice WHERE invoice_id = ?`, id).
 		Scan(&iid, &custID, &date, &total, &paid, &due, &discount, &vat, &tax, &shipping, &details, &paymentType,
-			&ctrl, &custRIF, &series, &igtf)
+			&ctrl, &custRIF, &series, &igtf, &invNo)
 	if err != nil {
 		http.Error(w, "Factura no encontrada", 404)
 		return
@@ -975,6 +996,16 @@ func (s *Server) invoiceDetails(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 	}
 
+	// El documento fiscal digital de ESTA factura (PDF/XML). La clave de la
+	// imprenta es el correlativo (`invoice`), no el id interno. Sin documento la
+	// pantalla no ofrece nada: un botón que promete y no abre es peor que nada.
+	var fiscal map[string]interface{}
+	if invNo > 0 {
+		if d, ok := s.diDocsDeFacturasDeLaPetición(r, []int64{invNo})[invNo]; ok {
+			fiscal = s.diJSONDoc(iid, d)
+		}
+	}
+
 	st := s.settingsFor(r)
 	comp := st.Company
 	s.render(w, r, "invoice_details.html", map[string]interface{}{
@@ -997,6 +1028,7 @@ func (s *Server) invoiceDetails(w http.ResponseWriter, r *http.Request) {
 		"Series":    series.String,
 		"IDetails":  details.String,
 		"Details":   drows,
+		"Fiscal":    fiscal,
 		"Currency":  st.Web.Currency,
 		"Company":   comp,
 	})

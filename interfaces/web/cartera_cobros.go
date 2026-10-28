@@ -169,6 +169,25 @@ func (s *Server) carteraFacturasCliente(w http.ResponseWriter, r *http.Request) 
 			"due": debe, "due_fmt": money(debe),
 		})
 	}
+
+	// El documento fiscal digital de CADA factura pendiente, en lote: es lo que
+	// el cobrador quiere mandar al cliente sin salir del modal. Mismo camino y
+	// mismas reglas que la lista de facturación (ver digitalinvoice_doc.go).
+	numeros := make([]int64, 0, len(out))
+	for _, f := range out {
+		if n, ok := f["invoice_no"].(int64); ok {
+			numeros = append(numeros, n)
+		}
+	}
+	docs := s.diDocsDeFacturasDeLaPetición(r, numeros)
+	for _, f := range out {
+		n, _ := f["invoice_no"].(int64)
+		if d, ok := docs[n]; ok {
+			pk, _ := f["invoice_id"].(int64)
+			f["doc"] = s.diJSONDoc(pk, d)
+		}
+	}
+
 	writeJSON(w, map[string]interface{}{"status": 1, "customer_id": cid, "invoices": out})
 }
 

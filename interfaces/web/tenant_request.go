@@ -133,6 +133,24 @@ func (s *Server) requestForSession(sess *SessionData) *http.Request {
 	return r
 }
 
+// requestForTenant construye una petición sintética con el ámbito de una
+// empresa concreta cuando NI siquiera hay sesión: es el caso de la entrega
+// automática de facturas (diEntregarAutomatica), que corre desde el runner en
+// el momento en que la factura queda emitida. Ahí no hay navegador, no hay
+// cookie y tampoco hay agente: lo único que hace falta es saber a qué empresa
+// pertenece la factura, para que la auditoría y los ajustes tengan de dónde
+// sacar la compañía.
+//
+// Mismo contrato que requestForSession: no se envía nada, no hay contexto de
+// red y no debe usarse para leer cabeceras ni cookies.
+func (s *Server) requestForTenant(tenant string) *http.Request {
+	return withScope(&http.Request{}, &scope{
+		tenant:   tenant,
+		db:       s.dbForTenant(tenant),
+		settings: s.settingsOfTenant(tenant),
+	})
+}
+
 // dbForSession devuelve la base de la empresa a la que pertenece una sesión.
 //
 // Es la vía de la IA: las herramientas y las tareas encoladas se ejecutan sin

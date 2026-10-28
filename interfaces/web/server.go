@@ -355,6 +355,8 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	s.registerEntradaRapidaRoutes()
 	// Purchases
 	s.registerPurchaseRoutes()
+	// Bandeja de recepción de documentos (XML/PDF/foto de facturas de proveedor)
+	s.registerPurchaseInboxRoutes()
 	// Invoices + POS
 	s.registerInvoiceRoutes()
 	// Accounting (COA, vouchers, ledger, reports)
@@ -422,6 +424,8 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	s.registerDebitNoteRoutes()
 	s.registerFiscalSettingsRoutes()
 	s.registerDigitalInvoiceRoutes()
+	// Documento fiscal digital (PDF/XML de la imprenta) y su entrega automática
+	s.registerDigitalDocRoutes()
 	// Cartera / Cuentas por Cobrar
 	s.registerCarteraRoutes()
 	s.registerPagarRoutes()

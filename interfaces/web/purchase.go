@@ -99,12 +99,18 @@ func (s *Server) purchaseForm(w http.ResponseWriter, r *http.Request) {
 		}
 		rows.Close()
 	}
-	s.render(w, r, "purchase_form.html", map[string]interface{}{
+	data := map[string]interface{}{
 		"Title":        "Nueva Compra",
 		"ControlNo":    "",
 		"DocumentKind": CompraFactura,
 		"Methods":      methods,
-	})
+	}
+	// ¿Se viene de la bandeja con un documento? La propuesta se carga AQUÍ, en
+	// el mismo formulario de siempre: nada de atajos que salten el candado ni el
+	// renglón a renglón. Si el documento no existe o ya se descartó, el
+	// formulario se abre vacío y sin ruido.
+	s.inboxParaFormulario(r, data)
+	s.render(w, r, "purchase_form.html", data)
 }
 
 // purchaseEdit loads a purchase for editing.
@@ -185,6 +191,10 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 
 	r.ParseMultipartForm(32 << 20)
 	supplierID, _ := strconv.ParseInt(r.FormValue("supplier_id"), 10, 64)
+	// Documento de la bandeja que propuso esta compra: se amarra DESPUÉS del
+	// commit (inboxVincular), nunca antes: si el guardado falla, el documento
+	// sigue disponible para otro intento.
+	inboxID, _ := strconv.ParseInt(r.FormValue("inbox_id"), 10, 64)
 	if supplierID == 0 {
 		jsonError(w, "Proveedor inválido", 400)
 		return
@@ -518,6 +528,13 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 	if err := tx.Commit(); err != nil {
 		jsonError(w, err.Error(), 500)
 		return
+	}
+
+	// El documento de la bandeja queda cargado: la compra ya existe, así que
+	// solo se registra el enlace y su rastro de auditoría. Si esto falla, la
+	// compra sigue siendo válida —lo que se pierde es la puesta enlazada—.
+	if inboxID > 0 {
+		s.inboxVincular(r, inboxID, purchaseID)
 	}
 
 	// autoapprove if web_setting.is_autoapprove_v == 1 (like PHP)

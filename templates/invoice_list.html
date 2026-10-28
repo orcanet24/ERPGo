@@ -56,7 +56,20 @@ $(function () {
                 return d === 'yes' ? '<span class="label label-default">Borrador</span>' : '<span class="label label-success">Facturada</span>';
             }},
             { data: null, orderable: false, searchable: false, render: function (d) {
-                return '<a class="btn btn-info btn-xs" href="/invoice/details/' + d.id + '" title="Ver"><i class="fa fa-eye"></i></a> ' +
+                // Documento fiscal digital: solo cuando la imprenta ya respondió.
+                // PDF manda la copia archivada en el ERP (si existe); XML redirige
+                // al enlace del proveedor. Sin `tiene`, no hay botón que prometa.
+                var fisco = '';
+                if (d.doc && d.doc.tiene) {
+                    if (d.doc.pdf) {
+                        fisco += '<a class="btn btn-default btn-xs" href="' + d.doc.pdf + '" target="_blank" title="PDF fiscal"><i class="fa fa-file-pdf-o"></i></a> ';
+                    }
+                    if (d.doc.xml) {
+                        fisco += '<a class="btn btn-default btn-xs" href="' + d.doc.xml + '" target="_blank" title="XML firmado"><i class="fa fa-file-code-o"></i></a> ';
+                    }
+                }
+                return fisco +
+                    '<a class="btn btn-info btn-xs" href="/invoice/details/' + d.id + '" title="Ver"><i class="fa fa-eye"></i></a> ' +
                     '<a class="btn btn-warning btn-xs" href="/invoice/edit/' + d.id + '" title="Editar"><i class="fa fa-pencil"></i></a> ' +
                     '<button class="btn btn-danger btn-xs do-del" data-id="' + d.id + '" title="Eliminar"><i class="fa fa-trash"></i></button>';
             }}

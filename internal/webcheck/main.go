@@ -48,6 +48,22 @@ func templateFuncs() template.FuncMap {
 			}
 			return "Codificación propia de la empresa"
 		},
+		// kindLabel: la clase del documento de compra en la bandeja de
+		// recepción. Los literales son los de los valores de compra_hash.go
+		// (factura, nota_entrega, orden, sin_documento).
+		"kindLabel": func(kind string) string {
+			switch kind {
+			case "factura":
+				return "Factura"
+			case "nota_entrega":
+				return "Nota de entrega"
+			case "orden":
+				return "Orden de compra"
+			case "sin_documento":
+				return "Sin documento"
+			}
+			return "Sin clasificar"
+		},
 	}
 }
 

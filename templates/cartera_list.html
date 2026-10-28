@@ -469,8 +469,12 @@ $(function () {
             }
             var h = '';
             facturasCliente.forEach(function (f) {
+                // El PDF fiscal junto al número: es lo que el cobrador manda al
+                // cliente cuando paga. Solo si la imprenta ya devolvió documento.
+                var pdf = (f.doc && f.doc.tiene && f.doc.pdf)
+                    ? ' <a href="' + f.doc.pdf + '" target="_blank" title="PDF fiscal"><i class="fa fa-file-pdf-o"></i></a>' : '';
                 h += '<tr><td><input type="checkbox" class="rep-aplicar" checked data-inv="' + f.invoice_id + '"></td>'
-                   + '<td>#' + f.invoice_no + '<input type="hidden" name="apply_invoice" value="' + f.invoice_id + '"></td>'
+                   + '<td>#' + f.invoice_no + pdf + '<input type="hidden" name="apply_invoice" value="' + f.invoice_id + '"></td>'
                    + '<td>' + carEsc(f.date) + '</td>'
                    + '<td class="text-right">' + f.total + '</td>'
                    + '<td class="text-right rep-saldo" data-saldo="' + f.due + '">' + f.due_fmt + '</td>'

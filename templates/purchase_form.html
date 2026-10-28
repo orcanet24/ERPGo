@@ -1,11 +1,24 @@
 {{define "content"}}
 <form id="purchaseForm">
     {{if .EditID}}<input type="hidden" id="editMode" value="1">{{end}}
+    {{if .InboxID}}<input type="hidden" name="inbox_id" value="{{.InboxID}}">{{end}}
     <div class="panel panel-bd">
         <div class="panel-heading">
             <div class="panel-title"><h4>{{.Title}}</h4></div>
         </div>
         <div class="panel-body">
+            {{if .InboxID}}
+            <div class="alert alert-info" style="margin-bottom:15px">
+                <h5 style="margin-top:0"><i class="fa fa-file-text-o"></i> Documento recibido</h5>
+                <p style="margin-bottom:5px">
+                    <strong>Archivo:</strong> {{.InboxArchivo}}
+                    {{if .InboxProveedor}} · <strong>Proveedor leído:</strong> {{.InboxProveedor}}{{end}}
+                    · <a href="/purchase/inbox/file/{{.InboxID}}" target="_blank">Ver documento</a>
+                </p>
+                {{if .InboxCampos}}<p style="margin-bottom:5px"><strong>Se leyó del documento:</strong> {{.InboxCampos}}</p>{{end}}
+                {{if .InboxFaltan}}<p style="margin-bottom:0"><strong>Queda por confirmar:</strong> {{.InboxFaltan}}</p>{{end}}
+            </div>
+            {{end}}
             <div class="row">
                 <div class="col-md-4">
                     <div class="form-group">
@@ -308,6 +321,29 @@ var catProductos = [];
 var catVista = 'fichas';
 var catCargado = false;
 try { catVista = localStorage.getItem('erp_catalogo_vista') || 'fichas'; } catch (e) { catVista = 'fichas'; }
+
+// ---------- propuesta de la bandeja de recepción ----------
+// Los renglones que se leyeron del documento (XML/foto) llegan aquí como
+// propuesta. SIN documento la lista viene vacía y el formulario es el de
+// siempre, renglón a renglón.
+var inboxLineas = {{if .InboxLineas}}{{.InboxLineas}}{{else}}[]{{end}};
+
+// cargarPropuestaInbox pinta los renglones leídos en la tabla de productos.
+// Solo PROPONE: lo que sigue siendo obligatorio —producto identificado,
+// proveedor existente, número de factura con IVA y candado anti-duplicado— lo
+// sigue exigiendo el guardado.
+function cargarPropuestaInbox() {
+    if (!inboxLineas || !inboxLineas.length) { return; }
+    $('#itemRows').empty();
+    inboxLineas.forEach(function (l) {
+        var $row = itemRow();
+        $row.find('.pname').val(l.descripcion || '');
+        if (l.cantidad) { $row.find('.pqty').val(l.cantidad); }
+        if (l.precio) { $row.find('.prate').val(Number(l.precio).toFixed(2)); }
+        calcRow($row);
+    });
+    calcTotals();
+}
 
 // ---------- product rows ----------
 function itemRow(preset) {
@@ -733,6 +769,11 @@ $(function () {
     {{else}}
     itemRow();
     {{end}}
+
+    // La propuesta de la bandeja reemplaza la fila inicial vacía: los renglones
+    // del documento pasan a ser renglones de esta compra, editables y con el
+    // mismo guardado de siempre.
+    if (inboxLineas.length) { cargarPropuestaInbox(); }
 
     // events
     $('#addRow').on('click', function () { itemRow(); });

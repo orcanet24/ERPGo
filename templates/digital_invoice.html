@@ -112,6 +112,38 @@
         </p>
     </div>
 
+    <!-- Entrega automática al cliente: la factura sale sola al emitirse -->
+    <div class="update_ai_setting_section" style="margin-top:20px">
+        <p class="section_titles">Entrega automática al cliente</p>
+        <p class="erp-caption">
+            Al quedar emitida, el sistema puede enviar la factura al cliente por
+            correo con el PDF y el XML de la imprenta. El destinatario sale
+            SIEMPRE de la ficha del cliente (nunca de esta pantalla) y un mismo
+            envío no se repite, aunque el proceso se reinicie.
+        </p>
+        <form id="diDeliveryForm" class="form_container">
+            <div class="input_label">
+                <label class="label_name">
+                    <input type="checkbox" name="enabled" id="di_delivery_enabled" value="1" {{if .EntregaActiva}}checked{{end}}>
+                    Entregar la factura al cliente al emitirla
+                </label>
+            </div>
+            <div class="input_label">
+                <label class="label_name" for="di_delivery_channel">Canal de correo</label>
+                <select name="channel_id" id="di_delivery_channel" class="input_section" style="width:100%">
+                    <option value="">— Elija un canal —</option>
+                    {{range .CanalesCorreo}}
+                    <option value="{{.id}}" {{if eq (printf "%d" $.EntregaCanal) (printf "%d" .id)}}selected{{end}}>{{.name}}</option>
+                    {{end}}
+                </select>
+                <small class="erp-caption">Solo canales de correo activos (Configuración → Canales de aviso).</small>
+            </div>
+            <div class="submit_button_section">
+                <button type="submit" class="btn btn-primary">Guardar entrega</button>
+            </div>
+        </form>
+    </div>
+
     <!-- Documentos de contingencia: lo que las cajas vendieron sin red -->
     <div class="update_ai_setting_section" style="margin-top:20px">
         <p class="section_titles">Documentos de contingencia (POS sin red)</p>
@@ -212,6 +244,28 @@ $(function () {
             },
             error: function () {
                 toastr.error('Error al conectar con el proveedor');
+            }
+        });
+    });
+
+    // Entrega automática al cliente: sin recargar la pantalla, y con el error
+    // del servidor tal como viene («elija un canal», «ese canal está apagado»).
+    $('#diDeliveryForm').on('submit', function (e) {
+        e.preventDefault();
+        $.ajax({
+            url: '/settings/digital-invoice/delivery/save',
+            type: 'POST',
+            data: {
+                enabled: $('#di_delivery_enabled').is(':checked') ? '1' : '0',
+                channel_id: $('#di_delivery_channel').val() || ''
+            },
+            dataType: 'json',
+            success: function (r) {
+                if (r.status === 1) { toastr.success(r.msg || 'Entrega guardada'); }
+                else { toastr.error(r.error || 'No se pudo guardar'); }
+            },
+            error: function (x) {
+                toastr.error(x.responseJSON && x.responseJSON.error ? x.responseJSON.error : 'Error al guardar');
             }
         });
     });

@@ -86,6 +86,16 @@ func (s *Server) digitalInvoicePage(w http.ResponseWriter, r *http.Request) {
 	// transmisión. Es la operación real del POS cuando se cae la red.
 	contFilas, contPend, contFall := s.contingenciaResumen(r)
 
+	// Entrega automática al cliente: el ajuste y los canales de correo REALES.
+	// Sin canal activo el select sale vacío y el guardado lo dirá con claridad.
+	entregaActiva, entregaCanal := s.diEntregaConfig(s.dbFor(r))
+	var correos []map[string]interface{}
+	for _, c := range s.notifyCanales(s.dbFor(r), true) {
+		if c.Kind == "email" {
+			correos = append(correos, map[string]interface{}{"id": c.ID, "name": c.Name})
+		}
+	}
+
 	s.render(w, r, "digital_invoice.html", map[string]interface{}{
 		"Title":        "Facturación Digital",
 		"Config":       cfg,
@@ -97,6 +107,9 @@ func (s *Server) digitalInvoicePage(w http.ResponseWriter, r *http.Request) {
 		"Contingencia": contFilas,
 		"ContPend":     contPend,
 		"ContFall":     contFall,
+		"EntregaActiva": entregaActiva,
+		"EntregaCanal":  entregaCanal,
+		"CanalesCorreo": correos,
 	})
 }
 

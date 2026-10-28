@@ -3,6 +3,7 @@ package web
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -52,8 +53,16 @@ func (s *Server) bookPurchasesData(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.dbFor(r).Query(`
 		SELECT p.purchase_date, IFNULL(p.supplier_rif, IFNULL(s.rif,'')) AS rif, IFNULL(s.supplier_name,'') AS name,
 			IFNULL(p.chalan_no,'') AS invoice_no, IFNULL(p.control_no,'') AS control_no,
-			p.grand_total_amount - IFNULL(p.total_vat_amnt,0) AS base_amount,
-			IFNULL(p.total_vat_amnt,0) AS vat_amount, 0 AS exempt, '' AS retention_no
+			p.grand_total_amount - IFNULL(p.total_vat_amnt,0) - IFNULL((
+				SELECT SUM(d.total_amount) FROM product_purchase_details d
+				WHERE d.purchase_id = p.purchase_id AND IFNULL(d.vat_amnt,0) = 0), 0) AS base_amount,
+			IFNULL(p.total_vat_amnt,0) AS vat_amount,
+			IFNULL((SELECT SUM(d.total_amount) FROM product_purchase_details d
+				WHERE d.purchase_id = p.purchase_id AND IFNULL(d.vat_amnt,0) = 0), 0) AS exempt,
+			IFNULL((SELECT v.retention_no FROM vat_retention v
+				WHERE v.purchase_id = p.purchase_id
+					OR (IFNULL(v.supplier_id,0) = p.supplier_id AND IFNULL(v.invoice_no,'') = p.chalan_no)
+				ORDER BY v.id LIMIT 1), '') AS retention_no
 		FROM product_purchase p
 		LEFT JOIN supplier_information s ON s.supplier_id = p.supplier_id
 		WHERE p.purchase_date BETWEEN ? AND ? AND IFNULL(p.document_kind,'factura') = 'factura'
@@ -106,8 +115,16 @@ func (s *Server) bookPurchasesPrint(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.dbFor(r).Query(`
 		SELECT p.purchase_date, IFNULL(p.supplier_rif, IFNULL(s.rif,'')) AS rif, IFNULL(s.supplier_name,'') AS name,
 			IFNULL(p.chalan_no,'') AS invoice_no, IFNULL(p.control_no,'') AS control_no,
-			p.grand_total_amount - IFNULL(p.total_vat_amnt,0) AS base_amount,
-			IFNULL(p.total_vat_amnt,0) AS vat_amount, 0 AS exempt, '' AS retention_no
+			p.grand_total_amount - IFNULL(p.total_vat_amnt,0) - IFNULL((
+				SELECT SUM(d.total_amount) FROM product_purchase_details d
+				WHERE d.purchase_id = p.purchase_id AND IFNULL(d.vat_amnt,0) = 0), 0) AS base_amount,
+			IFNULL(p.total_vat_amnt,0) AS vat_amount,
+			IFNULL((SELECT SUM(d.total_amount) FROM product_purchase_details d
+				WHERE d.purchase_id = p.purchase_id AND IFNULL(d.vat_amnt,0) = 0), 0) AS exempt,
+			IFNULL((SELECT v.retention_no FROM vat_retention v
+				WHERE v.purchase_id = p.purchase_id
+					OR (IFNULL(v.supplier_id,0) = p.supplier_id AND IFNULL(v.invoice_no,'') = p.chalan_no)
+				ORDER BY v.id LIMIT 1), '') AS retention_no
 		FROM product_purchase p
 		LEFT JOIN supplier_information s ON s.supplier_id = p.supplier_id
 		WHERE p.purchase_date BETWEEN ? AND ? AND IFNULL(p.document_kind,'factura') = 'factura'
@@ -456,29 +473,125 @@ func (s *Server) vatRetentionSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	retentionNo := r.FormValue("retention_no")
-	date := r.FormValue("date")
+	date := strings.TrimSpace(r.FormValue("date"))
 	purchaseID := parseInt64(r.FormValue("purchase_id"))
 	supplierID := parseInt64(r.FormValue("supplier_id"))
-	invoiceNo := r.FormValue("invoice_no")
+	invoiceNo := strings.TrimSpace(r.FormValue("invoice_no"))
+	controlNo := strings.TrimSpace(r.FormValue("control_no"))
 	baseAmount := parseMoney(r.FormValue("base_amount"))
 	vatAmount := parseMoney(r.FormValue("vat_amount"))
 	retPercent := parseMoney(r.FormValue("retention_percent"))
 	retAmount := parseMoney(r.FormValue("retention_amount"))
 
+	// 1. La fecha da el PERÍODO (AAAAMM), que es columna NOT NULL. Sin fecha
+	// legible no hay período, y sin período ni número de comprobante posible:
+	// el guardado se rechaza aquí con un mensaje que se entiende, en vez de que
+	// la base devuelva un constraint críptico de fondo.
+	fecha, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		jsonError(w, "Fecha ilegible: use el formato AAAA-MM-DD (ej: 2026-10-28).", http.StatusBadRequest)
+		return
+	}
+	periodo := fecha.Format("200601")
+
+	// 2. El % de retención tiene rango: 750 habría declarado tres veces el
+	// impuesto. Se valida ANTES del proveedor porque es el error que el formulario
+	// puede detectar sin consultar nada.
+	if retPercent <= 0 || retPercent > 100 {
+		jsonError(w, "% de retención fuera de rango: debe estar entre 1 y 100.", http.StatusBadRequest)
+		return
+	}
+
+	// 3. Sin proveedor (directo o vía la compra) la retención no es de nadie.
+	if purchaseID <= 0 && supplierID <= 0 {
+		jsonError(w, "Indique el proveedor o la compra a la que pertenece esta retención.", http.StatusBadRequest)
+		return
+	}
+
+	tx, err := s.dbFor(r).Begin()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// 4. La compra aporta lo que el formulario no teclea: número de factura,
+	// número de control, total y proveedor. Una retención sin ese enlace no
+	// aparece en el libro ni lo ve la regla de no borrado.
+	totalAmount := baseAmount + vatAmount
+	if purchaseID > 0 {
+		var chalan, ctrl sql.NullString
+		var grand float64
+		var provID int64
+		if err := tx.QueryRow(`SELECT IFNULL(chalan_no,''), IFNULL(control_no,''),
+			grand_total_amount, IFNULL(supplier_id,0)
+			FROM product_purchase WHERE purchase_id = ?`, purchaseID).
+			Scan(&chalan, &ctrl, &grand, &provID); err != nil {
+			jsonError(w, "No existe la compra indicada.", http.StatusBadRequest)
+			return
+		}
+		if invoiceNo == "" {
+			invoiceNo = chalan.String
+		}
+		if controlNo == "" {
+			controlNo = ctrl.String
+		}
+		totalAmount = grand
+		if supplierID == 0 {
+			supplierID = provID
+		}
+	}
+
+	// 5. La alícuota es la del IVA (16, 8, 31…), NO el % de retención: son dos
+	// números distintos que el TXT del SENIAT exige en columnas distintas.
+	alicuota := 0.0
+	if baseAmount > 0 {
+		alicuota = math.Round(vatAmount/baseAmount*100*100) / 100
+	}
 	if retAmount == 0 && vatAmount > 0 && retPercent > 0 {
 		retAmount = vatAmount * retPercent / 100
 	}
 
-	_, err := s.dbFor(r).Exec(`INSERT INTO vat_retention 
-		(retention_no, date, purchase_id, supplier_id, invoice_no, base_amount, vat_amount, retention_percent, retention_amount, created_by, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		retentionNo, date, purchaseID, supplierID, invoiceNo, baseAmount, vatAmount, retPercent, retAmount, sess.Username, now())
+	// 6. El número lo reserva la base DENTRO de esta transacción (art. 18 de la
+	// Providencia SNAT/2026/00093): consecutivo, AAAAMM + 8 dígitos y sin que
+	// nadie lo teclee. Dos guardados simultáneos no pueden quedarse con el mismo.
+	retentionNo, err := comprobanteDeRetencion(tx, SerieRetencionIVA, periodo)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Retención IVA guardada", "redirect": saveRedirect(r, "/legal_books")})
+
+	if _, err := tx.Exec(`INSERT INTO vat_retention
+		(retention_no, period, date, purchase_id, supplier_id, invoice_no, control_no,
+		 total_amount, base_amount, vat_amount, retention_percent, retention_amount,
+		 alicuota, created_by, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		retentionNo, periodo, date, purchaseID, supplierID, invoiceNo, controlNo,
+		totalAmount, baseAmount, vatAmount, retPercent, retAmount,
+		alicuota, sess.Username, now()); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// 7. LA TRAZA: quién retuvo, cuándo y sobre qué comprobante. Sin esta fila,
+	// quien reconstruya los hechos no puede saberlo si la tabla cambia por fuera.
+	s.appendAudit(r, sess.Username, clientIP(r), "create", "Retenciones",
+		"vat_retention", retentionNo, nil, map[string]interface{}{
+			"retention_no": retentionNo, "period": periodo, "purchase_id": purchaseID,
+			"supplier_id": supplierID, "invoice_no": invoiceNo, "control_no": controlNo,
+			"base_amount": baseAmount, "vat_amount": vatAmount,
+			"retention_percent": retPercent, "retention_amount": retAmount,
+		})
+
+	writeJSON(w, map[string]interface{}{
+		"status": 1, "retention_no": retentionNo,
+		"msg":      "Retención IVA " + retentionNo + " registrada",
+		"redirect": saveRedirect(r, "/legal_books"),
+	})
 }
 
 func (s *Server) vatRetentionPrint(w http.ResponseWriter, r *http.Request) {
@@ -556,11 +669,13 @@ func (s *Server) vatRetentionTxt(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := s.dbFor(r).Query(`
 		SELECT v.date, v.invoice_no, v.base_amount, v.vat_amount, v.retention_percent,
-			v.retention_amount, v.retention_no, IFNULL(s.supplier_id,'') AS rif_prov,
-			p.grand_total_amount AS total_amount, '' AS doc_afectado
+			v.retention_amount, v.retention_no, IFNULL(s.rif,'') AS rif_prov,
+			IFNULL(NULLIF(v.total_amount,0), IFNULL(p.grand_total_amount,0)) AS total_amount,
+			'' AS doc_afectado, IFNULL(v.control_no,''), IFNULL(v.alicuota,0),
+			IFNULL(v.exempt_amount,0)
 		FROM vat_retention v
 		LEFT JOIN supplier_information s ON s.supplier_id = v.supplier_id
-		LEFT JOIN product_purchase p ON p.id = v.purchase_id
+		LEFT JOIN product_purchase p ON p.purchase_id = v.purchase_id
 		WHERE v.date BETWEEN ? AND ?
 		ORDER BY v.date ASC, v.id ASC`, startDate, endDate)
 	if err != nil {
@@ -580,13 +695,17 @@ func (s *Server) vatRetentionTxt(w http.ResponseWriter, r *http.Request) {
 		SupplierRIF string
 		Total       float64
 		DocAfectado string
+		Control     string
+		Alicuota    float64
+		Exempt      float64
 	}
 	var records []retentionRecord
 	for rows.Next() {
 		var rec retentionRecord
-		var d, inv, retNo, rifProv, docAfect sql.NullString
-		var base, vat, pct, retained, total float64
-		_ = rows.Scan(&d, &inv, &base, &vat, &pct, &retained, &retNo, &rifProv, &total, &docAfect)
+		var d, inv, retNo, rifProv, docAfect, ctrl sql.NullString
+		var base, vat, pct, retained, total, alicuota, exempt float64
+		_ = rows.Scan(&d, &inv, &base, &vat, &pct, &retained, &retNo, &rifProv, &total,
+			&docAfect, &ctrl, &alicuota, &exempt)
 		rec = retentionRecord{
 			InvoiceNo:   inv.String,
 			Date:        d.String,
@@ -598,6 +717,9 @@ func (s *Server) vatRetentionTxt(w http.ResponseWriter, r *http.Request) {
 			SupplierRIF: rifProv.String,
 			Total:       total,
 			DocAfectado: docAfect.String,
+			Control:     ctrl.String,
+			Alicuota:    alicuota,
+			Exempt:      exempt,
 		}
 		records = append(records, rec)
 	}
@@ -620,18 +742,18 @@ func (s *Server) vatRetentionTxt(w http.ResponseWriter, r *http.Request) {
 			if docAfectado == "" {
 				docAfectado = "000000000000"
 			}
-			controlNo := ""
+			controlNo := rec.Control
 			expediente := ""
-			alicuota := "12.00" // default 12% VAT
-			if rec.Percent > 0 {
-				alicuota = fmt.Sprintf("%.2f", rec.Percent)
-			}
+			// Esta columna es la ALÍCUOTA DEL IVA (16, 8, 31…), no el % de
+			// retención: son dos números distintos y el SENIAT los pide en
+			// columnas distintas.
+			alicuota := fmt.Sprintf("%.2f", rec.Alicuota)
 
 			line := buildTxtRow(agentRIF, periodo, rec.Date, "C", "01",
 				supplierRIF, rec.InvoiceNo, controlNo,
 				fmt.Sprintf("%.2f", rec.Total), fmt.Sprintf("%.2f", rec.Base),
 				fmt.Sprintf("%.2f", rec.Retained), docAfectado, rec.RetNo,
-				"0.00", alicuota, expediente)
+				fmt.Sprintf("%.2f", rec.Exempt), alicuota, expediente)
 			sb.WriteString(line)
 			sb.WriteString("\r\n")
 		}

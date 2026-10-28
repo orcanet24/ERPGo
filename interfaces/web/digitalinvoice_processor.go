@@ -259,6 +259,16 @@ func (s *Server) diEmitirFila(ctl *sql.DB, f struct {
 		return
 	}
 	log.Printf("facturación digital: factura %s/%s emitida (strong_id=%s)", f.tenant, f.invoiceID, res.StrongID)
+
+	// LA ENTREGA AL CLIENTE. La factura ya salió con su documento: si la empresa
+	// tiene activada la entrega automática, el correo sale ahora —en su propio
+	// goroutine, porque un SMTP lento no debe atascar la cola de emisión. Si
+	// está apagada, diEntregarAutomatica ni siquiera consulta el canal. Y si dos
+	// pasadas llegaran a cruzarse, la clave de idempotencia de finance_message
+	// deja pasar una sola.
+	if estado == "sent" {
+		go s.diEntregarAutomatica(f.tenant, f.invoiceID)
+	}
 }
 
 // diRegistrarFallo sube el contador de intentos de una fila y marca FAILED al

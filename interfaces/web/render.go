@@ -90,7 +90,29 @@ func templateFuncs(s *Server, r *http.Request) template.FuncMap {
 		// a texto legible. Va aquí y no en la plantilla para que la web, el log
 		// de arranque y la API digan lo mismo.
 		"catalogLabel": catalogLabel,
+		// kindLabel traduce la clase del documento de compra (factura, nota de
+		// entrega, orden…) a texto para las pantallas. Vive en el FuncMap y no
+		// como función de plantilla por plantilla para que la bandeja de
+		// recepción, el manual y el webcheck digan exactamente lo mismo.
+		"kindLabel": kindLabel,
 	}
+}
+
+// kindLabel es la etiqueta visible de una clase de documento de compra. Códigos
+// y textos salen de los mismos literales que el formulario y el candado
+// anti-duplicado, de modo que una clase nueva no puede quedar sin nombre aquí.
+func kindLabel(kind string) string {
+	switch kind {
+	case CompraFactura:
+		return "Factura"
+	case CompraNotaEntrega:
+		return "Nota de entrega"
+	case CompraOrden:
+		return "Orden de compra"
+	case CompraSinDoc:
+		return "Sin documento"
+	}
+	return "Sin clasificar"
 }
 
 // fileStamp resume lo que cambia en disco cuando alguien edita una plantilla:
