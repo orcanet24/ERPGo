@@ -1,7 +1,10 @@
 /* Manual del desarrollador — hoja propia, sin dependencias externas.
-   Sin comillas dobles ni selects con > a propósito: la plantilla lo pasa por
-   el escapador de CSS de html/template y estos caracteres sobreviven mejor
-   sin escapar. */
+
+   Entra en el HTML con template.CSS, o sea literal y sin escapar:
+   html/template descarta cualquier string plano dentro del elemento style.
+   Único límite que eso deja: esta hoja no puede contener la secuencia de
+   cierre de esa etiqueta, porque acabaría cerrándola por su cuenta y toda
+   la página se quedaría sin estilo. Lo comprueba render_test.go. */
 
 :root {
   --fondo: #f6f5f1;

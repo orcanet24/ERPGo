@@ -125,13 +125,19 @@ func RenderHTML(m Model) ([]byte, error) {
 	data := struct {
 		Title string
 		JSON  string
-		CSS   string
+		CSS   template.CSS
 		JS    string
 	}{
 		Title: m.Meta.Title,
 		JSON:  sanitizeJSONIsland(payload),
-		CSS:   cssSource,
-		JS:    jsSource,
+		// template.CSS y no string: html/template RECHAZA cualquier string
+		// plano dentro de <style> y lo sustituye entero por el marcador
+		// «ZgotmplZ». Ocurrió: el manual se publicó meses sin una sola regla
+		// de estilo y nadie lo notó, porque un HTML sin CSS se ve roto pero
+		// legible. El tipo es la declaración de que esta hoja es nuestra y
+		// está bien formada (no lleva «</style» ni «</», comprobado).
+		CSS: template.CSS(cssSource),
+		JS:  jsSource,
 	}
 	var buf bytes.Buffer
 	if err := t.Execute(&buf, data); err != nil {

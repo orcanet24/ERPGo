@@ -82,3 +82,43 @@ func TestRenderHTMLEnsamblaDocumentoCompleto(t *testing.T) {
 		t.Errorf("el JS embebido no trae el renderizador")
 	}
 }
+
+// TestLaHojaDeEstilosLlegaEntera cubre el fallo que sí ocurrió: html/template
+// sustituye cualquier string plano dentro de <style> por el marcador
+// «ZgotmplZ», así que el manual se publicó sin una sola regla de estilo.
+// Un HTML sin CSS sigue siendo legible, así que el defecto no se ve leyendo la
+// página: hay que mirar justo donde tendría que estar la hoja.
+func TestLaHojaDeEstilosLlegaEntera(t *testing.T) {
+	m := Model{
+		Meta:     Meta{Title: "Manual de prueba", Product: "prueba", Tagline: "lema de prueba"},
+		Segments: []Segment{}, Files: []File{}, Rules: []Rule{}, Tours: []Tour{},
+		Stats: Stats{ByConf: map[string]int{}},
+	}
+	out, err := RenderHTML(m)
+	if err != nil {
+		t.Fatalf("RenderHTML: %v", err)
+	}
+	s := string(out)
+
+	if strings.Contains(s, "ZgotmplZ") {
+		t.Error("la salida lleva el marcador ZgotmplZ: html/template descartó un valor")
+	}
+	// Dos reglas que solo pueden venir de assets/manual.css.
+	for _, esperado := range []string{":root {", ".topbar {"} {
+		if !strings.Contains(s, esperado) {
+			t.Errorf("la hoja de estilos no llegó al documento: falta %q", esperado)
+		}
+	}
+
+	// template.CSS se emite literal, así que la hoja queda con el único
+	// límite que eso implica: no puede cerrar la etiqueta por su cuenta. Se
+	// busca en minúsculas porque el parser de HTML tampoco distingue aquí.
+	if strings.Contains(strings.ToLower(cssSource), "</style") {
+		t.Error("assets/manual.css cierra la etiqueta style: entrando literal cortaría " +
+			"la hoja y toda la página se quedaría sin estilo")
+	}
+	// Y el documento debe llevar exactamente un cierre: el de la plantilla.
+	if n := strings.Count(s, "</style"); n != 1 {
+		t.Errorf("el documento tiene %d cierres de style, esperaba 1", n)
+	}
+}
