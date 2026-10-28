@@ -26,7 +26,7 @@ Los datos de los clientes **NO se tocan directamente**. Cualquier cambio de esqu
 
 ### 2. Migraciones: la única vía de cambio
 
-Todo cambio de esquema pasa por `migrations/schema_X.sql` (y `assets/migrations/`):
+Todo cambio de esquema pasa por `migrations/schema_X.sql`:
 
 - `CREATE TABLE IF NOT EXISTS` — tablas nuevas no rompen existentes
 - `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` — columnas nuevas son optativas

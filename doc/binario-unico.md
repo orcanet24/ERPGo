@@ -2,6 +2,17 @@
 
 **Fecha:** 27 de septiembre de 2026
 
+> **Actualización (28 de octubre de 2026).** Lo que sigue es el diseño
+> original de ese día. Hoy el binario embebe desde la raíz del repositorio
+> —`embed.go`, con `//go:embed templates`, `//go:embed static` y
+> `//go:embed migrations`—, así que no hay ninguna carpeta intermedia que
+> mantener. La copia `assets/` que este documento manda a replicar era el
+> duplicado heredado de esa primera versión (658 ficheros) y se eliminó:
+> nada la importaba, el binario no la contenía y `docgen` ya la saltaba al
+> escanear. Los únicos `assets/` con `go:embed` que quedan en el repo son
+> los de `cmd/docgen/assets/`, las piezas del propio manual, sin relación
+> con esa copia.
+
 ## Qué cambió
 
 Todo el contenido estático ahora vive DENTRO del binario (`erpgow.exe`):
@@ -46,16 +57,15 @@ infrastructure/persistence/database.go  // migraciones desde el FS embebido
 
 ## Flujo de trabajo para editar templates/assets
 
-Las carpetas raíz `templates/`, `static/` y `migrations/` son la FUENTE.
-Después de editarlas hay que copiarlas a `assets/` y recompilar:
+Las carpetas raíz `templates/`, `static/` y `migrations/` son la FUENTE y
+son también lo que se embebe. Se edita y se recompila: no hay paso previo.
 
-    cp -r templates/. assets/templates/
-    cp -r static/. assets/static/
-    cp -r migrations/. assets/migrations/
     go build -o erpgow.exe ./cmd/server
 
-(Las carpetas en assets/ se duplican porque go:embed no puede subir
-directorios padre: solo embebe lo que está dentro de su propio paquete.)
+(Ese es el único paso. La versión original de este documento mandaba antes a
+copiar las tres carpetas a `assets/`, porque en ese diseño `go:embed` vivía
+dentro de esa copia y no podía subir directorios padre. Esa copia es la que
+se eliminó el 28 de octubre de 2026.)
 
 ## Verificado
 
