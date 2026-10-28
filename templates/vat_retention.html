@@ -143,10 +143,14 @@ $(function () {
         e.preventDefault();
         $.post('/reports/vat-retention/save', $(this).serialize(), function (d) {
             if (d.status) {
-                alert(d.msg);
-                location.reload();
+                // Igual que en ISLR: aviso, tabla nueva y formulario limpio,
+                // sin alert() que bloquea y sin recargar la vista.
+                toastr.success(d.msg || 'Retención guardada');
+                load();
+                var frm = document.getElementById('frmVatRetention');
+                if (frm) { frm.reset(); }
             } else {
-                alert('Error: ' + d.error);
+                toastr.error(d.error || 'No se pudo guardar');
             }
         });
     });

@@ -56,7 +56,8 @@ function runTask(id) {
 function delTask(id) {
     if (!confirm('¿Eliminar esta tarea?')) return;
     $.post('/ai/tasks/delete/' + id, function (r) {
-        if (r.status === 1) { location.reload(); } else { alert(r.error || 'Error'); }
+        if (r.status === 1) { $('#taskTable').DataTable().ajax.reload(null, false); }
+        else { alert(r.error || 'Error'); }
     });
 }
 </script>

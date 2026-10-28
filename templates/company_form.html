@@ -60,7 +60,7 @@ $(function () {
     $('#companyForm').on('submit', function (e) {
         e.preventDefault();
         $.post('/settings/company/save', $(this).serialize(), function (r) {
-            if (r.status == 1) { toastr.success(r.msg); setTimeout(function () { location.reload(); }, 700); }
+            if (r.status == 1) { toastr.success(r.msg); ERPGo.refrescar(); }
             else toastr.error(r.error);
         }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
     });

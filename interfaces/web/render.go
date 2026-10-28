@@ -63,7 +63,11 @@ func money(v float64) string {
 }
 
 // templateFuncs are shared by every template set.
-func templateFuncs(r *http.Request) template.FuncMap {
+//
+// s es el servidor, que es quien resuelve la huella de un estático
+// (assetVer, con su caché por archivo). Puede ser nil en pruebas y en la
+// pantalla de acceso, donde no hay nada cacheado que resolver.
+func templateFuncs(s *Server, r *http.Request) template.FuncMap {
 	return template.FuncMap{
 		"add":   func(a, b int) int { return a + b },
 		"sub":   func(a, b int) int { return a - b },
@@ -77,6 +81,11 @@ func templateFuncs(r *http.Request) template.FuncMap {
 		},
 		"today": today,
 		"now":   now,
+		// assetVer devuelve la huella de UN recurso estático, para el ?v= de sus
+		// <link>/<script>. Ver cachas.go: la huella es por archivo, no una global
+		// para todo static/, de modo que cambiar un fichero no obliga a todos los
+		// usuarios a re-descargar los 43.
+		"assetVer": assetVer,
 		// catalogLabel traduce el identificador interno del catálogo contable
 		// a texto legible. Va aquí y no en la plantilla para que la web, el log
 		// de arranque y la API digan lo mismo.
@@ -136,7 +145,7 @@ func (s *Server) buildTemplateSet(name string) (*template.Template, error) {
 		return c.t, nil
 	}
 
-	t := template.New(name).Funcs(templateFuncs(nil))
+	t := template.New(name).Funcs(templateFuncs(s, nil))
 	// "pagejs" vacío POR DEFECTO: el layout invoca {{template "pagejs" .}} y
 	// Go revienta con 500 si la página no lo define (así cayeron /cartera/list
 	// y /pagar/list). Se define ANTES de parsear layout y página: el último
@@ -276,7 +285,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 	// guarda en control— y un aviso que nunca se apaga entrena a ignorar los
 	// avisos, que es justo lo que este aviso existe para evitar.
 	if skip, _ := data["SkipFactoryWarning"].(bool); !skip && sess != nil && (sess.UserLevel == "admin" || sess.UserLevel == "master") {
-		data["FactoryPassword"] = usesFactoryPassword(s.authDB(r), sess.Username)
+		data["FactoryPassword"] = usaClaveDeFabrica(s.authDB(r), sess.Username)
 	}
 	if sess != nil {
 		data["UserID"] = sess.UserID
@@ -305,7 +314,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 		return
 	}
 	// re-parse with request-aware funcs (query)
-	tt := t.Funcs(templateFuncs(r))
+	tt := t.Funcs(templateFuncs(s, r))
 
 	var buf bytes.Buffer
 	if err := tt.ExecuteTemplate(&buf, "layout", data); err != nil {
@@ -348,7 +357,7 @@ func (s *Server) renderStandalone(r *http.Request, w http.ResponseWriter, name s
 		data["CSRFToken"] = s.ensureCSRFToken(sess)
 	}
 
-	t, err := template.New(name).Funcs(templateFuncs(nil)).
+	t, err := template.New(name).Funcs(templateFuncs(s, nil)).
 		ParseFS(erpgow.Templates(), "templates/"+name)
 	if err != nil {
 		http.Error(w, "template "+name+": "+err.Error(), http.StatusInternalServerError)
@@ -417,65 +426,11 @@ func notFoundOrJSON(w http.ResponseWriter, r *http.Request, msg string) {
 	http.Error(w, "Not Found", http.StatusNotFound)
 }
 
-// permissionMap loads sub_module permissions for the user's role.
-// Admin (user_type=1) gets everything.
-func (s *Server) permissionMap(r *http.Request, sess *SessionData) map[string]bool {
-	perm := map[string]bool{}
-	if sess == nil {
-		return perm
-	}
-	if sess.UserLevel == "admin" || sess.UserLevel == "master" {
-		db, err := s.controlStore()
-		if err != nil {
-			return perm
-		}
-		rows, err := db.Query(`SELECT directory FROM sub_module WHERE status=1`)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var d string
-				_ = rows.Scan(&d)
-				perm[d] = true
-			}
-		}
-		perm["_all"] = true
-		return perm
-	}
-	// `create`/`read`/`update`/`delete` son palabras reservadas de MySQL: sin
-	// backticks la consulta revienta con Error 1064 y permissionMap devolvía
-	// vacío en silencio —el menú de todo usuario no-admin quedaba sin nada—.
-	//
-	// SE MIRAN LAS DOS BASES. Los roles se editan en la de control (Roles y
-	// Permisos usa authDB), pero una instalación puede tener la asignación en la
-	// base de la empresa. Antes esta función sólo leía control y el middleware
-	// sólo leía empresa: cada uno respondía una cosa distinta a la misma
-	// pregunta. Ahora ambos usan roleDBs y basta con que una base conceda.
-	for _, db := range s.roleDBs(r) {
-		if db == nil {
-			continue
-		}
-		rows, err := db.Query("SELECT sm.directory, rp.`create`, rp.`read`, rp.`update`, rp.`delete`\n"+
-			"FROM sec_userrole ur\n"+
-			"JOIN role_permission rp ON rp.role_id = ur.roleid\n"+
-			"JOIN sub_module sm ON sm.id = rp.fk_module_id\n"+
-			"WHERE ur.user_id = ? AND sm.status = 1", sess.UserID)
-		if err != nil {
-			continue
-		}
-		for rows.Next() {
-			var dir string
-			var c, rd, u, d sql.NullInt64
-			_ = rows.Scan(&dir, &c, &rd, &u, &d)
-			if c.Int64 == 1 || rd.Int64 == 1 || u.Int64 == 1 || d.Int64 == 1 {
-				perm[dir] = true
-			}
-		}
-		rows.Close()
-
-	}
-	return perm
-}
-
+// permissionMap (la consulta de permisos para PINTAR) vive ahora en cachas.go,
+// junto a la caché que evita repetirla en cada vista. Lo que NO cambió es
+// hasPermission, que está aquí debajo y sigue consultando la base en cada
+// llamada: es la puerta de ejecución, y esa no se cachea.
+//
 // hasPermission checks a sub_module directory permission for the request user.
 func (s *Server) hasPermission(r *http.Request, directory, action string) bool {
 	sess := s.sessionFromRequest(r)

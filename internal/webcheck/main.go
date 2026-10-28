@@ -32,6 +32,12 @@ func templateFuncs() template.FuncMap {
 		"query": func(string) string { return "" },
 		"today": func() string { return "" },
 		"now":   func() string { return "" },
+		// assetVer es la huella POR ARCHIVO de los recursos estáticos (el ?v= de
+		// cada <link>/<script> del layout). Se replica aquí con una constante no
+		// vacía: el chequeo sólo comprueba sintaxis y estructura, y un valor
+		// estable es lo que permite ejecutar el layout entero sin fingir un
+		// cambio de versión.
+		"assetVer": func(ruta string) string { return "deadbeef" },
 		// Debe replicarse aquí también: si el comprobador no conoce una función
 		// que la aplicación sí, da "function not defined" en una plantilla que
 		// funciona, y ese falso positivo es la forma segura de que la herramienta
@@ -90,11 +96,18 @@ func main() {
 		}
 		conLayout++
 
-		// Parsear el archivo por separado no alcanza: una página puede tener
-		// sintaxis válida y aun así romperse al combinarse con el layout. El
-		// fallo real —"no such template pagejs"— solo aparece al ejecutar el
-		// conjunto completo, así que se ejecuta.
+		// Igual que buildTemplateSet en interfaces/web: la página se parsea con
+		// un "pagejs" POR DEFECTO definido ANTES que layout y página. Sin esto
+		// el comprobador grita «no such template pagejs» en toda página que no
+		// declare el suyo, mientras que la aplicación la pinta sin problema —
+		// un falso positivo, que es exactamente lo que esta herramienta existe
+		// para no producir.
 		t := template.New(e.Name()).Funcs(templateFuncs())
+		if _, err := t.Parse(`{{define "pagejs"}}{{end}}`); err != nil {
+			fmt.Printf("PAGEJS ERROR %s: %v\n", e.Name(), err)
+			fallidos++
+			continue
+		}
 		if t, err = t.Parse(string(layout)); err != nil {
 			fmt.Printf("LAYOUT PARSE ERROR %s: %v\n", e.Name(), err)
 			fallidos++

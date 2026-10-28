@@ -27,17 +27,40 @@ import (
 // tiempo constante evita el caso de que alguien mida cuánto tarda.
 var factoryPasswords = []string{"Admin@2026"}
 
+// usaClaveDeFabrica indica si el usuario todavía usa una clave de fábrica,
+// cacheando el resultado bajo el HASH de la contraseña (ver cachas.go).
+//
+// Es lo que llama el render de cada página. La consulta se hace siempre —es
+// barata y es la fuente de verdad—, y lo que se ahorra es la comparación
+// bcrypt de ~65 ms que antes se pagaba EN CADA VISTA de un administrador.
+// Como la clave de la caché es el hash, un cambio de contraseña cambia la
+// clave y obliga a recalcular: el aviso no puede quedar caducado ni en una
+// dirección ni en la otra.
+func usaClaveDeFabrica(db *sql.DB, username string) bool {
+	var hash string
+	if err := db.QueryRow(`SELECT password FROM user_login WHERE username = ? LIMIT 1`, username).Scan(&hash); err != nil {
+		return false
+	}
+	return fabricaDesdeHash(hash)
+}
+
 // usesFactoryPassword indica si el usuario conserva una clave de fábrica.
 //
 // Se compara contra el HASH con bcrypt en vez de contra el texto: así el
 // resultado no depende de si la clave se guardó en bcrypt o en el MD1 heredado
-// del PHP.
+// del PHP. Es la consulta SIN caché; el render usa usaClaveDeFabrica.
 func usesFactoryPassword(db *sql.DB, username string) bool {
 	var hash string
 	err := db.QueryRow(`SELECT password FROM user_login WHERE username = ? LIMIT 1`, username).Scan(&hash)
 	if err != nil {
 		return false
 	}
+	return calculaFabrica(hash)
+}
+
+// calculaFabrica decide, sin caché, si un hash es una de las claves conocidas
+// de fábrica.
+func calculaFabrica(hash string) bool {
 	if strings.HasPrefix(hash, "$2a$") || strings.HasPrefix(hash, "$2b$") || strings.HasPrefix(hash, "$2y$") {
 		for _, p := range factoryPasswords {
 			if bcrypt.CompareHashAndPassword([]byte(hash), []byte(p)) == nil {

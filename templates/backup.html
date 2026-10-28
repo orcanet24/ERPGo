@@ -32,7 +32,7 @@ $(function () {
     $('#btnBackup').on('click', function () {
         var btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> Generando...');
         $.post('/settings/backup/run', function (r) {
-            if (r.status == 1) { toastr.success(r.msg); setTimeout(function () { location.reload(); }, 800); }
+            if (r.status == 1) { toastr.success(r.msg); ERPGo.refrescar(); }
             else { toastr.error(r.error); btn.prop('disabled', false).html('<i class="fa fa-database"></i> Generar Backup'); }
         }).fail(function () {
             toastr.error('Error');

@@ -687,6 +687,10 @@ func (s *Server) permissionUserSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Se cambió la asignación de rol de este usuario: lo que SE LE MUESTRA en
+	// su menú y sus botones se recalcula en el acto. Lo que NO se toca aquí es
+	// la puerta de ejecución, que no está cacheada.
+	invalidarCachePermisos()
 
 	writeJSON(w, map[string]interface{}{"saved": true})
 }
@@ -727,6 +731,7 @@ func (s *Server) permissionRoleSave(w http.ResponseWriter, r *http.Request) {
 	} else {
 		_, _ = db.Exec(`UPDATE sec_role SET type = ?, level = ? WHERE id = ?`, roleType, level, roleID)
 	}
+	invalidarCachePermisos()
 	writeJSON(w, map[string]interface{}{"saved": true})
 }
 
@@ -762,6 +767,9 @@ func (s *Server) permissionSeed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = tx.Commit()
+	// Se acaban de crear roles: invalida lo que se muestra mientras se
+	// reescribe la matriz.
+	invalidarCachePermisos()
 	writeJSON(w, map[string]interface{}{"seeded": true})
 }
 

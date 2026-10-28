@@ -36,7 +36,8 @@ $(function () {
 function delTpl(id) {
     if (!confirm('¿Eliminar este informe?')) return;
     $.post('/reports/custom/delete/' + id, function (r) {
-        if (r.status === 1) { location.reload(); } else { alert(r.error || 'Error'); }
+        if (r.status === 1) { $('#tplTable').DataTable().ajax.reload(null, false); }
+        else { alert(r.error || 'Error'); }
     });
 }
 </script>

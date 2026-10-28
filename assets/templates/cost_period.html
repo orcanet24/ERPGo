@@ -124,7 +124,7 @@ $(function () {
             }
             $.post('/cost/period/reopen',
                 'period=' + encodeURIComponent(PERIODO) +
-                '&motivo=' + encodeURIComponent(m) +
+                '&motivo=' + encodeURIComponent(m)
                 )
                 .done(function (r) {
                     if (r.status === 1) { toastr.success(r.msg); setTimeout(function(){ location.reload(); }, 800); }
@@ -138,7 +138,7 @@ $(function () {
         $('#btnCerrar').on('click', function () {
             if (!confirm('Se congelarán los costos de ' + PERIODO + '. ¿Continuar?')) return;
             $.post('/cost/period/close',
-                'period=' + encodeURIComponent(PERIODO) +
+                'period=' + encodeURIComponent(PERIODO)
                 )
                 .done(function (r) {
                     if (r.status === 1) { toastr.success(r.msg); setTimeout(function(){ location.reload(); }, 900); }

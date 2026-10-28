@@ -273,7 +273,7 @@ $(function () {
     $('#formCanal').on('submit', function (e) {
         e.preventDefault();
         $.post('/settings/notify/save', $(this).serialize(), function (r) {
-            if (r.status == 1) { toastr.success(r.msg); $('#modalCanal').modal('hide'); setTimeout(function () { location.reload(); }, 500); }
+            if (r.status == 1) { toastr.success(r.msg); $('#modalCanal').modal('hide'); ERPGo.refrescar(); }
             else { toastr.error(r.error || 'Error'); }
         }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
     });
@@ -301,7 +301,7 @@ $(function () {
             type: "warning", showCancelButton: true, confirmButtonText: "Eliminar"
         }, function () {
             $.post('/settings/notify/delete/' + id, function (r) {
-                if (r.status == 1) { toastr.success(r.msg); setTimeout(function () { location.reload(); }, 500); }
+                if (r.status == 1) { toastr.success(r.msg); ERPGo.refrescar(); }
                 else { toastr.error(r.error || 'Error'); }
             }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
         });

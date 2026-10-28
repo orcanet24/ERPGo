@@ -119,7 +119,7 @@ $(function () {
             url: '/settings/save', type: 'POST', data: fd,
             processData: false, contentType: false,
             success: function (r) {
-                if (r.status == 1) { toastr.success(r.msg); setTimeout(function () { location.reload(); }, 700); }
+                if (r.status == 1) { toastr.success(r.msg); ERPGo.refrescar(); }
                 else toastr.error(r.error);
             },
             error: function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); }

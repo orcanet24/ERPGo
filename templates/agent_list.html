@@ -38,7 +38,9 @@ $(function () {
 function delAgent(id) {
     if (!confirm('¿Eliminar este agente? Se elimina también su usuario.')) return;
     $.post('/ai/agents/delete/' + id, function (r) {
-        if (r.status === 1) { location.reload(); } else { alert(r.error || 'Error'); }
+        // Solo se va la fila: la tabla se pide de nuevo sin redibujar la vista.
+        if (r.status === 1) { $('#agentTable').DataTable().ajax.reload(null, false); }
+        else { alert(r.error || 'Error'); }
     });
 }
 </script>

@@ -303,14 +303,51 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+// sufijosSoloLectura son rutas que se sirven por POST pero NO cambian nada: los
+// datos de los listados (DataTables serverSide), la comprobación de duplicados
+// de una compra, los escáneres de CxC/CxP, la verificación de tasas y la
+// comprobación de integridad de la base.
+//
+// POR QUÉ SE DEJAN DE AUDITAR. auditMiddleware registraba TODA petición
+// POST/PUT/DELETE, y cada registro son tres sentencias (SELECT del hash
+// anterior, INSERT, UPDATE del hash nuevo) bajo auditChainMu, el candado que
+// serializa las escrituras de auditoría. Como los listados piden sus datos por
+// POST, cada tecla tecleada en el buscador de una lista escribía una fila de
+// ruido en audit_log y esperaba por ese candado: la pista se llenaba de
+// «create» de búsquedas y las escrituras de verdad contendían con las lecturas.
+//
+// La cadena NO pierde nada: sigue encadenando exactamente igual cada
+// MUTACIÓN, que es lo que la ley de auditoría pide. Ver la prueba
+// TestAuditoriaCadenaSigueEncadenadaTrasDejarDeAuditarLecturas.
+//
+// Regla para añadir aquí: sólo rutas que sólo lean. Si un endpoint acaba
+// escribiendo, se le cambia el nombre o se le quita de esta lista — ese es
+// precisamente el tipo de fallo que esta lista debe hacer visible.
+var sufijosSoloLectura = []string{
+	"/data",      // datos de listados y reportes (DataTables serverSide)
+	"/dup-check", // pregunta si la compra ya existe, sin escribir
+	"/escanear",  // escaneo de CxC y CxP
+	"/verify",    // verificación de tasas
+	"/check",     // comprobación de integridad de la base
+}
+
+func esLecturaPorPost(path string) bool {
+	for _, suf := range sufijosSoloLectura {
+		if strings.HasSuffix(path, suf) {
+			return true
+		}
+	}
+	return false
+}
+
 // auditMiddleware logs every state-changing request (POST/PUT/DELETE)
 // automatically, giving full coverage even for handlers without explicit calls.
 func (s *Server) auditMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
 			path := r.URL.Path
-			// skip login noise and the audit endpoints themselves
-			if path != "/login" && !strings.HasPrefix(path, "/reports/audit-log") {
+			// skip login noise, the audit endpoints themselves, and pure reads
+			if path != "/login" && !strings.HasPrefix(path, "/reports/audit-log") && !esLecturaPorPost(path) {
 				action := map[string]string{
 					http.MethodPost:   "create",
 					http.MethodPut:    "update",

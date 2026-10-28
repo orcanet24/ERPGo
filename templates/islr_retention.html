@@ -131,8 +131,16 @@ $(function () {
         e.preventDefault();
         $.post('/reports/islr-retention/save', $(this).serialize(), function (d) {
             if (d.status) {
-                alert(d.msg);
-                location.reload();
+                // El aviso y la tabla: sin alert() que bloquea la pantalla ni
+                // recarga de la vista. load() vuelve a pedir las filas y los
+                // totales al servidor.
+                toastr.success(d.msg || 'Retención guardada');
+                load();
+                // El formulario se limpia: es lo que hacía la recarga y es lo
+                // que evita que un segundo clic mande la misma retención dos
+                // veces.
+                var frm = document.getElementById('frmIslrRetention');
+                if (frm) { frm.reset(); }
             } else {
                 alert('Error: ' + d.error);
             }

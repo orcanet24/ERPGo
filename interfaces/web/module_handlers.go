@@ -159,6 +159,7 @@ func (s *Server) moduleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	invalidarCacheMenu()
 	writeJSON(w, map[string]interface{}{
 		"status": 1,
 		"msg":    "Módulo registrado correctamente",
@@ -231,6 +232,7 @@ func (s *Server) moduleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	invalidarCacheMenu()
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Módulo eliminado"})
 }
 
@@ -292,6 +294,7 @@ func (s *Server) moduleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	invalidarCacheMenu()
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Módulo actualizado"})
 }
 

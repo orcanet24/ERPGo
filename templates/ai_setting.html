@@ -245,7 +245,7 @@ $(function () {
             success: function (r) {
                 if (r.status === 'success') {
                     toastr.success(r.msg || 'Proveedor guardado');
-                    setTimeout(function () { location.reload(); }, 700);
+                    ERPGo.refrescar();
                 } else {
                     toastr.error(r.message || 'No se pudo guardar el proveedor');
                 }
@@ -276,7 +276,7 @@ $(function () {
         $.post('/ai/providers/activate/' + id, {}, function (res) {
             if (res.status === 'success') {
                 toastr.success(res.msg || 'Proveedor activado');
-                setTimeout(function () { location.reload(); }, 700);
+                ERPGo.refrescar();
             } else {
                 toastr.error(res.message || 'No se pudo activar el proveedor');
             }
@@ -294,7 +294,7 @@ $(function () {
         $.post('/ai/providers/delete/' + id, {}, function (res) {
             if (res.status === 'success') {
                 toastr.success(res.msg || 'Proveedor eliminado');
-                setTimeout(function () { location.reload(); }, 700);
+                ERPGo.refrescar();
             } else {
                 toastr.error(res.message || 'No se pudo eliminar el proveedor');
             }

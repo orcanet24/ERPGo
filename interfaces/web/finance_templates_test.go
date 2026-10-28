@@ -91,7 +91,7 @@ func TestLasPantallasDeCarteraYCanalesSeRenderizan(t *testing.T) {
 
 	for _, c := range casos {
 		t.Run(c.archivo, func(t *testing.T) {
-			tpl, err := template.New(c.archivo).Funcs(templateFuncs(nil)).
+			tpl, err := template.New(c.archivo).Funcs(templateFuncs(nil, nil)).
 				ParseFS(erpgow.Templates(), "templates/"+c.archivo)
 			if err != nil {
 				t.Fatalf("la plantilla no se puede cargar: %v", err)

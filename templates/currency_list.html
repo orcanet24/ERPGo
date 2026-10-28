@@ -58,7 +58,7 @@ $(function () {
     $('#curForm').on('submit', function (e) {
         e.preventDefault();
         $.post('/settings/currency/save', $(this).serialize(), function (r) {
-            if (r.status == 1) { toastr.success(r.msg); setTimeout(function () { location.reload(); }, 600); }
+            if (r.status == 1) { toastr.success(r.msg); ERPGo.refrescar(); }
             else toastr.error(r.error);
         });
     });
@@ -70,7 +70,7 @@ $(function () {
     $('.do-del').on('click', function () {
         var id = $(this).data('id');
         swal({ title: "¿Eliminar moneda?", type: "warning", showCancelButton: true, confirmButtonText: "Eliminar", confirmButtonColor: ERPGo.appearance.css("--erp-danger", "#9c3333") }, function () {
-            $.post('/settings/currency/delete/' + id, function (r) { if (r.status == 1) location.reload(); else toastr.error(r.error); });
+            $.post('/settings/currency/delete/' + id, function (r) { if (r.status == 1) { toastr.success(r.msg || 'Eliminada'); ERPGo.refrescar(); } else toastr.error(r.error); });
         });
     });
 });

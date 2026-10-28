@@ -293,7 +293,17 @@ func (s *Server) quotationSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Cotización guardada", "id": quotationID})
+	// redirect es lo que permite al navegador honrar «Guardar y Salir» sin caer
+	// en una pantalla intermedia: saveRedirect devuelve la URL de listado y,
+	// cuando la acción es «Guardar» a secas, la página de origen —que es donde
+	// se queda el formulario. (Antes esta respuesta no llevaba destino y el
+	// formulario, que se enviaba solo, dejaba el JSON en pantalla.)
+	writeJSON(w, map[string]interface{}{
+		"status":   1,
+		"msg":      "Cotización guardada",
+		"id":       quotationID,
+		"redirect": saveRedirect(r, "/quotation/list"),
+	})
 }
 
 func (s *Server) quotationDelete(w http.ResponseWriter, r *http.Request) {

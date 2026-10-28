@@ -69,13 +69,13 @@
 <script>
 function reviewRun(id) {
     $.post('/ai/tasks/runs/' + id + '/review', function (r) {
-        if (r.status === 1) { location.reload(); } else { alert(r.error || 'Error al marcar la revisión'); }
+        if (r.status === 1) { ERPGo.refrescar(); } else { alert(r.error || 'Error al marcar la revisión'); }
     });
 }
 function undoRun(id) {
     if (!confirm('¿Revertir TODAS las acciones de esta tarea?')) return;
     $.post('/ai/tasks/runs/' + id + '/undo', function (r) {
-        if (r.status === 1) { location.reload(); } else { alert(r.error || 'Error al revertir'); }
+        if (r.status === 1) { ERPGo.refrescar(); } else { alert(r.error || 'Error al revertir'); }
     });
 }
 </script>

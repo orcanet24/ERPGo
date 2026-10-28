@@ -164,6 +164,7 @@ func (s *Server) menuMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	invalidarCacheMenu()
 	writeJSON(w, map[string]interface{}{
 		"status": 1,
 		"msg":    "Menú movido correctamente",
@@ -222,6 +223,7 @@ func (s *Server) menuReorder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	invalidarCacheMenu()
 	writeJSON(w, map[string]interface{}{
 		"status": 1,
 		"msg":    "Orden actualizado",
@@ -425,6 +427,7 @@ func (s *Server) menuRestaurarSnapshot(w http.ResponseWriter, r *http.Request, b
 		return
 	}
 	log.Printf("menús: restaurado snapshot %d (%d filas actualizadas, %d recreadas)", backupID, afectados, recreados)
+	invalidarCacheMenu()
 	writeJSON(w, map[string]interface{}{
 		"status": 1,
 		"msg":    fmt.Sprintf("Menús restaurados al punto %d", backupID),
@@ -463,6 +466,7 @@ func (s *Server) menuRestaurarFabrica(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("menús: restaurado orden de fábrica (%d sentencia sembrada)", ejecutadas)
+	invalidarCacheMenu()
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Menús restaurados al orden de fábrica"})
 }
 

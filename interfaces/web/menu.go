@@ -49,33 +49,41 @@ func (s *Server) menuTree(r *http.Request, perm map[string]bool, currentURL stri
 	return out
 }
 
+// menuFila es una fila cruda de la tabla `menu`, ya separada de los punteros
+// del árbol. Se cachean FILAS y no nodos (ver cachas.go): quien recibe la
+// caché construye su propio árbol en cada petición, así que dos renders nunca
+// comparten estructura mutable.
+type menuFila struct {
+	id       int
+	parentID sql.NullInt64
+	label    string
+	url      string
+	icon     string
+	perm     string
+	active   string
+}
+
 // loadMenu lee la tabla `menu` y arma el árbol en memoria. Devuelve solo las
 // raíces; los hijos quedan colgados de su padre.
+//
+// Las FILAS vienen de la caché de 30 s de cachas.go —es una lectura que no
+// depende de quién pregunta—; el árbol se arma aquí, fresh, en cada llamada.
 func (s *Server) loadMenu(r *http.Request) ([]*menuNode, error) {
-	rows, err := s.authDB(r).Query(`
-		SELECT id, parent_id, label, url, icon, perm, active_prefix
-		FROM menu
-		WHERE status = 1
-		ORDER BY sort_order, id`)
+	filas, err := s.cargarMenuFilas(r)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var all []*menuNode
 	byID := map[int]*menuNode{}
-	for rows.Next() {
-		n := &menuNode{}
-		var url, icon, perm, active sql.NullString
-		if err := rows.Scan(&n.id, &n.parentID, &n.label, &url, &icon, &perm, &active); err != nil {
-			continue
+	for i := range filas {
+		f := filas[i]
+		n := &menuNode{
+			id: f.id, parentID: f.parentID, label: f.label,
+			url: f.url, icon: f.icon, perm: f.perm, active: f.active,
 		}
-		n.url, n.icon, n.perm, n.active = url.String, icon.String, perm.String, active.String
 		all = append(all, n)
 		byID[n.id] = n
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 
 	var roots []*menuNode
@@ -92,6 +100,34 @@ func (s *Server) loadMenu(r *http.Request) ([]*menuNode, error) {
 		roots = append(roots, n)
 	}
 	return roots, nil
+}
+
+// leerMenuFilas es la consulta, sin caché: es la fuente que llena la caché.
+func (s *Server) leerMenuFilas(r *http.Request) ([]menuFila, error) {
+	rows, err := s.authDB(r).Query(`
+		SELECT id, parent_id, label, url, icon, perm, active_prefix
+		FROM menu
+		WHERE status = 1
+		ORDER BY sort_order, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var filas []menuFila
+	for rows.Next() {
+		f := menuFila{}
+		var url, icon, perm, active sql.NullString
+		if err := rows.Scan(&f.id, &f.parentID, &f.label, &url, &icon, &perm, &active); err != nil {
+			continue
+		}
+		f.url, f.icon, f.perm, f.active = url.String, icon.String, perm.String, active.String
+		filas = append(filas, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return filas, nil
 }
 
 // buildMenuItem convierte un nodo en su forma de plantilla, aplicando permisos.

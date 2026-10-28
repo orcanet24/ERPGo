@@ -567,6 +567,7 @@ func (s *Server) roleSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	invalidarCachePermisos()
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Rol guardado", "redirect": saveRedirect(r, "/role/list")})
 }
 
@@ -653,6 +654,7 @@ func (s *Server) roleDelete(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
+	invalidarCachePermisos()
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Rol eliminado", "redirect": "/role/list"})
 }
 
@@ -695,6 +697,11 @@ func (s *Server) rolePermissionsSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
+	// Se acaba de reescribir la matriz de permisos de un rol: lo que sus
+	// usuarios VEN (menú y botones) se recalcula en el acto en su siguiente
+	// vista. La puerta de ejecución (hasPermission / canAccessModule) nunca
+	// estuvo cacheada, así que no hay nada más que tocar.
+	invalidarCachePermisos()
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Permisos guardados", "redirect": saveRedirect(r, "/user/list")})
 }
 

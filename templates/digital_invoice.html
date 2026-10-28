@@ -186,7 +186,7 @@ $(function () {
                     } else {
                         toastr.success(r.msg || 'Configuración guardada');
                     }
-                    setTimeout(function () { location.reload(); }, 1200);
+                    ERPGo.refrescar();
                 } else {
                     toastr.error(r.error || 'Error al guardar');
                 }

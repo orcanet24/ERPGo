@@ -124,10 +124,10 @@ $(function () {
             }
             $.post('/cost/period/reopen',
                 'period=' + encodeURIComponent(PERIODO) +
-                '&motivo=' + encodeURIComponent(m) +
+                '&motivo=' + encodeURIComponent(m)
                 )
                 .done(function (r) {
-                    if (r.status === 1) { toastr.success(r.msg); setTimeout(function(){ location.reload(); }, 800); }
+                    if (r.status === 1) { toastr.success(r.msg); ERPGo.refrescar(); }
                     else toastr.error(r.error || 'Error');
                 })
                 .fail(function (x) {
@@ -138,10 +138,10 @@ $(function () {
         $('#btnCerrar').on('click', function () {
             if (!confirm('Se congelarán los costos de ' + PERIODO + '. ¿Continuar?')) return;
             $.post('/cost/period/close',
-                'period=' + encodeURIComponent(PERIODO) +
+                'period=' + encodeURIComponent(PERIODO)
                 )
                 .done(function (r) {
-                    if (r.status === 1) { toastr.success(r.msg); setTimeout(function(){ location.reload(); }, 900); }
+                    if (r.status === 1) { toastr.success(r.msg); ERPGo.refrescar(); }
                     else toastr.error(r.error || 'Error');
                 })
                 .fail(function (x) {

@@ -90,7 +90,7 @@ function coaPost(url, onDone) {
     $.post(url, function (res) {
         if (res.status) {
             toastr.success(res.msg || 'Listo');
-            setTimeout(function () { location.reload(); }, 700);
+            ERPGo.refrescar();
         } else {
             toastr.error(res.msg || res.error || 'No se pudo completar');
         }
