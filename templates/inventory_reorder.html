@@ -164,7 +164,7 @@ $(function () {
 
     $('#btnRecalcular').on('click', function () {
         var dias = document.getElementById('dias').value || 90;
-        fetch('/inventory/reorder/recalc', {
+        ERPGo.csrfFetch('/inventory/reorder/recalc', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
             body: 'dias=' + dias
@@ -173,7 +173,7 @@ $(function () {
 
     $('#btnGuardarSugerencias').on('click', function () {
         var dias = document.getElementById('dias').value || 90;
-        fetch('/inventory/reorder/suggestions', {
+        ERPGo.csrfFetch('/inventory/reorder/suggestions', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
             body: 'dias=' + dias
@@ -186,7 +186,7 @@ $(function () {
 
     $('#formPolitica').on('submit', function (e) {
         e.preventDefault();
-        fetch('/inventory/reorder/policy', {
+        ERPGo.csrfFetch('/inventory/reorder/policy', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
             body: $(this).serialize() + '&active=yes'

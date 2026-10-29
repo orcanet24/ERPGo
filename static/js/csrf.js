@@ -28,6 +28,29 @@
         return '';
     }
 
+    // Peticiones fetch que modifican datos también necesitan el mismo token
+    // que jQuery.ajax. Mantener la regla aquí evita que una pantalla nueva lo
+    // olvide: el servidor sigue siendo quien valida y rechaza si falta.
+    function fetchSeguro(input, init) {
+        var opciones = init ? Object.assign({}, init) : {};
+        var metodo = (opciones.method || (input && input.method) || 'GET').toUpperCase();
+        var destino = typeof input === 'string' ? input : (input && input.url) || String(input);
+        var mismaOrigen = false;
+        try { mismaOrigen = new URL(destino, window.location.href).origin === window.location.origin; }
+        catch (e) { mismaOrigen = false; }
+
+        if (mismaOrigen && metodo !== 'GET' && metodo !== 'HEAD' && metodo !== 'OPTIONS' && metodo !== 'TRACE') {
+            var cabeceras = new Headers(opciones.headers || (input && input.headers) || {});
+            var t = token();
+            if (t) { cabeceras.set(HEADER, t); }
+            opciones.headers = cabeceras;
+        }
+        return window.fetch(input, opciones);
+    }
+
+    window.ERPGo = window.ERPGo || {};
+    window.ERPGo.csrfFetch = fetchSeguro;
+
     function attach() {
         var t = token();
         if (!t) return;

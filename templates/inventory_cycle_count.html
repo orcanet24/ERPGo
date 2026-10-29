@@ -225,7 +225,7 @@ function anotar(conteo, linea) {
         alert('Escriba la cantidad contada');
         return;
     }
-    fetch('/inventory/cycle-count/count', {
+    ERPGo.csrfFetch('/inventory/cycle-count/count', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: 'cycle_id=' + conteo + '&line_id=' + linea + '&quantity=' + valor
@@ -247,7 +247,7 @@ $(function () {
 
     $('#formAbrir').on('submit', function (e) {
         e.preventDefault();
-        fetch('/inventory/cycle-count/open', {
+        ERPGo.csrfFetch('/inventory/cycle-count/open', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
             body: $(this).serialize()
@@ -262,7 +262,7 @@ $(function () {
     $('#btnCerrar').on('click', function () {
         var motivo = prompt('¿Por qué se ajusta? (merma, error de entrada, robo, ajuste)');
         if (motivo === null) { return; }
-        fetch('/inventory/cycle-count/close', {
+        ERPGo.csrfFetch('/inventory/cycle-count/close', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
             body: 'cycle_id=' + conteoActual + '&reason=' + encodeURIComponent(motivo)

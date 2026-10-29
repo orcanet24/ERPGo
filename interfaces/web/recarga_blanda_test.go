@@ -50,6 +50,59 @@ func TestElLayoutEnvuelveElPagejsDondeLaRecargaLoReejecuta(t *testing.T) {
 	}
 }
 
+func TestLasMutacionesFetchDeInventarioYTasasAdjuntanCSRF(t *testing.T) {
+	archivos := map[string]int{
+		"templates/inventory_reorder.html":     3,
+		"templates/inventory_cycle_count.html": 3,
+		"templates/exchange_rate_paralelo.html": 1,
+	}
+	for archivo, esperado := range archivos {
+		b, err := fs.ReadFile(erpgo.Templates(), archivo)
+		if err != nil {
+			t.Fatalf("no se pudo leer %s: %v", archivo, err)
+		}
+		cantidad := strings.Count(string(b), "ERPGo.csrfFetch(")
+		if cantidad != esperado {
+			t.Errorf("%s: %d mutaciones usan csrfFetch; se esperaban %d", archivo, cantidad, esperado)
+		}
+	}
+
+	b, err := fs.ReadFile(erpgo.Static(), "static/js/csrf.js")
+	if err != nil {
+		t.Fatalf("no se pudo leer static/js/csrf.js: %v", err)
+	}
+	js := string(b)
+	for _, esperado := range []string{"function fetchSeguro(", "window.ERPGo.csrfFetch = fetchSeguro", "cabeceras.set(HEADER, t)", "window.fetch(input, opciones)"} {
+		if !strings.Contains(js, esperado) {
+			t.Errorf("csrf.js no implementa el contrato fetch esperado: falta %q", esperado)
+		}
+	}
+}
+
+func TestGuardadoDeTasasManejaRespuestaYSubmitter(t *testing.T) {
+	b, err := fs.ReadFile(erpgo.Templates(), "templates/exchange_rate_paralelo.html")
+	if err != nil {
+		t.Fatalf("no se pudo leer la vista de tasas: %v", err)
+	}
+	vista := string(b)
+	for _, esperado := range []string{
+		"method=\"post\" action=\"/settings/tasas/bcv\"",
+		"method=\"post\" action=\"/settings/tasas/paralelo\"",
+		"method=\"post\" action=\"/settings/tasas/fuente\"",
+		"function guardar(url, form, submitter)",
+		"datos.set(submitter.name, submitter.value)",
+		"if (!respuesta.ok)",
+		"json.error",
+		".catch(function (error)",
+		"window.location.assign(destino)",
+		"e.originalEvent && e.originalEvent.submitter",
+	} {
+		if !strings.Contains(vista, esperado) {
+			t.Errorf("el guardado de tasas no implementa %q", esperado)
+		}
+	}
+}
+
 func TestGuardadoJsPublicaLoQueLasVistasLlaman(t *testing.T) {
 	b, err := fs.ReadFile(erpgo.Static(), "static/js/guardado.js")
 	if err != nil {

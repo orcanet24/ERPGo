@@ -21,7 +21,7 @@
                 <div class="panel panel-bd">
                     <div class="panel-heading"><h4 class="panel-title">Tasa oficial (BCV)</h4></div>
                     <div class="panel-body">
-                        <form id="formBCV">
+                        <form id="formBCV" method="post" action="/settings/tasas/bcv">
                             <div class="form-group">
                                 <label>Fecha</label>
                                 <input type="date" name="date" class="form-control" required>
@@ -49,7 +49,7 @@
                 <div class="panel panel-bd">
                     <div class="panel-heading"><h4 class="panel-title">Tasa paralela</h4></div>
                     <div class="panel-body">
-                        <form id="formParalelo">
+                        <form id="formParalelo" method="post" action="/settings/tasas/paralelo">
                             <div class="form-group">
                                 <label>Fecha</label>
                                 <input type="date" name="date" class="form-control" required>
@@ -76,7 +76,7 @@
                 <div class="panel panel-bd">
                     <div class="panel-heading"><h4 class="panel-title">Con cuál se factura</h4></div>
                     <div class="panel-body">
-                        <form id="formFuente">
+                        <form id="formFuente" method="post" action="/settings/tasas/fuente">
                             <div class="form-group">
                                 <select name="source" class="form-control">
                                     <option value="BCV">BCV (oficial)</option>
@@ -155,23 +155,48 @@ function cargar() {
         });
 }
 
-function guardar(url, form) {
-    fetch(url, {
+function guardar(url, form, submitter) {
+    var datos = new URLSearchParams(new FormData(form));
+    if (submitter && submitter.name) { datos.set(submitter.name, submitter.value); }
+    if (submitter) { submitter.disabled = true; }
+
+    ERPGo.csrfFetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: $(form).serialize()
-    }).then(function (r) { return r.json(); })
-      .then(function (j) {
-          if (j.msg_error) { alert(j.msg_error); return; }
-          cargar();
-      });
+        body: datos.toString()
+    }).then(function (respuesta) {
+        return respuesta.text().then(function (texto) {
+            var json = null;
+            try { json = JSON.parse(texto); } catch (e) { /* respuesta no JSON */ }
+            if (!respuesta.ok) {
+                throw new Error((json && json.error) || 'No se pudo guardar. Verifique la sesión y sus permisos.');
+            }
+            if (!json || json.status !== 1) {
+                throw new Error((json && (json.error || json.msg_error || json.msg)) || 'El servidor no confirmó el guardado.');
+            }
+            return json;
+        });
+    }).then(function (json) {
+        var destino = json.redirect ? new URL(json.redirect, window.location.href).href : '';
+        if (destino && destino !== window.location.href) {
+            window.location.assign(destino);
+            return;
+        }
+        cargar();
+        if (json.msg && window.toastr) { toastr.success(json.msg); }
+    }).catch(function (error) {
+        var mensaje = error && error.message ? error.message : 'Error de conexión al guardar la tasa.';
+        if (window.toastr) { toastr.error(mensaje); } else { alert(mensaje); }
+    }).finally(function () {
+        if (submitter) { submitter.disabled = false; }
+    });
 }
 
 $(function () {
     cargar();
-    $('#formBCV').on('submit', function (e) { e.preventDefault(); guardar('/settings/tasas/bcv', this); });
-    $('#formParalelo').on('submit', function (e) { e.preventDefault(); guardar('/settings/tasas/paralelo', this); });
-    $('#formFuente').on('submit', function (e) { e.preventDefault(); guardar('/settings/tasas/fuente', this); });
+    $('#formBCV').on('submit', function (e) { e.preventDefault(); guardar('/settings/tasas/bcv', this, e.originalEvent && e.originalEvent.submitter); });
+    $('#formParalelo').on('submit', function (e) { e.preventDefault(); guardar('/settings/tasas/paralelo', this, e.originalEvent && e.originalEvent.submitter); });
+    $('#formFuente').on('submit', function (e) { e.preventDefault(); guardar('/settings/tasas/fuente', this, e.originalEvent && e.originalEvent.submitter); });
 
     $('#btnFetchBCV').on('click', function () {
         var btn = $(this);
