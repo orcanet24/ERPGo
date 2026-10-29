@@ -83,6 +83,7 @@ func (s *Server) registerMensajeriaRoutes() {
 	s.mux.HandleFunc("POST /settings/mensajeria/empresa", s.mensajeriaEmpresaSave)
 	s.mux.HandleFunc("POST /settings/mensajeria/modulo", s.mensajeriaModuloToggle)
 	s.mux.HandleFunc("POST /settings/mensajeria/probar", s.mensajeriaProbar)
+	s.mux.HandleFunc("GET /settings/mensajeria/cola", s.mensajeriaColaForm)
 	s.mux.HandleFunc("GET /mensajeria", s.mensajeriaHome)
 }
 
@@ -211,6 +212,45 @@ func (s *Server) mensajeriaHome(w http.ResponseWriter, r *http.Request) {
 		"Global":      s.msgGlobalDe(r),
 		"Empresa":     s.msgSettingDe(r),
 		"Proveedores": s.msgProveedores(r),
+	})
+}
+
+// mensajeriaColaForm muestra la cola y sus motivos. Es de solo lectura: la
+// cola no se «arregla» a mano, se arregla el dispositivo, el horario o el
+// teléfono de la ficha.
+func (s *Server) mensajeriaColaForm(w http.ResponseWriter, r *http.Request) {
+	ctl, err := s.controlStore()
+	if err != nil || ctl == nil {
+		jsonError(w, "No hay base de control disponible.", http.StatusServiceUnavailable)
+		return
+	}
+	conteo := map[string]int{}
+	if rows, err := ctl.Query(`SELECT status, COUNT(*) FROM msg_outbox GROUP BY status`); err == nil {
+		for rows.Next() {
+			var estado string
+			var n int
+			if rows.Scan(&estado, &n) == nil {
+				conteo[estado] = n
+			}
+		}
+		_ = rows.Close()
+	}
+	recientes := []msgOutbox{}
+	if rows, err := ctl.Query(msgOutboxSQL + ` ORDER BY id DESC LIMIT 100`); err == nil {
+		for rows.Next() {
+			if m, err := msgEscanearOutbox(rows); err == nil {
+				recientes = append(recientes, m)
+			}
+		}
+		_ = rows.Close()
+	}
+	s.render(w, r, "mensajeria_queue.html", map[string]interface{}{
+		"Title":     "Cola de mensajería",
+		"Conteo":    conteo,
+		"Recientes": recientes,
+		"Nota": "La cola no se vacía a mano. Un aviso bloqueado explica el motivo: " +
+			"teléfono ambiguo, opt-out, cupo agotado o fuera de horario. Se corrige la ficha o el " +
+			"dispositivo, no el mensaje.",
 	})
 }
 
@@ -492,6 +532,15 @@ func boolAInt(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+// msgDescifrar abre un secreto guardado. Un valor vacío no es un error: es «no
+// hay nada guardado», y quien llama decide si eso es suficiente.
+func (s *Server) msgDescifrar(v string) (string, error) {
+	if strings.TrimSpace(v) == "" {
+		return "", nil
+	}
+	return security.Decrypt(v, security.DeriveKey(s.config.MasterKey))
 }
 
 func accionSegun(nuevo, antes bool) string {

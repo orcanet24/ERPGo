@@ -1,0 +1,61 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Cola de mensajería
+                <span class="pull-right">
+                    <a href="/settings/mensajeria" class="btn btn-default btn-sm"><i class="fa fa-cog"></i> Configuración</a>
+                    <a href="/settings/mensajeria/dispositivos" class="btn btn-default btn-sm"><i class="fa fa-mobile"></i> Dispositivos</a>
+                </span>
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <p class="help-block">{{.Nota}}</p>
+
+        <div class="row">
+            <div class="col-md-2"><div class="well well-sm text-center"><strong>{{index .Conteo "en_cola"}}</strong><br><small>en cola</small></div></div>
+            <div class="col-md-2"><div class="well well-sm text-center"><strong>{{index .Conteo "enviando"}}</strong><br><small>enviando</small></div></div>
+            <div class="col-md-2"><div class="well well-sm text-center"><strong>{{index .Conteo "aceptado"}}</strong><br><small>aceptados</small></div></div>
+            <div class="col-md-2"><div class="well well-sm text-center"><strong>{{index .Conteo "fallido"}}</strong><br><small>fallidos</small></div></div>
+            <div class="col-md-2"><div class="well well-sm text-center"><strong>{{index .Conteo "bloqueado"}}</strong><br><small>bloqueados</small></div></div>
+            <div class="col-md-2"><div class="well well-sm text-center"><strong>{{index .Conteo "en_revision"}}</strong><br><small>en revisión</small></div></div>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-condensed table-bordered">
+                <thead><tr>
+                    <th>#</th><th>Empresa</th><th>Dispositivo</th><th>Prioridad</th><th>Para</th>
+                    <th>Estado</th><th>Intentos</th><th>Cuándo</th><th>Motivo</th>
+                </tr></thead>
+                <tbody>
+                {{range .Recientes}}
+                    <tr>
+                        <td>{{.ID}}</td>
+                        <td>{{.Tenant}}</td>
+                        <td><code>{{.DeviceID}}</code></td>
+                        <td>{{.Priority}}</td>
+                        <td>{{.ToMSISDN}}</td>
+                        <td>
+                            {{if eq .Status "aceptado"}}<span class="label label-success">aceptado</span>
+                            {{else if eq .Status "entregado"}}<span class="label label-success">entregado</span>
+                            {{else if eq .Status "leido"}}<span class="label label-info">leído</span>
+                            {{else if eq .Status "en_cola"}}<span class="label label-default">en cola</span>
+                            {{else if eq .Status "enviando"}}<span class="label label-warning">enviando</span>
+                            {{else if eq .Status "bloqueado"}}<span class="label label-warning">bloqueado</span>
+                            {{else if eq .Status "fallido"}}<span class="label label-danger">fallido</span>
+                            {{else}}<span class="label label-default">{{.Status}}</span>{{end}}
+                        </td>
+                        <td>{{.Attempts}}</td>
+                        <td><small>{{if .SendAfter}}{{.SendAfter}}{{else}}—{{end}}</small></td>
+                        <td><small>{{.Error}}</small></td>
+                    </tr>
+                {{else}}
+                    <tr><td colspan="9" class="text-center text-muted">La cola está vacía.</td></tr>
+                {{end}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{{end}}

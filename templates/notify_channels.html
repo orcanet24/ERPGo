@@ -26,10 +26,13 @@
                         <td>
                             {{if eq .Kind "email"}}<span class="label label-info">Correo</span>
                             {{else if eq .Kind "sms"}}<span class="label label-warning">SMS</span>
+                            {{else if eq .Kind "wapp"}}<span class="label label-success">WhatsApp (pasarela)</span>
+                            {{else if eq .Kind "gowa"}}<span class="label label-success">WhatsApp (GOWA)</span>
                             {{else}}<span class="label label-default">Webhook</span>{{end}}
                         </td>
                         <td>
                             {{if eq .Kind "email"}}{{.Host}}:{{.Port}} · {{.Security}} · de {{.FromAddress}}
+                            {{else if eq .Kind "gowa"}}Dispositivo <code>{{.MsgDeviceID}}</code>
                             {{else}}{{.Method}} {{.URL}}{{end}}
                         </td>
                         <td>
@@ -48,6 +51,7 @@
                                 data-host="{{.Host}}" data-port="{{.Port}}" data-user="{{.Username}}"
                                 data-from="{{.FromAddress}}" data-fromname="{{.FromName}}" data-security="{{.Security}}"
                                 data-url="{{.URL}}" data-method="{{.Method}}" data-authheader="{{.AuthHeader}}"
+                                data-device="{{.MsgDeviceID}}"
                                 data-notes="{{.Notes}}"><i class="fa fa-pencil"></i> Editar</button>
                             <button class="btn btn-xs btn-success canal-probar"
                                 data-id="{{.ID}}" data-kind="{{.Kind}}" data-name="{{.Name}}"><i class="fa fa-bolt"></i> Probar</button>
@@ -96,6 +100,8 @@
             <select class="form-control" id="cn_kind" name="kind">
               <option value="email">Correo (SMTP)</option>
               <option value="sms">SMS (pasarela HTTP)</option>
+              <option value="wapp">WhatsApp (pasarela HTTP)</option>
+              <option value="gowa">WhatsApp (GOWA, cola del módulo)</option>
               <option value="webhook">Webhook</option>
             </select>
           </div></div>
@@ -158,8 +164,7 @@
             <div class="col-md-8"><div class="form-group">
               <label for="cn_url">URL de entrega</label>
               <input type="text" class="form-control" id="cn_url" name="url" placeholder="https://… (para SMS: la pasarela que recibe to y message)">
-            </div></div>
-            <div class="col-md-2"><div class="form-group">
+            </div></div>            <div class="col-md-2"><div class="form-group">
               <label for="cn_method">Método</label>
               <input type="text" class="form-control" id="cn_method" name="http_method" value="POST">
             </div></div>
@@ -178,6 +183,19 @@
               <label for="cn_sign">Secreto de firma (HMAC)</label>
               <input type="password" class="form-control" id="cn_sign" name="sign_secret" autocomplete="new-password"
                      placeholder="Opcional: firma el cuerpo en X-ERPGo-Signature">
+            </div></div>
+          </div>
+        </div>
+
+        <div class="cn-gowa">
+          <div class="row">
+            <div class="col-md-6"><div class="form-group">
+              <label for="cn_device">Dispositivo que manda</label>
+              <select class="form-control" id="cn_device" name="msg_device_id">
+                <option value="">— elija un número —</option>
+                {{range .Dispositivos}}<option value="{{.DeviceID}}">{{.DeviceID}} · {{.Label}}</option>{{end}}
+              </select>
+              <span class="help-block">El aviso entra en la cola de ese número; no sale en el momento. El despachador aplica horario, cupo y pausas.</span>
             </div></div>
           </div>
         </div>
@@ -228,7 +246,8 @@ function cnEsc(t) { return $('<div>').text(t == null ? '' : t).html(); }
 function cnCampos() {
     var kind = $('#cn_kind').val();
     $('.cn-email').toggle(kind === 'email');
-    $('.cn-http').toggle(kind === 'sms' || kind === 'webhook');
+    $('.cn-http').toggle(kind === 'sms' || kind === 'wapp' || kind === 'webhook');
+    $('.cn-gowa').toggle(kind === 'gowa');
 }
 
 $(function () {
@@ -265,6 +284,7 @@ $(function () {
         $('#cn_url').val(d.url);
         $('#cn_method').val(d.method || 'POST');
         $('#cn_authheader').val(d.authheader);
+        $('#cn_device').val(d.device);
         $('#cn_notes').val(d.notes);
         cnCampos();
         $('#modalCanal').modal('show');

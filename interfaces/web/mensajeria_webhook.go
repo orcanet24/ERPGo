@@ -96,6 +96,18 @@ func (s *Server) mensajeriaWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "no se pudo guardar el mensaje", http.StatusInternalServerError)
 			return
 		}
+		if !ev.Payload.IsFromMe {
+			numero := msisdnDeJID(ev.Payload.From)
+			// El primer mensaje entrante es la prueba de que el número tiene
+			// WhatsApp: se guarda verificado sin llamar a /user/check.
+			_ = s.msgVerificarCanal(db, numero, dispositivo.Provider, numero, "mensaje_entrante")
+			// Y si la persona pidió la baja, se registra en el acto. Esperar a
+			// que un humano lo lea es cómo se acaba insistiendo a quien dijo
+			// «BAJA».
+			if msgOptOutDeTexto(ev.Payload.Body) {
+				_ = s.msgRegistrarOptOut(db, numero, "pidió la baja por WhatsApp", "whatsapp", "system")
+			}
+		}
 	case "message.ack":
 		s.msgAplicarAcuse(db, dispositivo.DeviceID, ev.Payload.ID, ev.Payload.Ack)
 	default:

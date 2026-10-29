@@ -267,6 +267,10 @@ func (s *Server) Close() error {
 	// debe chocar con una base que se cierra. Lo pendiente queda en cola.
 	s.diDesactivarRunner()
 
+	// El despachador de mensajería se para antes de cerrar las bases. Lo que
+	// quedó en `enviando` se recupera al siguiente arranque.
+	s.pararMensajeriaDispatcher()
+
 	s.controlMu.Lock()
 	if s.controlDB != nil {
 		if err := s.controlDB.Close(); err != nil {
@@ -1379,4 +1383,3 @@ func empresaVacia(db *sql.DB) bool {
 	}
 	return n == 0
 }
-

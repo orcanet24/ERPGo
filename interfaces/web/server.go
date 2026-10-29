@@ -93,6 +93,14 @@ type Server struct {
 
 	// diStop apaga el runner de facturación digital al cerrar el ERP.
 	diStop chan struct{}
+
+	// msgStop apaga el despachador de mensajería al cerrar el ERP. La cola
+	// queda en la base; lo que no se envía hoy se envía cuando vuelva a
+	// arrancar, no se pierde.
+	msgStop chan struct{}
+	// msgTyping activa la pausa de «escribiendo» antes de cada envío. Se deja
+	// apagada en las pruebas: esperar segundos no cambia ninguna decisión.
+	msgTyping bool
 }
 
 // AppSettings caches per-request common template data sources.
@@ -247,6 +255,10 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	// Runner de facturación digital: emite las ventas sincronizadas y offline
 	// al proveedor que la empresa tenga activo (digital_invoice_config).
 	s.startDigitalInvoiceRunner()
+
+	// Despachador de mensajería: un solo bucle, un tic cada 5 s. Si el módulo
+	// está apagado no hace nada; la cola se conserva.
+	s.startMensajeriaDispatcher()
 
 	// Static files — served from the disk copy when present (live edits in
 	// development) and from the embedded filesystem otherwise (single binary).
@@ -605,7 +617,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		public := []string{"/login",	"/api/login", "/api/pos/", "/health", "/setup/company", "/static/", "/uploads", "/favicon"}
+		public := []string{"/login", "/api/login", "/api/pos/", "/health", "/setup/company", "/static/", "/uploads", "/favicon"}
 		for _, p := range public {
 			if strings.HasPrefix(r.URL.Path, p) {
 				next.ServeHTTP(w, r)

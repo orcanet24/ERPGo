@@ -58,6 +58,8 @@ type msgDevice struct {
 	HourlyCap        int
 	MinDelayS        int
 	MaxDelayS        int
+	NextSendAt       string
+	PausedUntil      string
 	CreatedBy        string
 	CreatedAt        string
 }
@@ -65,7 +67,7 @@ type msgDevice struct {
 const msgDeviceSQL = `SELECT device_id, tenant, area, IFNULL(label,''), IFNULL(provider,'whatsapp_gowa'),
 	IFNULL(msisdn,''), IFNULL(webhook_secret_enc,''), IFNULL(state,'nuevo'), IFNULL(jid,''),
 	IFNULL(daily_cap,120), IFNULL(hourly_cap,25), IFNULL(min_delay_s,45), IFNULL(max_delay_s,180),
-	IFNULL(created_by,''), IFNULL(created_at,'')
+	IFNULL(next_send_at,''), IFNULL(paused_until,''), IFNULL(created_by,''), IFNULL(created_at,'')
 	FROM msg_device`
 
 func msgEscanearDevice(s interface {
@@ -74,7 +76,7 @@ func msgEscanearDevice(s interface {
 	var d msgDevice
 	err := s.Scan(&d.DeviceID, &d.Tenant, &d.Area, &d.Label, &d.Provider, &d.MSISDN,
 		&d.WebhookSecretEnc, &d.State, &d.JID, &d.DailyCap, &d.HourlyCap, &d.MinDelayS,
-		&d.MaxDelayS, &d.CreatedBy, &d.CreatedAt)
+		&d.MaxDelayS, &d.NextSendAt, &d.PausedUntil, &d.CreatedBy, &d.CreatedAt)
 	return d, err
 }
 
@@ -91,6 +93,17 @@ func (s *Server) msgDispositivosDe(ctl *sql.DB, tenant string) []msgDevice {
 		}
 	}
 	return out
+}
+
+// msgDispositivosDeLaEmpresa es la lista para los formularios, sin exigir que
+// haya base de control: si no la hay, el formulario muestra la lista vacía y el
+// usuario ve que no hay números, en vez de una pantalla de error.
+func (s *Server) msgDispositivosDeLaEmpresa(r *http.Request) []msgDevice {
+	ctl, err := s.controlStore()
+	if err != nil || ctl == nil {
+		return []msgDevice{}
+	}
+	return s.msgDispositivosDe(ctl, s.tenantOf(r))
 }
 
 func (s *Server) msgDeviceDe(ctl *sql.DB, deviceID string) (msgDevice, error) {

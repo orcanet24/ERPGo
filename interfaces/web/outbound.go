@@ -69,6 +69,9 @@ type notifyChannel struct {
 	AuthToken  string
 	SignSecret string
 
+	// Mensajería (canal «gowa»): qué dispositivo de la empresa manda el aviso.
+	MsgDeviceID string
+
 	Notes string
 }
 
@@ -77,7 +80,7 @@ type notifyChannel struct {
 const notifyCanalesSQL = `SELECT id, IFNULL(kind,''), IFNULL(name,''), is_active, ai_allowed, cooldown_days,
 	IFNULL(host,''), port, IFNULL(username,''), IFNULL(password,''), IFNULL(from_address,''), IFNULL(from_name,''),
 	IFNULL(security,'starttls'), IFNULL(url,''), IFNULL(http_method,'POST'), IFNULL(auth_header,''),
-	IFNULL(auth_token,''), IFNULL(sign_secret,''), IFNULL(notes,'')
+	IFNULL(auth_token,''), IFNULL(sign_secret,''), IFNULL(msg_device_id,''), IFNULL(notes,'')
 	FROM notify_channel`
 
 // notifyCanalEscanear llena una fila del canal.
@@ -87,7 +90,8 @@ func notifyCanalEscanear(s interface {
 	var c notifyChannel
 	err := s.Scan(&c.ID, &c.Kind, &c.Name, &c.IsActive, &c.AIAllowed, &c.CooldownDays,
 		&c.Host, &c.Port, &c.Username, &c.Password, &c.FromAddress, &c.FromName,
-		&c.Security, &c.URL, &c.Method, &c.AuthHeader, &c.AuthToken, &c.SignSecret, &c.Notes)
+		&c.Security, &c.URL, &c.Method, &c.AuthHeader, &c.AuthToken, &c.SignSecret,
+		&c.MsgDeviceID, &c.Notes)
 	return c, err
 }
 
@@ -339,6 +343,15 @@ func (s *Server) financeEnviarAviso(r *http.Request, db *sql.DB, canal notifyCha
 				"subject": asunto,
 			})
 		}
+	case "gowa":
+		// El aviso no se manda aquí: se encola. El despachador decide cuándo,
+		// con el ritmo y el cupo del número. «Enviado» en este punto sería una
+		// mentira: solo está aceptado por la cola.
+		if strings.TrimSpace(canal.MsgDeviceID) == "" {
+			envioErr = fmt.Errorf("el canal de WhatsApp «%s» no tiene un dispositivo asignado", canal.Name)
+		} else {
+			prov, envioErr = s.msgEncolarAviso(r, canal, destino, asunto, cuerpo, refType, refID, usuario)
+		}
 	case "webhook":
 		if strings.TrimSpace(canal.URL) == "" {
 			envioErr = fmt.Errorf("el canal webhook «%s» no tiene URL configurada", canal.Name)
@@ -363,6 +376,15 @@ func (s *Server) financeEnviarAviso(r *http.Request, db *sql.DB, canal notifyCha
 
 	_, _ = db.Exec(`UPDATE finance_message SET status = 'enviado', sent_at = ?, provider_ref = ? WHERE id = ?`,
 		now(), prov, msgID)
+	if canal.Kind == "gowa" {
+		// La cola es la verdad: el aviso está aceptado, no entregado. El
+		// historial lo dice así y el estado real llegará con el acuse.
+		_, _ = db.Exec(`UPDATE finance_message SET status = 'en_cola' WHERE id = ?`, msgID)
+		return map[string]interface{}{
+			"enviado": true, "encolado": true, "id": msgID, "destino": destino, "canal": canal.Name, "kind": canal.Kind,
+			"msg": "Aviso en cola para " + destino + " por " + canal.Name + ". Se enviará con el ritmo del número; el historial dirá «en cola» hasta que salga.",
+		}, nil
+	}
 	return map[string]interface{}{
 		"enviado": true, "id": msgID, "destino": destino, "canal": canal.Name, "kind": canal.Kind,
 		"msg": "Aviso enviado a " + destino + " por " + canal.Name + ".",
