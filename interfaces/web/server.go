@@ -436,6 +436,7 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	s.registerFinanceAlertRoutes()
 	s.registerNotifyChannelRoutes()
 	s.registerMensajeriaRoutes()
+	s.registerMensajeriaDispositivoRoutes()
 	s.registerPOSAPIRoutes()
 	s.registerPOSAdminRoutes()
 	s.registerPOSSyncRoutes()

@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS `msg_device` (
   `label` varchar(120) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
   `provider` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'whatsapp_gowa',
   `msisdn` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `webhook_secret_enc` varchar(512) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
   `state` varchar(24) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'nuevo',
   `jid` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
   `daily_cap` int NOT NULL DEFAULT '120',

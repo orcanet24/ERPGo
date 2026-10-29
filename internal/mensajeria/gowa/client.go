@@ -14,6 +14,7 @@ package gowa
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -230,6 +231,66 @@ func (c *Cliente) VerificarNumero(ctx context.Context, deviceID, telefono string
 		}
 	}
 	return false, &Error{Mensaje: "el daemon no dijo si el número está registrado"}
+}
+
+// Descargar trae el contenido de un enlace del daemon (el QR es el caso
+// normal). Acepta `data:` en línea, una URL absoluta o una ruta relativa al
+// daemon. Devuelve también el tipo de contenido para servirlo tal cual.
+//
+// EL NAVEGADOR NUNCA HABLA CON EL DAEMON: el ERP descarga la imagen y la sirve
+// por una ruta autenticada. Así el puerto del daemon no se expone y la imagen
+// no queda en la caché del navegador con una URL interna.
+func (c *Cliente) Descargar(ctx context.Context, enlace string) ([]byte, string, error) {
+	enlace = strings.TrimSpace(enlace)
+	if enlace == "" {
+		return nil, "", &Error{Mensaje: "el daemon no devolvió el enlace del QR"}
+	}
+	if strings.HasPrefix(enlace, "data:") {
+		coma := strings.IndexByte(enlace, ',')
+		if coma < 0 {
+			return nil, "", &Error{Mensaje: "el QR en línea no tiene contenido"}
+		}
+		cabecera, datos := enlace[:coma], enlace[coma+1:]
+		tipo := "image/png"
+		if i := strings.Index(cabecera, ";"); i > 5 {
+			tipo = cabecera[5:i]
+		}
+		bruto, err := base64.StdEncoding.DecodeString(datos)
+		if err != nil {
+			return nil, "", &Error{Mensaje: "el QR en línea no está bien codificado: " + err.Error()}
+		}
+		return bruto, tipo, nil
+	}
+
+	destino := enlace
+	if !strings.HasPrefix(enlace, "http://") && !strings.HasPrefix(enlace, "https://") {
+		destino = c.BaseURL + "/" + strings.TrimLeft(enlace, "/")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, destino, nil)
+	if err != nil {
+		return nil, "", &Error{Mensaje: "enlace del QR inválido: " + err.Error()}
+	}
+	if c.Usuario != "" {
+		req.SetBasicAuth(c.Usuario, c.Password)
+	}
+	cliente := c.HTTP
+	if cliente == nil {
+		cliente = &http.Client{Timeout: 20 * time.Second}
+	}
+	resp, err := cliente.Do(req)
+	if err != nil {
+		return nil, "", &Error{Mensaje: "no se pudo descargar el QR: " + err.Error(), Temporal: true}
+	}
+	defer resp.Body.Close()
+	bruto, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, "", errorDeRespuesta(resp.StatusCode, bruto)
+	}
+	tipo := resp.Header.Get("Content-Type")
+	if tipo == "" {
+		tipo = "image/png"
+	}
+	return bruto, tipo, nil
 }
 
 // hacer ejecuta una llamada y traduce el resultado.

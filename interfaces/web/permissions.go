@@ -415,7 +415,13 @@ func (s *Server) permissionMiddleware(next http.Handler) http.Handler {
 		// /__addon/: canal de negocio de los addons. No lleva cookie porque un
 		// addon no tiene sesión de usuario; se autentica con un grant efímero
 		// emitido por el núcleo y solo acepta peticiones desde loopback.
-		public := []string{"/login", "/api/login", "/api/pos/", "/__addon/", "/setup/company", "/static/", "/uploads/", "/favicon"}
+		public := []string{"/login", "/api/login", "/api/pos/", "/__addon/", "/setup/company", "/static/", "/uploads/", "/favicon",
+			// Los webhooks de mensajería no llevan cookie: quien llama es el
+			// daemon. Se autentican con HMAC del cuerpo y un secreto por
+			// dispositivo (ver mensajeria_webhook.go); sin esa firma no se
+			// escribe nada. Van aquí porque el middleware de sesión no tiene
+			// sentido para ellos.
+			"/webhooks/"}
 		for _, p := range public {
 			if strings.HasPrefix(r.URL.Path, p) {
 				next.ServeHTTP(w, r)
