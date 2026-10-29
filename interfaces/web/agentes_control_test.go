@@ -176,12 +176,12 @@ func TestElAltaDeAgenteVerificaElRolYLaIdentidadEnControl(t *testing.T) {
 	form = url.Values{"name": {"Cobranza"}, "role_id": {"1"}}
 	w = httptest.NewRecorder()
 	s.agentSave(w, pagarConAmbito(s, empresa, sessPrueba("admin"), "POST", "/ai/agents/save", form))
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "success") {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"status":1`) {
 		t.Fatalf("el alta debió crear el agente con rol de control; salió %d: %s", w.Code, w.Body.String())
 	}
 
 	var username, userIDEnLogin string
-	if err := control.QueryRow(`SELECT user_id, username FROM user_login WHERE username LIKE 'agente.cobranza.%' ORDER BY id LIMIT 1`).
+	if err := control.QueryRow(`SELECT user_id, username FROM user_login WHERE username LIKE 'agente.cobranza.%' ORDER BY username LIMIT 1`).
 		Scan(&userIDEnLogin, &username); err != nil {
 		t.Fatalf("la identidad del agente no quedó en la BD de control: %v", err)
 	}
@@ -199,12 +199,13 @@ func TestElAltaDeAgenteVerificaElRolYLaIdentidadEnControl(t *testing.T) {
 	if providerID != 2 {
 		t.Errorf("el agente debe quedar amarrado al proveedor activo (2), quedó con %d", providerID)
 	}
-	var usersNombre string
-	if err := control.QueryRow(`SELECT last_name FROM users WHERE user_id = ?`, userIDEnLogin).Scan(&usersNombre); err != nil {
+	var primerNombre, apellido string
+	if err := control.QueryRow(`SELECT first_name, last_name FROM users WHERE user_id = ?`, userIDEnLogin).
+		Scan(&primerNombre, &apellido); err != nil {
 		t.Errorf("el usuario del agente no quedó en users de control: %v", err)
 	}
-	if usersNombre != "Cobranza (Agente IA)" {
-		t.Errorf("el nombre del usuario agente debió guardarse en control, salió %q", usersNombre)
+	if primerNombre != "Cobranza" || apellido != " (Agente IA)" {
+		t.Errorf("el nombre del usuario agente debió guardarse separado en control, salió %q %q", primerNombre, apellido)
 	}
 
 	// 3) Un segundo agente con el mismo nombre toma el siguiente libre, y la
@@ -213,7 +214,7 @@ func TestElAltaDeAgenteVerificaElRolYLaIdentidadEnControl(t *testing.T) {
 	form = url.Values{"name": {"Cobranza"}, "role_id": {"1"}}
 	w = httptest.NewRecorder()
 	s.agentSave(w, pagarConAmbito(s, empresa, sessPrueba("admin"), "POST", "/ai/agents/save", form))
-	if !strings.Contains(w.Body.String(), "success") {
+	if !strings.Contains(w.Body.String(), `"status":1`) {
 		t.Fatalf("el segundo alta debió salir bien; salió %d: %s", w.Code, w.Body.String())
 	}
 	var tercer int

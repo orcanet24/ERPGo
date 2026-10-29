@@ -198,17 +198,21 @@ func (s *Server) controlStore() (*sql.DB, error) {
 	// base de prueba —que no es la de control— no tiene por qué recibir el esquema
 	// completo por haber sido montada como catálogo.
 	//
-	// El intento se cuenta UNA vez aunque falle: reintentar en cada petición una
-	// migración que tarda segundos convertiría un problema en una caída. Si falla
-	// se dice en el log, y sin identidad el login no encuentra a nadie —el fallo se
-	// ve, no se esconde.
+	// El esquema de control se aplica una sola vez, junto con las migraciones.
+	// Repetirlo en cada consulta era trabajo inútil en MySQL y, en las pruebas
+	// SQLite con esquema preparado, hacía que authDB fallara al ejecutar DDL
+	// MySQL (AUTO_INCREMENT), devolviendo silenciosamente la BD de empresa: de
+	// ahí salían el formulario sin roles y el listado de agentes vacío.
+	//
+	// controlListo se deja en true solo después de completar las sentencias
+	// portables del catálogo. Si fallan, la próxima llamada puede reintentarlas y
+	// el error no se oculta tras una consulta a otra base.
 	if !s.controlListo {
-		s.controlListo = true
 		s.aplicarEsquemaDeControl(db)
-	}
-
-	if err := persistence.AplicarEsquema(db, controlSchema); err != nil {
-		return nil, fmt.Errorf("esquema de control: %v", err)
+		if err := persistence.AplicarEsquema(db, controlSchema); err != nil {
+			return nil, fmt.Errorf("esquema de control: %v", err)
+		}
+		s.controlListo = true
 	}
 	return db, nil
 }

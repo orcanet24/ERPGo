@@ -69,7 +69,7 @@ function launchCamp(id) {
 function cancelCamp(id) {
     if (!confirm('¿Cancelar esta campaña?')) return;
     $.post('/crm/remarketing/campaign/cancel/' + id, function(r) {
-        if (r.status == 1) { location.reload(); } else { alert(r.msg); }
+        if (r.status == 1) { ERPGo.refrescar(); } else { alert(r.msg); }
     }, 'json');
 }
 </script>

@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"erpgow"
+	"erpgo"
 )
 
 // filasDeDataTables exige que la respuesta sea un objeto con «data» y que ahí
@@ -95,7 +95,7 @@ func TestLaListaDeInformesConservaLaMatrizEnLaRaiz(t *testing.T) {
 
 	// Y su tabla le dice a DataTables dónde están las filas, porque con la
 	// configuración por defecto miraría «data» y no encontraría nada.
-	plantilla, err := fs.ReadFile(erpgow.Templates(), "templates/report_template_list.html")
+	plantilla, err := fs.ReadFile(erpgo.Templates(), "templates/report_template_list.html")
 	if err != nil {
 		t.Fatalf("no se pudo leer la plantilla de informes: %v", err)
 	}

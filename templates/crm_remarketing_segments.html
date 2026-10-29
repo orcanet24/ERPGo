@@ -109,7 +109,7 @@ function toggleDays() {
 function saveSegment() {
     var f = $('#segmentForm');
     $.post('/crm/remarketing/segment/save', f.serialize(), function(r) {
-        if (r.status == 1) { location.reload(); } else { alert(r.msg); }
+        if (r.status == 1) { ERPGo.refrescar(); } else { alert(r.msg); }
     }, 'json');
     return false;
 }
@@ -132,7 +132,7 @@ function previewSegment(id) {
 function deleteSegment(id) {
     if (!confirm('¿Desactivar este segmento?')) return;
     $.post('/crm/remarketing/segment/delete/' + id, function(r) {
-        if (r.status == 1) { location.reload(); } else { alert(r.msg); }
+        if (r.status == 1) { ERPGo.refrescar(); } else { alert(r.msg); }
     }, 'json');
 }
 </script>

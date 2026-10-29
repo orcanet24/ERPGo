@@ -49,7 +49,7 @@
 function deleteTpl(id) {
     if (!confirm('¿Desactivar esta plantilla?')) return;
     $.post('/crm/remarketing/template/delete/' + id, function(r) {
-        if (r.status == 1) { location.reload(); } else { alert(r.msg); }
+        if (r.status == 1) { ERPGo.refrescar(); } else { alert(r.msg); }
     }, 'json');
 }
 </script>
