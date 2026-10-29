@@ -194,7 +194,12 @@ func (s *Server) agentListData(w http.ResponseWriter, r *http.Request) {
 			"max_steps": g.MaxSteps, "max_rows": g.MaxRows,
 		})
 	}
-	writeJSON(w, out)
+	// DataTables busca las filas en «data» por defecto (sAjaxDataProp). Con una
+	// matriz suelta en la raíz no encuentra nada, le llega undefined y revienta
+	// dentro de su propio callback de éxito con «Cannot read properties of
+	// undefined (reading 'length')», dejando la tabla vacía. Misma envoltura que
+	// /user/list/data, que es como se alimenta el resto de los listados.
+	writeJSON(w, map[string]interface{}{"data": out})
 }
 
 // aiProveedorActivoParaAgentes devuelve el ÚNICO proveedor que un agente puede

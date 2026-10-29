@@ -144,7 +144,10 @@ func (s *Server) aiTaskListData(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, item)
 	}
-	writeJSON(w, out)
+	// Misma razón que en la lista de agentes: DataTables lee «data» por defecto
+	// y con la matriz en la raíz la tabla revienta con «Cannot read properties of
+	// undefined (reading 'length')» y se queda sin filas.
+	writeJSON(w, map[string]interface{}{"data": out})
 }
 
 // aiTaskForm muestra el formulario (add/edit) con la lista de agentes.

@@ -19,7 +19,10 @@
 $(function () {
     $('#tplTable').DataTable({
         processing: true,
-        ajax: { url: '/reports/custom/data', type: 'GET' },
+        // Este endpoint lo comen DOS pantallas: aquí y report_engine.html, que
+        // lo recorre como matriz en la raíz. Por eso no se envuelve en «data» en
+        // el servidor y la tabla se le dice dónde están las filas con dataSrc.
+        ajax: { url: '/reports/custom/data', type: 'GET', dataSrc: '' },
         columns: [
             { data: 'id' },
             { data: 'name' },
