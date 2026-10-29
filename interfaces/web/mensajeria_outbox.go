@@ -53,6 +53,7 @@ type msgOutbox struct {
 	ToMSISDN     string
 	Body         string
 	MediaPath    string
+	MediaType    string
 	TemplateCode string
 	RefType      string
 	RefID        string
@@ -69,7 +70,7 @@ type msgOutbox struct {
 }
 
 const msgOutboxSQL = `SELECT id, tenant, provider, device_id, priority, kind, to_msisdn,
-	IFNULL(body,''), IFNULL(media_path,''), IFNULL(template_code,''), IFNULL(ref_type,''),
+	IFNULL(body,''), IFNULL(media_path,''), IFNULL(media_type,''), IFNULL(template_code,''), IFNULL(ref_type,''),
 	IFNULL(ref_id,''), idem_key, status, attempts, IFNULL(send_after,''), IFNULL(claimed_at,''),
 	IFNULL(provider_ref,''), IFNULL(error,''), IFNULL(created_by,''), IFNULL(created_at,''),
 	IFNULL(updated_at,'')
@@ -80,7 +81,7 @@ func msgEscanearOutbox(s interface {
 }) (msgOutbox, error) {
 	var m msgOutbox
 	err := s.Scan(&m.ID, &m.Tenant, &m.Provider, &m.DeviceID, &m.Priority, &m.Kind, &m.ToMSISDN,
-		&m.Body, &m.MediaPath, &m.TemplateCode, &m.RefType, &m.RefID, &m.IdemKey, &m.Status,
+		&m.Body, &m.MediaPath, &m.MediaType, &m.TemplateCode, &m.RefType, &m.RefID, &m.IdemKey, &m.Status,
 		&m.Attempts, &m.SendAfter, &m.ClaimedAt, &m.ProviderRef, &m.Error, &m.CreatedBy,
 		&m.CreatedAt, &m.UpdatedAt)
 	return m, err
@@ -124,10 +125,10 @@ func (s *Server) msgEncolar(ctl *sql.DB, m msgOutbox) (int64, bool, error) {
 	m.IdemKey = msgClaveDeIdempotencia(m)
 
 	res, err := ctl.Exec(`INSERT INTO msg_outbox (tenant, provider, device_id, priority, kind, to_msisdn,
-		body, media_path, template_code, ref_type, ref_id, idem_key, status, attempts, send_after,
+		body, media_path, media_type, template_code, ref_type, ref_id, idem_key, status, attempts, send_after,
 		created_by, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)`,
-		m.Tenant, m.Provider, m.DeviceID, m.Priority, m.Kind, m.ToMSISDN, m.Body, m.MediaPath,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)`,
+		m.Tenant, m.Provider, m.DeviceID, m.Priority, m.Kind, m.ToMSISDN, m.Body, m.MediaPath, m.MediaType,
 		m.TemplateCode, m.RefType, m.RefID, m.IdemKey, m.Status, m.SendAfter,
 		m.CreatedBy, now(), now())
 	if err != nil {
@@ -307,7 +308,28 @@ func (s *Server) msgDespacharFila(ctx context.Context, ctl *sql.DB, m msgOutbox,
 		defer func() { _ = cliente.Presencia(ctx, m.DeviceID, m.ToMSISDN, "stop") }()
 	}
 
-	envio, err := cliente.EnviarTexto(ctx, m.DeviceID, m.ToMSISDN, m.Body)
+	var envio gowa.Envio
+	if strings.TrimSpace(m.MediaPath) != "" {
+		archivo, rerr := s.msgMediaRuta(m.Tenant, m.MediaPath)
+		if rerr != nil {
+			s.msgRegistrarFallo(ctl, m, rerr, ahora)
+			return
+		}
+		switch m.MediaType {
+		case "image":
+			envio, err = cliente.EnviarImagen(ctx, m.DeviceID, m.ToMSISDN, archivo, m.Body)
+		case "audio":
+			envio, err = cliente.EnviarAudio(ctx, m.DeviceID, m.ToMSISDN, archivo, m.Body)
+		case "video":
+			envio, err = cliente.EnviarVideo(ctx, m.DeviceID, m.ToMSISDN, archivo, m.Body)
+		case "document":
+			envio, err = cliente.EnviarArchivo(ctx, m.DeviceID, m.ToMSISDN, archivo, m.Body)
+		default:
+			err = fmt.Errorf("tipo de archivo no soportado: %q", m.MediaType)
+		}
+	} else {
+		envio, err = cliente.EnviarTexto(ctx, m.DeviceID, m.ToMSISDN, m.Body)
+	}
 	if err != nil {
 		s.msgRegistrarFallo(ctl, m, err, ahora)
 		return

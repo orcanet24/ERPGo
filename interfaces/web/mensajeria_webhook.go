@@ -18,6 +18,7 @@ package web
 // tampoco se duplica.
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
@@ -43,6 +44,11 @@ type msgWebhookEvento struct {
 		Body      string `json:"body"`
 		Ack       int    `json:"ack"`
 		Timestamp int64  `json:"timestamp"`
+		MediaType string `json:"media_type"`
+		Type      string `json:"type"`
+		Mimetype  string `json:"mimetype"`
+		Media     string `json:"media"`
+		Filename  string `json:"filename"`
 	} `json:"payload"`
 }
 
@@ -92,7 +98,8 @@ func (s *Server) mensajeriaWebhook(w http.ResponseWriter, r *http.Request) {
 
 	switch strings.ToLower(strings.TrimSpace(ev.Event)) {
 	case "message":
-		if err := s.msgGuardarEntrante(db, dispositivo, ev, cuerpo); err != nil {
+		tipo := msgTipoEntrante(primeroNoVacio(ev.Payload.MediaType, ev.Payload.Type, ev.Payload.Mimetype))
+		if err := s.msgGuardarEntrante(db, dispositivo, ev, cuerpo, tipo); err != nil {
 			http.Error(w, "no se pudo guardar el mensaje", http.StatusInternalServerError)
 			return
 		}
@@ -106,6 +113,11 @@ func (s *Server) mensajeriaWebhook(w http.ResponseWriter, r *http.Request) {
 			// «BAJA».
 			if msgOptOutDeTexto(ev.Payload.Body) {
 				_ = s.msgRegistrarOptOut(db, numero, "pidió la baja por WhatsApp", "whatsapp", "system")
+			}
+			// El archivo se descarga después de guardar el mensaje: si la
+			// descarga falla, el mensaje y su tipo se conservan.
+			if tipo != "" {
+				s.msgBajarMediaEntrante(r.Context(), ctl, db, dispositivo, ev, cuerpo, tipo)
 			}
 		}
 	case "message.ack":
@@ -123,7 +135,7 @@ func (s *Server) mensajeriaWebhook(w http.ResponseWriter, r *http.Request) {
 
 // msgGuardarEntrante escribe el mensaje en la base de la empresa. Un duplicado
 // no es un error: es el reintento de GOWA y se responde 200.
-func (s *Server) msgGuardarEntrante(db *sql.DB, dispositivo msgDevice, ev msgWebhookEvento, cuerpo []byte) error {
+func (s *Server) msgGuardarEntrante(db *sql.DB, dispositivo msgDevice, ev msgWebhookEvento, cuerpo []byte, tipo string) error {
 	chat := primeroNoVacio(ev.Payload.ChatID, ev.Payload.From)
 	from, to := msisdnDeJID(ev.Payload.From), ""
 	direccion, estado := "in", "recibido"
@@ -132,13 +144,7 @@ func (s *Server) msgGuardarEntrante(db *sql.DB, dispositivo msgDevice, ev msgWeb
 		from, to = msisdnDeJID(chat), msisdnDeJID(chat)
 	}
 
-	msgID := strings.TrimSpace(ev.Payload.ID)
-	if msgID == "" {
-		// Sin id del proveedor, el hash del cuerpo es el mejor identificador:
-		// dos reintentos del mismo evento dan el mismo hash.
-		sum := sha256.Sum256(cuerpo)
-		msgID = "auto-" + hex.EncodeToString(sum[:16])
-	}
+	msgID := msgIDDeEvento(ev, cuerpo)
 	cuando := now()
 	if ev.Payload.Timestamp > 0 {
 		cuando = time.Unix(ev.Payload.Timestamp, 0).Format("2006-01-02 15:04:05")
@@ -149,15 +155,58 @@ func (s *Server) msgGuardarEntrante(db *sql.DB, dispositivo msgDevice, ev msgWeb
 	}
 
 	_, err := db.Exec(`INSERT INTO msg_message (device_id, provider, chat_jid, direction, message_id,
-		from_msisdn, to_msisdn, body, status, is_from_me, sent_at, received_at, raw_json, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		from_msisdn, to_msisdn, body, media_type, status, is_from_me, sent_at, received_at, raw_json, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		dispositivo.DeviceID, dispositivo.Provider, chat, direccion, msgID,
-		from, to, ev.Payload.Body, estado, boolAInt(ev.Payload.IsFromMe),
+		from, to, ev.Payload.Body, tipo, estado, boolAInt(ev.Payload.IsFromMe),
 		cuando, cuando, crudo, now())
 	if err != nil && aiEsClaveDuplicada(err) {
 		return nil
 	}
 	return err
+}
+
+// msgIDDeEvento usa el id del proveedor; si no viene, el hash del cuerpo, que
+// hace idempotente un reintento idéntico.
+func msgIDDeEvento(ev msgWebhookEvento, cuerpo []byte) string {
+	if id := strings.TrimSpace(ev.Payload.ID); id != "" {
+		return id
+	}
+	sum := sha256.Sum256(cuerpo)
+	return "auto-" + hex.EncodeToString(sum[:16])
+}
+
+// msgBajarMediaEntrante descarga el archivo del mensaje y lo deja enlazado. Si
+// falla, no se toca la fila: el mensaje ya está guardado con su tipo.
+func (s *Server) msgBajarMediaEntrante(ctx context.Context, ctl, db *sql.DB, dispositivo msgDevice, ev msgWebhookEvento, cuerpo []byte, tipo string) {
+	cliente, err := s.msgClienteSinRequest(ctl)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	msgID := msgIDDeEvento(ev, cuerpo)
+	datos, _, err := cliente.DescargarMedia(ctx, dispositivo.DeviceID, msgID)
+	if err != nil {
+		return
+	}
+	ext := ".bin"
+	switch tipo {
+	case "image":
+		ext = ".jpg"
+	case "audio":
+		ext = ".ogg"
+	case "video":
+		ext = ".mp4"
+	case "document":
+		ext = ".pdf"
+	}
+	guardado, err := s.msgGuardarMedia(dispositivo.Tenant, "entrante"+ext, datos)
+	if err != nil {
+		return
+	}
+	_, _ = db.Exec(`UPDATE msg_message SET media_path=? WHERE device_id=? AND message_id=?`,
+		guardado, dispositivo.DeviceID, msgID)
 }
 
 // firmaWebhookValida compara la firma en tiempo constante.

@@ -18,8 +18,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -233,8 +236,131 @@ func (c *Cliente) VerificarNumero(ctx context.Context, deviceID, telefono string
 	return false, &Error{Mensaje: "el daemon no dijo si el número está registrado"}
 }
 
-// Descargar trae el contenido de un enlace del daemon (el QR es el caso
-// normal). Acepta `data:` en línea, una URL absoluta o una ruta relativa al
+// ---------- Media ----------
+
+// EnviarImagen manda una imagen con un pie opcional.
+func (c *Cliente) EnviarImagen(ctx context.Context, deviceID, telefono, archivo, pie string) (Envio, error) {
+	return c.enviarMedia(ctx, "/send/image", "image", deviceID, telefono, archivo, pie)
+}
+
+// EnviarAudio manda una nota de voz o un audio.
+func (c *Cliente) EnviarAudio(ctx context.Context, deviceID, telefono, archivo, pie string) (Envio, error) {
+	return c.enviarMedia(ctx, "/send/audio", "audio", deviceID, telefono, archivo, pie)
+}
+
+// EnviarVideo manda un video.
+func (c *Cliente) EnviarVideo(ctx context.Context, deviceID, telefono, archivo, pie string) (Envio, error) {
+	return c.enviarMedia(ctx, "/send/video", "video", deviceID, telefono, archivo, pie)
+}
+
+// EnviarArchivo manda un documento.
+func (c *Cliente) EnviarArchivo(ctx context.Context, deviceID, telefono, archivo, pie string) (Envio, error) {
+	return c.enviarMedia(ctx, "/send/file", "file", deviceID, telefono, archivo, pie)
+}
+
+// enviarMedia arma el multipart y lo entrega. El campo del archivo se llama
+// como el tipo (`image`, `audio`, `video`, `file`), que es el contrato de GOWA.
+func (c *Cliente) enviarMedia(ctx context.Context, ruta, campo, deviceID, telefono, archivo, pie string) (Envio, error) {
+	f, err := os.Open(archivo)
+	if err != nil {
+		return Envio{}, &Error{Mensaje: "no se pudo abrir el archivo: " + err.Error()}
+	}
+	defer f.Close()
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	_ = w.WriteField("phone", telefono)
+	if strings.TrimSpace(pie) != "" {
+		_ = w.WriteField("caption", pie)
+	}
+	parte, err := w.CreateFormFile(campo, filepath.Base(archivo))
+	if err != nil {
+		return Envio{}, &Error{Mensaje: "no se pudo preparar el archivo: " + err.Error()}
+	}
+	if _, err := io.Copy(parte, f); err != nil {
+		return Envio{}, &Error{Mensaje: "no se pudo leer el archivo: " + err.Error()}
+	}
+	if err := w.Close(); err != nil {
+		return Envio{}, &Error{Mensaje: "no se pudo cerrar el formulario: " + err.Error()}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+ruta, &buf)
+	if err != nil {
+		return Envio{}, &Error{Mensaje: "dirección del servicio inválida: " + err.Error()}
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "ERPGo-mensajeria/1")
+	if c.Usuario != "" {
+		req.SetBasicAuth(c.Usuario, c.Password)
+	}
+	if deviceID != "" {
+		req.Header.Set("X-Device-Id", deviceID)
+	}
+	cliente := c.HTTP
+	if cliente == nil {
+		cliente = &http.Client{Timeout: 60 * time.Second}
+	}
+	resp, err := cliente.Do(req)
+	if err != nil {
+		return Envio{}, &Error{Mensaje: "no se pudo hablar con el servicio: " + err.Error(), Temporal: true}
+	}
+	defer resp.Body.Close()
+	bruto, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return Envio{}, errorDeRespuesta(resp.StatusCode, bruto)
+	}
+	var m map[string]interface{}
+	_ = json.Unmarshal(bruto, &m)
+	var s sobre
+	if json.Unmarshal(bruto, &s) == nil && len(s.Results) > 0 {
+		_ = json.Unmarshal(s.Results, &m)
+	}
+	return Envio{
+		MensajeID: textoDe(m, "message_id", "id", "msg_id"),
+		Estado:    textoDe(m, "status", "state"),
+	}, nil
+}
+
+// DescargarMedia baja el archivo de un mensaje entrante. El daemon lo sirve
+// desde /message/{id}/download, con la misma autenticación que el resto.
+func (c *Cliente) DescargarMedia(ctx context.Context, deviceID, messageID string) ([]byte, string, error) {
+	if strings.TrimSpace(messageID) == "" {
+		return nil, "", &Error{Mensaje: "el mensaje no tiene id para descargar su archivo"}
+	}
+	ruta := "/message/" + url.PathEscape(messageID) + "/download"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+ruta, nil)
+	if err != nil {
+		return nil, "", &Error{Mensaje: "dirección del servicio inválida: " + err.Error()}
+	}
+	if c.Usuario != "" {
+		req.SetBasicAuth(c.Usuario, c.Password)
+	}
+	if deviceID != "" {
+		req.Header.Set("X-Device-Id", deviceID)
+	}
+	cliente := c.HTTP
+	if cliente == nil {
+		cliente = &http.Client{Timeout: 60 * time.Second}
+	}
+	resp, err := cliente.Do(req)
+	if err != nil {
+		return nil, "", &Error{Mensaje: "no se pudo descargar el archivo: " + err.Error(), Temporal: true}
+	}
+	defer resp.Body.Close()
+	bruto, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, "", errorDeRespuesta(resp.StatusCode, bruto)
+	}
+	tipo := resp.Header.Get("Content-Type")
+	if tipo == "" {
+		tipo = "application/octet-stream"
+	}
+	return bruto, tipo, nil
+}
+
+// Descargar trae el contenido de un enlace del daemon (el QR es el caso normal).
+// Acepta `data:` en línea, una URL absoluta o una ruta relativa al
 // daemon. Devuelve también el tipo de contenido para servirlo tal cual.
 //
 // EL NAVEGADOR NUNCA HABLA CON EL DAEMON: el ERP descarga la imagen y la sirve

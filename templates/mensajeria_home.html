@@ -24,8 +24,11 @@
                 <form id="formEnviar" class="form-inline" style="display:none;width:100%">
                     <input type="hidden" id="env_device">
                     <input type="hidden" id="env_jid">
+                    <input type="file" id="env_archivo" style="display:none"
+                           accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt">
+                    <button type="button" class="btn btn-default" id="btnAdjuntar" title="Adjuntar archivo">📎</button>
                     <input type="text" class="form-control" id="env_texto"
-                           placeholder="Escriba un mensaje…" autocomplete="off" style="width:82%">
+                           placeholder="Escriba un mensaje…" autocomplete="off" style="width:72%">
                     <button type="submit" class="btn btn-primary">Enviar</button>
                 </form>
                 <div id="chatMsg" class="alert" style="display:none;margin-top:8px"></div>
@@ -171,7 +174,45 @@
 
             var cuerpo = m.body || '';
             if (!cuerpo && m.media_type) { cuerpo = '[' + m.media_type + ']'; }
-            burbuja.textContent = cuerpo;
+
+            // El archivo se sirve por una ruta autenticada del ERP, no por una
+            // URL del daemon. Si no se pudo descargar, queda el tipo entre
+            // corchetes en vez de un enlace roto.
+            if (m.has_media) {
+                var src = '/mensajeria/media/' + m.id;
+                var media;
+                if (m.media_type === 'image') {
+                    media = document.createElement('img');
+                    media.src = src;
+                    media.alt = 'Imagen';
+                    media.style.maxWidth = '240px';
+                    media.style.display = 'block';
+                    media.style.marginBottom = '4px';
+                } else if (m.media_type === 'audio') {
+                    media = document.createElement('audio');
+                    media.controls = true;
+                    media.src = src;
+                    media.style.display = 'block';
+                } else if (m.media_type === 'video') {
+                    media = document.createElement('video');
+                    media.controls = true;
+                    media.src = src;
+                    media.style.maxWidth = '240px';
+                    media.style.display = 'block';
+                } else {
+                    media = document.createElement('a');
+                    media.href = src;
+                    media.target = '_blank';
+                    media.textContent = '📄 Abrir documento';
+                    media.style.display = 'block';
+                }
+                burbuja.appendChild(media);
+            }
+            if (cuerpo) {
+                var texto = document.createElement('span');
+                texto.textContent = cuerpo;
+                burbuja.appendChild(texto);
+            }
 
             var pie = document.createElement('div');
             pie.style.fontSize = '11px';
@@ -226,6 +267,37 @@
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             document.getElementById('formEnviar').requestSubmit();
+        }
+    });
+
+    document.getElementById('btnAdjuntar').addEventListener('click', function () {
+        document.getElementById('env_archivo').click();
+    });
+
+    document.getElementById('env_archivo').addEventListener('change', async function () {
+        var input = this;
+        if (!input.files.length || !chatActivo) { return; }
+        var datos = new FormData();
+        datos.append('device_id', chatActivo.device);
+        datos.append('jid', chatActivo.jid);
+        datos.append('texto', document.getElementById('env_texto').value.trim());
+        datos.append('archivo', input.files[0]);
+        try {
+            var res = await fetch('/mensajeria/adjuntar', {
+                method: 'POST',
+                headers: { 'X-CSRF-Token': csrfToken() },
+                body: datos
+            });
+            var r = {};
+            try { r = await res.json(); } catch (e) { /* sin JSON */ }
+            if (!res.ok) { throw new Error(r.error || ('Error HTTP ' + res.status)); }
+            input.value = '';
+            document.getElementById('env_texto').value = '';
+            aviso(r.msg || 'Archivo en cola.', true);
+            await cargarMensajes(true);
+        } catch (err) {
+            aviso(err.message, false);
+            input.value = '';
         }
     });
 

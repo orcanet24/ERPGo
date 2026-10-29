@@ -150,7 +150,7 @@ func (s *Server) mensajeriaMensajesJSON(w http.ResponseWriter, r *http.Request) 
 	}
 
 	rows, err := s.dbFor(r).Query(`SELECT id, direction, IFNULL(body,''), IFNULL(status,''),
-		IFNULL(media_type,''), IFNULL(created_at,'') FROM msg_message
+		IFNULL(media_type,''), IFNULL(media_path,''), IFNULL(created_at,'') FROM msg_message
 		WHERE device_id = ? AND chat_jid = ? ORDER BY id ASC LIMIT 300`, device, jid)
 	if err != nil {
 		jsonError(w, "No se pudo leer el historial.", http.StatusInternalServerError)
@@ -161,13 +161,13 @@ func (s *Server) mensajeriaMensajesJSON(w http.ResponseWriter, r *http.Request) 
 	mensajes := []map[string]interface{}{}
 	for rows.Next() {
 		var id int64
-		var direccion, cuerpo, estado, media, cuando string
-		if err := rows.Scan(&id, &direccion, &cuerpo, &estado, &media, &cuando); err != nil {
+		var direccion, cuerpo, estado, media, mediaPath, cuando string
+		if err := rows.Scan(&id, &direccion, &cuerpo, &estado, &media, &mediaPath, &cuando); err != nil {
 			continue
 		}
 		mensajes = append(mensajes, map[string]interface{}{
 			"id": id, "direction": direccion, "body": cuerpo, "status": estado,
-			"media_type": media, "created_at": cuando,
+			"media_type": media, "has_media": mediaPath != "", "created_at": cuando,
 		})
 	}
 	writeJSON(w, map[string]interface{}{"mensajes": mensajes})
