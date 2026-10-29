@@ -426,7 +426,7 @@ func (w *Wizard) runFreshInstall() error {
 		DBProvisionUser: dbUser, DBProvisionPassword: dbPass,
 		DBSQLitePath: "data/empresas/default.sqlite3",
 		ServerHost:   "127.0.0.1", ServerPort: strconv.Itoa(serverPort), GRPCPort: strconv.Itoa(grpcPort),
-		JWTSecret: jwtSecret, JWTExpiry: 24,
+		MasterKey: jwtSecret, JWTExpiry: 24,
 		AppName: "ERPGo", AppURL: fmt.Sprintf("http://localhost:%d", serverPort),
 		AppEnv: "production", UploadPath: "./uploads",
 		LogEnabled: true, LogLevel: "info", LogFile: "logs/erpgow.log",
@@ -442,7 +442,7 @@ func (w *Wizard) runFreshInstall() error {
 	if w.askYesNo("¿Activar la empresa DEMO de práctica (entrenamiento)? Recomendado: sí. Necesitará su propia base de datos") {
 		if err := w.createDemoTenant(&configs.Config{
 			DBHost: dbHost, DBPort: dbPort, DBUser: dbUser, DBPassword: dbPass,
-			DBName: mainDBName, DBMasterTenantCode: masterCode, JWTSecret: jwtSecret,
+			DBName: mainDBName, DBMasterTenantCode: masterCode, MasterKey: jwtSecret,
 		}); err != nil {
 			fmt.Printf("   DEMO no activada: %v (continúe la instalación; puede activarla después con --setup, opción 3)\n", err)
 		}
@@ -697,7 +697,7 @@ func (w *Wizard) createCompany(cfg *configs.Config) error {
 	// que las globales, así que el login de esta empresa usa SU usuario MySQL.
 	// Las claves viajan encriptadas (AES-256-GCM) con la clave derivada del
 	// secreto JWT, igual que el aprovisionamiento web.
-	dbPassEnc, err := security.Encrypt(dbPass, security.DeriveKey(cfg.JWTSecret))
+	dbPassEnc, err := security.Encrypt(dbPass, security.DeriveKey(cfg.MasterKey))
 	if err != nil {
 		return fmt.Errorf("encriptando credenciales de la empresa: %w", err)
 	}
@@ -747,7 +747,7 @@ func escribirArchivoEmpresa(cfg *configs.Config, code, kind, dbHost string, dbPo
 		Port:   dbPort,
 		DBName: dbName,
 		DBUser: dbUser,
-	}, dbPass, cfg.JWTSecret)
+	}, dbPass, cfg.MasterKey)
 	if err != nil {
 		fmt.Printf("   aviso: no se pudo escribir config/empresas/%s.env (%v) — el catálogo mantiene las credenciales\n", code, err)
 		return
@@ -840,7 +840,7 @@ func (w *Wizard) createDemoTenant(cfg *configs.Config) error {
 		logNoFatal("ejercicio fiscal de la DEMO", err)
 	}
 
-	dbPassEnc, err := security.Encrypt(dbPass, security.DeriveKey(cfg.JWTSecret))
+	dbPassEnc, err := security.Encrypt(dbPass, security.DeriveKey(cfg.MasterKey))
 	if err != nil {
 		return fmt.Errorf("encriptando credenciales de la DEMO: %w", err)
 	}
@@ -950,7 +950,7 @@ func (w *Wizard) actualizarCredencialesEmpresa(cfg *configs.Config) error {
 	}
 
 	if dbPass != "" {
-		enc, err := security.Encrypt(dbPass, security.DeriveKey(cfg.JWTSecret))
+		enc, err := security.Encrypt(dbPass, security.DeriveKey(cfg.MasterKey))
 		if err != nil {
 			return fmt.Errorf("encriptando la clave: %w", err)
 		}

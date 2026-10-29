@@ -119,6 +119,11 @@ func finFechaCorta(v string) string {
 // finDiasDesde devuelve la antigüedad en días de una fecha ya guardada. -1
 // significa «no se pudo leer la fecha», que es distinto de 0 (es de hoy) y no se
 // puede confundir: una fecha ilegible no debe generar una alerta por mora.
+//
+// Compara fechas de calendario (día, mes, año local), no horas absolutas:
+// time.Parse deja la fecha a medianoche UTC y time.Since la compararía con el
+// reloj real, lo que en UTC-4 suma un día de más cada noche después de las
+// 20:00 locales y por poco rompe el reporte de antigüedad.
 func finDiasDesde(fecha string) int {
 	f := finFechaCorta(fecha)
 	if len(f) != 10 {
@@ -128,7 +133,15 @@ func finDiasDesde(fecha string) int {
 	if err != nil {
 		return -1
 	}
-	d := int(time.Since(t).Hours() / 24)
+	// Truncar «hoy» al inicio del día local y parsearlo igual (medianoche UTC),
+	// para que la diferencia sea entera en días de calendario sin saltos por zona
+	// horaria ni por la hora del día.
+	hoyLocal := time.Now().Format("2006-01-02")
+	hoy, err := time.Parse("2006-01-02", hoyLocal)
+	if err != nil {
+		return -1
+	}
+	d := int(hoy.Sub(t).Hours() / 24)
 	if d < 0 {
 		return 0
 	}

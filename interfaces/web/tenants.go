@@ -343,7 +343,7 @@ func (s *Server) openTenantDB(code string) (*sql.DB, error) {
 		claveResuelta := ""
 		switch {
 		case fc.PasswordEnc != "":
-			if plain, derr := security.Decrypt(fc.PasswordEnc, security.DeriveKey(s.config.JWTSecret)); derr != nil {
+			if plain, derr := security.Decrypt(fc.PasswordEnc, security.DeriveKey(s.config.MasterKey)); derr != nil {
 				log.Printf("tenant %q: clave del archivo no descencripta (%v) — sigue el catálogo", code, derr)
 			} else {
 				claveResuelta = plain
