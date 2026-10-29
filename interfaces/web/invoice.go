@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -748,8 +749,12 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 		// catálogo; una factura no lo cambia. Solo se rellena si el producto
 		// aún no tiene precio, para que un producto nuevo facture algo y no
 		// cero por un campo vacío.
-		_, _ = tx.Exec(`UPDATE product_information SET price = ? WHERE product_id = ? AND (price IS NULL OR price = 0)`,
-			fmt.Sprintf("%.2f", rate), pid)
+		if _, err := tx.Exec(`UPDATE product_information SET price = ? WHERE product_id = ? AND (price IS NULL OR price = 0)`,
+			fmt.Sprintf("%.2f", rate), pid); err != nil {
+			_ = tx.Rollback()
+			jsonError(w, fmt.Sprintf("actualizar precio del producto: %v", err), 500)
+			return
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1151,9 +1156,11 @@ func (s *Server) walkingCustomer(w http.ResponseWriter, r *http.Request) {
 		if err2 == nil {
 			cid, _ := res.LastInsertId()
 			hc, _ := nextHeadCodeTx(tx, "113100", "1131000001")
-			_, _ = tx.Exec(`INSERT INTO acc_coa (HeadCode, HeadName, PHeadName, HeadLevel, IsActive, IsTransaction, IsGL,
+			if _, err := tx.Exec(`INSERT INTO acc_coa (HeadCode, HeadName, PHeadName, HeadLevel, IsActive, IsTransaction, IsGL,
 				HeadType, IsBudget, IsDepreciation, DepreciationRate, customer_id, CreateBy, CreateDate, UpdateBy, UpdateDate, isSubType, subType)
-				VALUES (?,?,?,?,1,1,0,'A',0,0,0,?,?,?,?,?,0,1)`, hc, fmt.Sprintf("%d-Walking Customer", cid), "Customer Receivable", 4, cid, "1", now(), "1", now())
+				VALUES (?,?,?,?,1,1,0,'A',0,0,0,?,?,?,?,?,0,1)`, hc, fmt.Sprintf("%d-Walking Customer", cid), "Customer Receivable", 4, cid, "1", now(), "1", now()); err != nil {
+				log.Printf("factura: no se pudo crear la cuenta contable del cliente genérico: %v", err)
+			}
 			_ = tx.Commit()
 			id = cid
 			name = sql.NullString{String: "Walking Customer", Valid: true}

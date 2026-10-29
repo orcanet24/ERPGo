@@ -8,6 +8,7 @@ package web
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"time"
 )
 
@@ -75,5 +76,7 @@ func (s *Server) ConvertirUSDaVES(tx interface {
 func (s *Server) RegistrarAuditoriaTasa(db interface {
 	Exec(string, ...interface{}) (sql.Result, error)
 }, fecha, moneda string, tasa float64, fuente, usuario string, invoiceID int) {
-	_, _ = db.Exec(`INSERT INTO exchange_rate_audit (rate_date, currency, rate, source, applied_by, applied_at, invoice_id) VALUES (?, ?, ?, ?, ?, NOW(), ?)`, fecha, moneda, tasa, fuente, usuario, invoiceID)
+	if _, err := db.Exec(`INSERT INTO exchange_rate_audit (rate_date, currency, rate, source, applied_by, applied_at, invoice_id) VALUES (?, ?, ?, ?, ?, NOW(), ?)`, fecha, moneda, tasa, fuente, usuario, invoiceID); err != nil {
+		log.Printf("multi-moneda: no se pudo registrar la auditoría de tasa para factura %d: %v", invoiceID, err)
+	}
 }

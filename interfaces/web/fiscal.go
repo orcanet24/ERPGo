@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -381,15 +382,19 @@ func seedPaymentMethodCOA(db *sql.DB) {
 		"credito":       customer,
 	}
 	for code, coa := range mappings {
-		_, _ = db.Exec(`UPDATE payment_method SET coa_id = ? WHERE code = ? AND (coa_id IS NULL OR coa_id = 0)`, coa, code)
+		if _, err := db.Exec(`UPDATE payment_method SET coa_id = ? WHERE code = ? AND (coa_id IS NULL OR coa_id = 0)`, coa, code); err != nil {
+			log.Printf("fiscal: no se pudo asignar la cuenta contable al método de pago %s: %v", code, err)
+		}
 	}
 }
 
 // seedFiscalSeries crea las series base si la tabla está vacía.
 func seedFiscalSeries(db *sql.DB, dialect string) {
 	seed := func(code, name string) {
-		_, _ = db.Exec(insertIgnorePrefix(dialect)+"fiscal_series (code, name, prefix, next_no, control_prefix, control_next, is_active, created_at) "+
-			"VALUES (?,?,?,?,?,?,1,?)", code, name, "", 1, "00", 1, now())
+		if _, err := db.Exec(insertIgnorePrefix(dialect)+"fiscal_series (code, name, prefix, next_no, control_prefix, control_next, is_active, created_at) "+
+			"VALUES (?,?,?,?,?,?,1,?)", code, name, "", 1, "00", 1, now()); err != nil {
+			log.Printf("fiscal: no se pudo crear la serie fiscal %s (%s): %v", code, name, err)
+		}
 	}
 	seed("FACT", "Facturas de venta")
 	seed("NC", "Notas de crédito")

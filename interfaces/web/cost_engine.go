@@ -762,7 +762,10 @@ func (s *Server) cerrarCostoDePeriodo(db *sql.DB, periodo, usuario string) (int,
 	// Se borra lo que hubiera de un intento anterior. El cierre es idempotente:
 	// re-cerrar el mismo mes devuelve siempre las mismas filas, y una corrida a
 	// medias no deja un snapshot a medio componer.
-	_, _ = tx.Exec(`DELETE FROM cost_snapshot WHERE period = ?`, periodo)
+	if _, err := tx.Exec(`DELETE FROM cost_snapshot WHERE period = ?`, periodo); err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("limpiar snapshot de costos: %w", err)
+	}
 
 	// BUG 0.8, ENCONTRADO AL CARGAR LA CARNICERÍA.
 	//

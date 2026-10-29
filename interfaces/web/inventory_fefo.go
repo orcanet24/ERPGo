@@ -25,6 +25,7 @@ package web
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -256,8 +257,10 @@ func (s *Server) LotesActivos(r *http.Request, productID int64) ([]Lot, error) {
 		// respuestas distintas el mismo día.
 		if l.DaysLeft(asOf) < 0 && l.Status != "expired" {
 			l.Status = "expired"
-			_, _ = s.dbFor(r).Exec(
-				`UPDATE product_lot SET status = 'expired' WHERE id = ?`, l.ID)
+			if _, err := s.dbFor(r).Exec(
+				`UPDATE product_lot SET status = 'expired' WHERE id = ?`, l.ID); err != nil {
+				log.Printf("inventario: no se pudo marcar el lote %d como vencido: %v", l.ID, err)
+			}
 		}
 		lotes = append(lotes, l)
 	}

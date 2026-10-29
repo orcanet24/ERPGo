@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -170,7 +171,11 @@ func (s *Server) deliveryOrderSave(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		_, _ = tx.Exec("DELETE FROM delivery_order_detail WHERE delivery_order_id = ?", doID)
+		if _, err := tx.Exec("DELETE FROM delivery_order_detail WHERE delivery_order_id = ?", doID); err != nil {
+			_ = tx.Rollback()
+			jsonError(w, "no se pudo limpiar las líneas de la orden de despacho", 500)
+			return
+		}
 	} else {
 		res, err := tx.Exec(`
 			INSERT INTO delivery_order (customer_id, warehouse_id, status, date, notes, created_at)
@@ -235,7 +240,10 @@ func (s *Server) deliveryOrderDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = s.dbFor(r).Exec("DELETE FROM delivery_order_detail WHERE delivery_order_id = ?", id)
+	if _, err := s.dbFor(r).Exec("DELETE FROM delivery_order_detail WHERE delivery_order_id = ?", id); err != nil {
+		jsonError(w, "no se pudo eliminar las líneas de la orden de despacho", 500)
+		return
+	}
 	_, err := s.dbFor(r).Exec("DELETE FROM delivery_order WHERE id = ?", id)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
@@ -302,10 +310,14 @@ func (s *Server) deliveryOrderUpdateStatus(w http.ResponseWriter, r *http.Reques
 				var productID int
 				var qty float64
 				rows.Scan(&productID, &qty)
-				_, _ = tx.Exec(`
+				if _, err := tx.Exec(`
 					INSERT INTO stock_movement (movement_type, product_id, warehouse_id, quantity, unit_cost, reference_type, reference_id, reference_no, date, is_posted, posted_at, created_at)
 					VALUES ('delivery', ?, 'WH-MAIN', ?, 0, 'delivery_order', ?, CONCAT('DO-',?), CURDATE(), 1, NOW(), NOW())`,
-					productID, qty, id, id)
+					productID, qty, id, id); err != nil {
+					_ = tx.Rollback()
+					jsonError(w, fmt.Sprintf("movimiento de inventario: %v", err), 500)
+					return
+				}
 			}
 			rows.Close()
 		}

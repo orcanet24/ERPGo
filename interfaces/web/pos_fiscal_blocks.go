@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -152,11 +153,16 @@ func (s *Server) reserveFiscalBlockHandler(w http.ResponseWriter, r *http.Reques
 
 	blockID, _ := result.LastInsertId()
 
-	// Sincronizar la serie fiscal central para que no se solapen futuros bloques
-	_, _ = db.Exec(
+	// Sincronizar la serie fiscal central para que no se solapen futuros bloques.
+	// Si falla, el bloque reservado se solaparía con futuros → error fiscal (SENIAT).
+	if _, err := db.Exec(
 		`UPDATE fiscal_series SET control_next = ? WHERE code = ? AND control_next <= ?`,
 		blockEnd+1, req.Series, blockEnd+1,
-	)
+	); err != nil {
+		log.Printf("fiscal: no se pudo sincronizar el contador de la serie %s tras reservar bloque %d: %v", req.Series, blockID, err)
+		writeJSON(w, ReserveBlockResponse{Success: false, Message: fmt.Sprintf("fiscal sync: %v", err)})
+		return
+	}
 
 	writeJSON(w, ReserveBlockResponse{
 		Success:    true,
@@ -213,8 +219,13 @@ func (s *Server) consumeFiscalNumberHandler(w http.ResponseWriter, r *http.Reque
 		nextNum = blockStart
 	}
 	if nextNum > blockEnd {
-		// Marcar bloque como agotado
-		_, _ = db.Exec(`UPDATE pos_fiscal_blocks SET status = 'exhausted' WHERE id = ?`, blockID)
+		// Marcar bloque como agotado. Si falla, el bloque sigue "activo" y los
+		// números se reutilizan → error fiscal (SENIAT).
+		if _, err := db.Exec(`UPDATE pos_fiscal_blocks SET status = 'exhausted' WHERE id = ?`, blockID); err != nil {
+			log.Printf("fiscal: no se pudo marcar el bloque %d como agotado: %v", blockID, err)
+			writeJSON(w, ConsumeFiscalNumberResponse{Success: false, Message: fmt.Sprintf("fiscal close: %v", err)})
+			return
+		}
 		writeJSON(w, ConsumeFiscalNumberResponse{Success: false, Message: "block exhausted, request new block"})
 		return
 	}

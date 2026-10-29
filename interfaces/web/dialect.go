@@ -1,6 +1,9 @@
 package web
 
-import "database/sql"
+import (
+	"database/sql"
+	"log"
+)
 
 // ---------- SQL (SQLite único) ----------
 // ERPGo corre sobre SQLite en las dos ediciones (PyME y Enterprise): una
@@ -64,8 +67,10 @@ func (s *Server) ensureFiscalSeries(tx *sql.Tx, series string) error {
 }
 
 // upsertPaymentSummary recalcula el resumen de pagos de una factura.
+// Si falla, lo logguea: un resumen desactualizado es preferible a un error
+// silencioso que oculta la inconsistencia entre pagos reales y reportes.
 func (s *Server) upsertPaymentSummary(db *sql.DB, invoiceID int64) {
-	_, _ = db.Exec(`
+	if _, err := db.Exec(`
 		INSERT INTO invoice_payment_summary (invoice_id, cash_session_id, method_id, amount)
 		SELECT i.id, i.cash_session_id, pm.id, SUM(t.Debit)
 		FROM invoice i
@@ -73,5 +78,7 @@ func (s *Server) upsertPaymentSummary(db *sql.DB, invoiceID int64) {
 		JOIN payment_method pm ON pm.coa_id = t.COAID
 		WHERE i.id = ? AND t.Debit > 0
 		GROUP BY i.id, i.cash_session_id, pm.id
-		ON DUPLICATE KEY UPDATE amount = VALUES(amount)`, invoiceID)
+		ON DUPLICATE KEY UPDATE amount = VALUES(amount)`, invoiceID); err != nil {
+		log.Printf("cartera: no se pudo actualizar el resumen de pagos de la factura %d: %v", invoiceID, err)
+	}
 }

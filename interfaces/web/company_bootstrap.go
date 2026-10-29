@@ -130,7 +130,9 @@ func ensureCurrentFinancialYear(db *sql.DB) {
 	if n > 0 {
 		return
 	}
-	_, _ = db.Exec(`INSERT INTO financial_year (yearName, startDate, endDate, isCloseReq, status, created_by)
-		VALUES (?, ?, ?, 0, 1, 1)`, name, fmt.Sprintf("%d-01-01", year), fmt.Sprintf("%d-12-31", year))
+	if _, err := db.Exec(`INSERT INTO financial_year (yearName, startDate, endDate, isCloseReq, status, created_by)
+		VALUES (?, ?, ?, 0, 1, 1)`, name, fmt.Sprintf("%d-01-01", year), fmt.Sprintf("%d-12-31", year)); err != nil {
+		log.Printf("bootstrap: no se pudo crear el año fiscal %s: %v", name, err)
+	}
 }
 

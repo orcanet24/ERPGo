@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
+	"log"
 	"math/big"
 	"strings"
 	"time"
@@ -223,12 +224,16 @@ func InitializeAdminUser(db *sql.DB, dialect, username, password string) error {
 		if maxHC.Valid && maxHC.Int64 > 0 {
 			headcode = maxHC.Int64 + 1
 		}
-		_, _ = tx.Exec(`INSERT INTO acc_coa (HeadCode, HeadName, PHeadName, HeadLevel, IsActive, IsTransaction,
+		if _, err := tx.Exec(`INSERT INTO acc_coa (HeadCode, HeadName, PHeadName, HeadLevel, IsActive, IsTransaction,
 			IsGL, HeadType, IsBudget, IsDepreciation, DepreciationRate, customer_id, CreateBy, CreateDate, isSubType, subType)
 			VALUES (?,?,?,?,1,1,0,'A',0,0,0,?,?,?,0,1)`,
-			headcode, fmt.Sprintf("%d-Walking Customer", cid), "Customer Receivable", 4, cid, "1", now())
-		_, _ = tx.Exec(`INSERT INTO acc_subcode (subTypeId, name, referenceNo, status, created_by, created_date)
-			VALUES (3, 'Walking Customer', ?, 1, 1, ?)`, cid, time.Now().Format("2006-01-02"))
+			headcode, fmt.Sprintf("%d-Walking Customer", cid), "Customer Receivable", 4, cid, "1", now()); err != nil {
+			log.Printf("admin: no se pudo crear la cuenta contable del cliente genérico: %v", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO acc_subcode (subTypeId, name, referenceNo, status, created_by, created_date)
+			VALUES (3, 'Walking Customer', ?, 1, 1, ?)`, cid, time.Now().Format("2006-01-02")); err != nil {
+			log.Printf("admin: no se pudo crear la subcuenta del cliente genérico: %v", err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

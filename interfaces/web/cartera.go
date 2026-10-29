@@ -361,8 +361,12 @@ func (s *Server) carteraDelete(w http.ResponseWriter, r *http.Request) {
 			if newPaid < 0 {
 				newPaid = 0
 			}
-			_, _ = tx.Exec(`UPDATE invoice SET paid_amount = ?, due_amount = ? WHERE id = ?`,
-				newPaid, newDue, invInternalID)
+			if _, err := tx.Exec(`UPDATE invoice SET paid_amount = ?, due_amount = ? WHERE id = ?`,
+				newPaid, newDue, invInternalID); err != nil {
+				_ = tx.Rollback()
+				jsonError(w, fmt.Sprintf("revertir factura: %v", err), 500)
+				return
+			}
 		}
 	}
 
