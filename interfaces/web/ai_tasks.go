@@ -214,15 +214,35 @@ func (s *Server) aiTaskSave(w http.ResponseWriter, r *http.Request) {
 
 	idStr := r.FormValue("id")
 	if idStr != "" {
-		id, _ := strconv.ParseInt(idStr, 10, 64)
-		if _, err := s.dbFor(r).Exec(`UPDATE ai_task SET agent_id=?, name=?, instructions=?, schedule_type=?,
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil || id <= 0 {
+			jsonError(w, "Identificador de tarea inválido", 400)
+			return
+		}
+		res, err := s.dbFor(r).Exec(`UPDATE ai_task SET agent_id=?, name=?, instructions=?, schedule_type=?,
 			schedule_value=?, enabled=? WHERE id=?`,
-			agentID, name, instructions, scheduleType, scheduleValue, enabled, id); err != nil {
+			agentID, name, instructions, scheduleType, scheduleValue, enabled, id)
+		if err != nil {
 			jsonError(w, err.Error(), 500)
 			return
 		}
+		if n, err := res.RowsAffected(); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		} else if n == 0 {
+			// SQLite y MySQL pueden reportar cero cuando la fila existe pero
+			// todos los valores ya eran iguales. Solo es 404 si no hay fila.
+			var existe int
+			if err := s.dbFor(r).QueryRow(`SELECT 1 FROM ai_task WHERE id = ?`, id).Scan(&existe); errors.Is(err, sql.ErrNoRows) {
+				jsonError(w, "Tarea no encontrada", 404)
+				return
+			} else if err != nil {
+				jsonError(w, err.Error(), 500)
+				return
+			}
+		}
 		s.aiAudit(s.sessionFromRequest(r), creator, "update", "ai_tasks", "ai_task", fmt.Sprintf("%d", id), nil, map[string]interface{}{"name": name})
-		writeJSON(w, map[string]interface{}{"status": 1, "msg": "Tarea actualizada", "redirect": saveRedirect(r, "/ai/tasks")})
+		writeJSON(w, map[string]interface{}{"status": 1, "msg": "Tarea actualizada", "id": id, "redirect": saveRedirect(r, "/ai/tasks")})
 		return
 	}
 	res, err := s.dbFor(r).Exec(`INSERT INTO ai_task (agent_id, name, instructions, schedule_type, schedule_value, enabled, created_by)
@@ -233,7 +253,10 @@ func (s *Server) aiTaskSave(w http.ResponseWriter, r *http.Request) {
 	}
 	newID, _ := res.LastInsertId()
 	s.aiAudit(s.sessionFromRequest(r), creator, "create", "ai_tasks", "ai_task", fmt.Sprintf("%d", newID), nil, map[string]interface{}{"name": name, "agent_id": agentID})
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Tarea creada", "id": newID})
+	writeJSON(w, map[string]interface{}{
+		"status": 1, "msg": "Tarea creada", "id": newID,
+		"redirect": saveRedirect(r, "/ai/tasks"),
+	})
 }
 
 // aiTaskDelete elimina la tarea (las corridas quedan como auditoría).

@@ -37,7 +37,7 @@ $(function () {
                 return '<span class="label ' + cls + '">' + (d.last_status || '') + '</span>';
             }},
             { data: null, orderable: false, render: function (d) {
-                var html = '<button class="btn btn-success btn-xs" onclick="runTask(' + d.id + ')"><i class="fa fa-play"></i> Ejecutar</button>';
+                var html = '<button class="btn btn-success btn-xs" onclick="runTask(' + d.id + ', this)"><i class="fa fa-play"></i> Ejecutar</button>';
                 if (d.last_run_id) { html += ' <a class="btn btn-info btn-xs" href="/ai/tasks/runs/' + d.last_run_id + '"><i class="fa fa-history"></i> Última</a>'; }
                 html += ' <a class="btn btn-primary btn-xs" href="/ai/tasks/edit/' + d.id + '"><i class="fa fa-edit"></i></a>';
                 html += ' <button class="btn btn-danger btn-xs" onclick="delTask(' + d.id + ')"><i class="fa fa-trash"></i></button>';
@@ -46,19 +46,44 @@ $(function () {
         ]
     });
 });
-function runTask(id) {
+function runTask(id, button) {
     if (!confirm('¿Ejecutar la tarea ahora? El agente trabajará en secuencia con sus herramientas.')) return;
-    $.post('/ai/tasks/run/' + id, function (r) {
-        if (r.status === 1) { window.location = '/ai/tasks/runs/' + r.run_id; }
-        else { alert(r.error || 'Error al ejecutar'); }
-    });
+    var tabla = $('#taskTable').DataTable();
+    var $boton = $(button);
+    var fila = $boton.closest('tr');
+    var celdaEstado = fila.children('td').eq(4);
+    var textoOriginal = $boton.html();
+    $boton.prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> Ejecutando…');
+    celdaEstado.html('<span class="label label-info">En ejecución…</span>');
+
+    $.ajax({ url: '/ai/tasks/run/' + id, method: 'POST', dataType: 'json' })
+        .done(function (r) {
+            tabla.ajax.reload(function () {
+                if (r.status === 1) {
+                    toastr.success((r.msg || 'Tarea ejecutada') + '. El estado y la última corrida ya están actualizados.');
+                } else {
+                    toastr.error(r.error || 'No se pudo ejecutar la tarea.');
+                }
+            }, false);
+        })
+        .fail(function (x) {
+            var error = x.responseJSON || {};
+            tabla.ajax.reload(function () {
+                toastr.error(error.error || 'No se pudo ejecutar la tarea. Revise la conexión e inténtelo de nuevo.');
+            }, false);
+        })
+        .always(function () {
+            if ($boton.closest('tr').length) { $boton.prop('disabled', false).html(textoOriginal); }
+        });
 }
 function delTask(id) {
     if (!confirm('¿Eliminar esta tarea?')) return;
     $.post('/ai/tasks/delete/' + id, function (r) {
-        if (r.status === 1) { $('#taskTable').DataTable().ajax.reload(null, false); }
-        else { alert(r.error || 'Error'); }
-    });
+        if (r.status === 1) {
+            toastr.success(r.msg || 'Tarea eliminada');
+            $('#taskTable').DataTable().ajax.reload(null, false);
+        } else { toastr.error(r.error || 'No se pudo eliminar la tarea.'); }
+    }, 'json').fail(function (x) { toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudo eliminar la tarea.'); });
 }
 </script>
 {{end}}

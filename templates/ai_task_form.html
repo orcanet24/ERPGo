@@ -63,10 +63,34 @@ $(function () {
         var data = {};
         $(this).serializeArray().forEach(function (f) { data[f.name] = f.value; });
         data.enabled = $('input[name="enabled"]').is(':checked') ? '1' : '0';
-        $.post('/ai/tasks/save', data, function (r) {
-            if (r.status === 1) { if (submittedAction === 'save_exit') window.location = '/ai/tasks'; }
-            else { alert(r.error || 'Error al guardar'); }
-        });
+        var accion = submittedAction;
+        data.action = accion;
+        submittedAction = 'save';
+        var botones = $('#taskForm button[type=submit]');
+        botones.prop('disabled', true);
+        $.ajax({ url: '/ai/tasks/save', method: 'POST', data: data, dataType: 'json' })
+            .done(function (r) {
+                if (r.status !== 1) {
+                    toastr.error(r.error || 'No se pudo guardar la tarea.');
+                    return;
+                }
+                toastr.success(r.msg || 'Tarea guardada correctamente.');
+                if (accion === 'save_exit') {
+                    setTimeout(function () { window.location.assign(r.redirect || '/ai/tasks'); }, 700);
+                    return;
+                }
+                // Al crear, convertir el formulario en edición evita duplicar
+                // la tarea si se vuelve a pulsar Guardar y mantiene la vista.
+                if (r.id && !$('input[name="id"]', '#taskForm').length) {
+                    $('<input>', { type: 'hidden', name: 'id', value: r.id }).appendTo('#taskForm');
+                    var url = '/ai/tasks/edit/' + r.id;
+                    if (window.history && window.history.replaceState) { window.history.replaceState(null, '', url); }
+                }
+            })
+            .fail(function (x) {
+                toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudo guardar la tarea. Revise la conexión e inténtelo de nuevo.');
+            })
+            .always(function () { botones.prop('disabled', false); });
     });
 });
 </script>
