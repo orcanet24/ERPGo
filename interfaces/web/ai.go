@@ -127,7 +127,9 @@ type aiSettingsStatus struct {
 }
 
 func (s *Server) aiSettingsStatus(sess *SessionData) aiSettingsStatus {
-	st := aiSettingsStatus{Providers: s.loadAIProviders(sess)}
+	// Los TRES oficiales, con la fila que le corresponda a cada uno: la tabla
+	// completa con sus filas heredadas era «el listado que nadie pidió».
+	st := aiSettingsStatus{Providers: s.aiProveedoresOficiales(sess)}
 	_, st.HasActive = s.loadActiveProviderRow(sess)
 	st.Active, st.Usable = s.loadActiveProvider(sess)
 	st.LegacyOnly = !st.HasActive && strings.TrimSpace(s.loadAISetting(sess).APIKey) != ""

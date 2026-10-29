@@ -36,6 +36,7 @@ type aiProvider struct {
 	ID             int64
 	Name           string
 	Vendor         string
+	VendorOrigen   string // valor CRUDO de la columna vendor (ver aiVendorDeFila)
 	VendorLabel    string // nombre legible del proveedor ("OpenAI"), derivado de Vendor
 	BaseURL        string // derivado de Vendor (solo lectura informativa)
 	APIKey         string
@@ -76,7 +77,9 @@ func (s *Server) loadAIProviders(sess *SessionData) []aiProvider {
 				&p.Temperature, &p.MaxTokens, &p.PromptTemplate, &active); err != nil {
 				continue
 			}
+			// Sin columna vendor la fila es de la época en que solo existía OpenAI.
 			p.Vendor = "openai"
+			p.VendorOrigen = "openai"
 			p.VendorLabel = aiVendorLabel[p.Vendor]
 			p.BaseURL = aiVendorURL(p.Vendor)
 			p.Temperature = aiRoundTemperature(p.Temperature)
@@ -96,6 +99,7 @@ func (s *Server) loadAIProviders(sess *SessionData) []aiProvider {
 			&p.Temperature, &p.MaxTokens, &p.PromptTemplate, &active, &p.Vendor); err != nil {
 			continue
 		}
+		p.VendorOrigen = strings.TrimSpace(p.Vendor)
 		p.Vendor = aiNormalizeVendor(p.Vendor)
 		p.VendorLabel = aiVendorLabel[p.Vendor]
 		p.BaseURL = aiVendorURL(p.Vendor)
@@ -104,6 +108,50 @@ func (s *Server) loadAIProviders(sess *SessionData) []aiProvider {
 		list = append(list, p)
 	}
 	return list
+}
+
+// aiProveedoresOficiales devuelve EXACTAMENTE los tres proveedores del
+// sistema —ORC24, OpenAI y Anthropic— en el orden de la pantalla, cada uno con
+// la fila de la base que le corresponda y con la fila VACÍA si esa marca
+// todavía no se configuró.
+//
+// Por qué no se sirve la tabla tal cual: la tabla es un almacén, no el
+// catálogo. Una instalación trae filas heredadas con marcas y nombres que este
+// sistema ya no admite, y leerlas directamente es exactamente lo que hacía
+// parecer en Configuración IA y en el formulario de agentes que había una
+// decena de proveedores entre los que elegir. El catálogo está compilado
+// (aiOrdenVendors); la base solo aporta la clave y el modelo de cada marca.
+func (s *Server) aiProveedoresOficiales(sess *SessionData) []aiProvider {
+	porVendor := map[string]aiProvider{}
+	for _, p := range s.loadAIProviders(sess) {
+		v := aiVendorDeFila(p.VendorOrigen)
+		if v == "" {
+			continue // fila heredada de una marca fuera de la whitelist
+		}
+		p.Vendor = v
+		p.VendorLabel = aiVendorLabel[v]
+		p.BaseURL = aiVendorURL(v)
+		// Dos filas para la misma marca: manda la activa y, a igualdad, la
+		// primera que se lea —loadAIProviders ya ordena activas primero—.
+		if guardada, existe := porVendor[v]; !existe || (p.IsActive && !guardada.IsActive) {
+			porVendor[v] = p
+		}
+	}
+
+	salida := make([]aiProvider, 0, len(aiOrdenVendors))
+	for _, v := range aiOrdenVendors {
+		if p, ok := porVendor[v]; ok {
+			salida = append(salida, p)
+			continue
+		}
+		// Marca sin registrar: existe en pantalla como «sin configurar», con su
+		// modelo por defecto ya puesto en el formulario.
+		salida = append(salida, aiProvider{
+			Vendor: v, VendorLabel: aiVendorLabel[v], BaseURL: aiVendorURL(v),
+			Model: aiModelPorDefecto(v),
+		})
+	}
+	return salida
 }
 
 // loadActiveProviderRow returns the single row marked is_active = 1.
@@ -277,7 +325,9 @@ func aiValidateBaseURL(raw string) error {
 // aiProviderList answers GET /ai/providers (the API key is never leaked, the
 // settings page gets it from the server-rendered form instead).
 func (s *Server) aiProviderList(w http.ResponseWriter, r *http.Request) {
-	list := s.loadAIProviders(s.sessionFromRequest(r))
+	// Los mismos tres que pinta la pantalla: una respuesta con las filas
+	// heredadas volvería a ofrecer por JSON lo que la UI ya dejó de mostrar.
+	list := s.aiProveedoresOficiales(s.sessionFromRequest(r))
 	out := make([]map[string]interface{}, 0, len(list))
 	for _, p := range list {
 		out = append(out, map[string]interface{}{
@@ -475,6 +525,21 @@ func (s *Server) aiProviderSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if model == "" {
 		aiJSONError(w, "El modelo es obligatorio", 400)
+		return
+	}
+
+	// UN registro por marca: la pantalla es una fila fija por proveedor. Un
+	// segundo registro de OpenAI dejaría dos formas de configurar la misma cosa
+	// y dos filas peleando por estar activas, que es justo el lío que hoy se ve.
+	var repetido int
+	if id > 0 {
+		_ = s.dbFor(r).QueryRow(`SELECT COUNT(*) FROM ai_providers WHERE vendor = ? AND id <> ?`, vendor, id).Scan(&repetido)
+	} else {
+		_ = s.dbFor(r).QueryRow(`SELECT COUNT(*) FROM ai_providers WHERE vendor = ?`, vendor).Scan(&repetido)
+	}
+	if repetido > 0 {
+		aiJSONError(w, "Ya existe un proveedor "+aiVendorLabel[vendor]+
+			"; edítalo desde su fila en vez de crear otro registro.", 400)
 		return
 	}
 

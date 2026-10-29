@@ -453,7 +453,7 @@ func (s *Server) aiExecuteTask(sess *SessionData, task aiTask, runSlot string) (
 func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps *[]aiStep, journal *aiRunJournal) (string, error) {
 	p, ok := s.aiProviderForAgent(sess, agent)
 	if !ok {
-		return "", fmt.Errorf("el proveedor del agente no tiene API key configurada")
+		return "", fmt.Errorf("no hay proveedor de IA activo con API key: actívelo en Configuración IA")
 	}
 	// El rol del agente se resuelve ANTES de cambiar la sesión: aquí todavía viene
 	// la empresa (TenantCode), y el rol vive en la base de la empresa o en la de
@@ -626,30 +626,20 @@ func aiTruncateSteps(s string) string {
 	return s
 }
 
-// aiProviderForAgent resuelve el proveedor del agente con la URL de la
-// whitelist (la columna base_url de la BD se ignora SIEMPRE).
+// aiProviderForAgent devuelve el proveedor con el que trabaja un agente.
+//
+// Es SIEMPRE el proveedor ACTIVO de Configuración IA, nunca la fila antigua que
+// pudiera apuntar ai_agent.provider_id: el administrador enciende uno de los
+// tres y con eso trabaja todo el sistema, agentes incluidos. Dejar que cada
+// agente conservara su propia fila era la vía silenciosa para que siguiera
+// hablando con un proveedor que alguien ya apagó. La URL sale de la whitelist
+// compilada igual que antes (aiVendorURL): la columna base_url se ignora.
 func (s *Server) aiProviderForAgent(sess *SessionData, agent aiAgent) (aiProvider, bool) {
-	var vendor, apiKey, model string
-	var temperature float64
-	var maxTokens int
-	err := s.dbForSession(sess).QueryRow(`SELECT IFNULL(vendor,''), IFNULL(api_key,''), IFNULL(model,''),
-		IFNULL(temperature,0.2), IFNULL(max_tokens,2000) FROM ai_providers WHERE id = ?`, agent.ProviderID).
-		Scan(&vendor, &apiKey, &model, &temperature, &maxTokens)
-	if err != nil {
+	p, ok := s.loadActiveProvider(sess)
+	if !ok || !aiProviderUsable(p) {
 		return aiProvider{}, false
 	}
-	vendor = aiNormalizeVendor(vendor)
-	base := aiVendorURL(vendor)
-	if base == "" {
-		return aiProvider{}, false
-	}
-	if strings.TrimSpace(apiKey) == "" {
-		return aiProvider{}, false
-	}
-	return aiProvider{
-		Name: aiVendorLabel[vendor], BaseURL: base, APIKey: apiKey, Model: model,
-		Temperature: temperature, MaxTokens: maxTokens,
-	}, true
+	return p, true
 }
 
 // aiRunScheduled fue el planificador original: ejecutaba las tareas vencidas

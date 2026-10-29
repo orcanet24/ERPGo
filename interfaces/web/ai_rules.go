@@ -97,6 +97,32 @@ func aiSystemPrompt(roleName, schemaMap string) string {
 // anunciar algo que no funciona.
 var aiAllowedVendors = []string{"openai", "anthropic", "orc24"}
 
+// aiOrdenVendors es el orden fijo en que la pantalla de Configuración IA
+// presenta esos tres: primero el nuestro, porque es el que se ofrece y el que
+// monetiza el sistema. Es una lista TERMINADA igual que la whitelist: no hay un
+// cuarto proveedor que aparezca porque alguien haya metido una fila en la base.
+var aiOrdenVendors = []string{"orc24", "openai", "anthropic"}
+
+// aiVendorDeFila dice qué marca es una fila de ai_providers, en crudo:
+//
+//   - vacío → openai: instalación anterior a la columna vendor, y su clave era
+//     de OpenAI (la misma regla que aplica la configuración heredada de
+//     ai_setting);
+//   - de la whitelist → esa misma;
+//   - cualquier otra cosa → "": fila heredada de un proveedor que este sistema
+//     ya no admite, que NO es un proveedor del sistema y por tanto no se muestra
+//     ni se puede elegir en ninguna pantalla.
+func aiVendorDeFila(vendor string) string {
+	v := strings.ToLower(strings.TrimSpace(vendor))
+	if v == "" {
+		return "openai"
+	}
+	if aiValidVendor(v) {
+		return v
+	}
+	return ""
+}
+
 // aiDefaultVendor es el proveedor de las instalaciones nuevas: ORC24 es la vía
 // operativa (OpenAI rechaza llamadas desde Venezuela) y la que el proyecto
 // monetiza. aiNormalizeVendor() cae aquí cuando la BD no trae vendor.

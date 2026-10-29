@@ -177,13 +177,19 @@ func (s *Server) agentList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) agentListData(w http.ResponseWriter, r *http.Request) {
 	list := s.loadAIAgents(s.sessionFromRequest(r))
 	out := make([]map[string]interface{}, 0, len(list))
+	// El proveedor que muestra la lista es el que de verdad usan los agentes:
+	// el activo de Configuración IA. La fila vieja de cada agente apunta a lo
+	// que sea que hubiera guardado antes y la columna mentiría.
+	vendorLabel := "—"
+	if p, ok := s.loadActiveProviderRow(s.sessionFromRequest(r)); ok && p.VendorLabel != "" {
+		vendorLabel = p.VendorLabel
+	}
 	for _, g := range list {
-		var username, vendor sql.NullString
+		var username sql.NullString
 		_ = s.dbFor(r).QueryRow(`SELECT username FROM user_login WHERE user_id = ?`, g.UserID).Scan(&username)
-		_ = s.dbFor(r).QueryRow(`SELECT IFNULL(vendor,'') FROM ai_providers WHERE id = ?`, g.ProviderID).Scan(&vendor)
 		out = append(out, map[string]interface{}{
 			"id": g.ID, "name": g.Name, "username": username.String, "role": g.RoleName,
-			"vendor": aiVendorLabel[aiNormalizeVendor(vendor.String)], "model": g.ModelOverride,
+			"vendor": vendorLabel, "model": g.ModelOverride,
 			"operator": g.OperatorEnabled == 1, "enabled": g.Enabled == 1,
 			"max_steps": g.MaxSteps, "max_rows": g.MaxRows,
 		})
@@ -191,7 +197,30 @@ func (s *Server) agentListData(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-// agentForm muestra el formulario (add/edit) con roles y proveedores.
+// aiProveedorActivoParaAgentes devuelve el ÚNICO proveedor que un agente puede
+// usar —el que esté activo en Configuración IA— y la etiqueta para enseñárselo
+// a quien crea el agente.
+//
+// No se le da a elegir: solo uno de los tres puede estar activo y con ese
+// trabajan todas las pantallas. Un selector con las filas heredadas de la base
+// era la puerta para que un agente quedara amarrado a un proveedor que nadie
+// usaba ya.
+func (s *Server) aiProveedorActivoParaAgentes(sess *SessionData) (aiProvider, string, bool) {
+	p, ok := s.loadActiveProviderRow(sess)
+	if !ok {
+		return aiProvider{}, "", false
+	}
+	etiqueta := p.VendorLabel
+	if n := strings.TrimSpace(p.Name); n != "" && !strings.EqualFold(n, p.VendorLabel) {
+		etiqueta = n + " · " + p.VendorLabel
+	}
+	if m := strings.TrimSpace(p.Model); m != "" {
+		etiqueta += " · " + m
+	}
+	return p, etiqueta, true
+}
+
+// agentForm muestra el formulario (add/edit) con roles y el proveedor activo.
 func (s *Server) agentForm(w http.ResponseWriter, r *http.Request) {
 	type option struct {
 		ID   int64
@@ -207,19 +236,13 @@ func (s *Server) agentForm(w http.ResponseWriter, r *http.Request) {
 		}
 		rows.Close()
 	}
-	providers := []option{}
-	rows, err = s.dbFor(r).Query(`SELECT id, IFNULL(name,'') FROM ai_providers ORDER BY name`)
-	if err == nil {
-		for rows.Next() {
-			var o option
-			_ = rows.Scan(&o.ID, &o.Name)
-			providers = append(providers, o)
-		}
-		rows.Close()
-	}
+	proveedor, etiqueta, hayProveedor := s.aiProveedorActivoParaAgentes(s.sessionFromRequest(r))
 	data := map[string]interface{}{
-		"Title": "Añadir Agente IA", "Roles": roles, "Providers": providers,
-		"VendorLabels": aiVendorLabel,
+		"Title":             "Añadir Agente IA",
+		"Roles":             roles,
+		"ProveedorOK":       hayProveedor,
+		"ProveedorID":       proveedor.ID,
+		"ProveedorEtiqueta": etiqueta,
 	}
 	if idStr := r.PathValue("id"); idStr != "" {
 		id, _ := strconv.ParseInt(idStr, 10, 64)
@@ -242,17 +265,27 @@ func (s *Server) agentSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "El nombre es obligatorio", 400)
 		return
 	}
-	providerID, _ := strconv.ParseInt(r.FormValue("provider_id"), 10, 64)
 	roleID, _ := strconv.ParseInt(r.FormValue("role_id"), 10, 64)
-	if providerID <= 0 || roleID <= 0 {
-		jsonError(w, "Proveedor y rol son obligatorios", 400)
+	if roleID <= 0 {
+		jsonError(w, "El rol es obligatorio", 400)
 		return
 	}
-	var provExists, roleExists int
-	_ = s.dbFor(r).QueryRow(`SELECT COUNT(*) FROM ai_providers WHERE id = ?`, providerID).Scan(&provExists)
+	sess := s.sessionFromRequest(r)
+	// El agente trabaja SIEMPRE con el proveedor activo de Configuración IA. El
+	// valor que traiga el formulario se ignora a propósito: un formulario
+	// abierto hace una semana no puede enlazar al agente con un proveedor que
+	// alguien ya desactivó. Y sin proveedor activo no se crean agentes —de otro
+	// modo quedaría un agente que no puede trabajar y nadie se entera—.
+	proveedor, _, hayProveedor := s.aiProveedorActivoParaAgentes(sess)
+	if !hayProveedor {
+		jsonError(w, "No hay proveedor de IA activo: actívelo en Configuración IA antes de crear agentes.", 400)
+		return
+	}
+	providerID := proveedor.ID
+	var roleExists int
 	_ = s.dbFor(r).QueryRow(`SELECT COUNT(*) FROM sec_role WHERE id = ?`, roleID).Scan(&roleExists)
-	if provExists == 0 || roleExists == 0 {
-		jsonError(w, "Proveedor o rol no encontrado", 404)
+	if roleExists == 0 {
+		jsonError(w, "Rol no encontrado", 404)
 		return
 	}
 	modelOverride := strings.TrimSpace(r.FormValue("model_override"))
@@ -275,7 +308,6 @@ func (s *Server) agentSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	configPrompt := strings.TrimSpace(r.FormValue("config_prompt"))
-	sess := s.sessionFromRequest(r)
 	creator := sessUserID(sess)
 
 	idStr := r.FormValue("id")
