@@ -450,6 +450,7 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	s.registerMensajeriaRoutes()
 	s.registerMensajeriaDispositivoRoutes()
 	s.registerMensajeriaPlantillaRoutes()
+	s.registerMensajeriaChatRoutes()
 	s.registerPOSAPIRoutes()
 	s.registerPOSAdminRoutes()
 	s.registerPOSSyncRoutes()

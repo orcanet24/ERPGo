@@ -1,46 +1,237 @@
 {{define "content"}}
-<div class="panel panel-bd">
-    <div class="panel-heading">
-        <div class="panel-title">
-            <h4>Mensajería</h4>
+<div class="row">
+    <div class="col-md-4">
+        <div class="panel panel-bd">
+            <div class="panel-heading">
+                <div class="panel-title"><h4>Conversaciones</h4></div>
+            </div>
+            <div class="panel-body" style="padding:0;max-height:520px;overflow-y:auto">
+                <div id="listaConversaciones" class="list-group">
+                    <div class="list-group-item text-muted">Cargando…</div>
+                </div>
+            </div>
         </div>
     </div>
-    <div class="panel-body">
-        <div class="alert alert-info">
-            El módulo está encendido en la instalación y en esta empresa. La bandeja de conversaciones,
-            los dispositivos y el envío llegan en las fases siguientes; esta pantalla existe para que el
-            super administrador compruebe que el candado funciona y que el menú aparece solo cuando debe.
+    <div class="col-md-8">
+        <div class="panel panel-bd">
+            <div class="panel-heading">
+                <div class="panel-title"><h4 id="chatTitulo">Elija una conversación</h4></div>
+            </div>
+            <div class="panel-body" id="hilo" style="height:420px;overflow-y:auto;background:#f7f7f7">
+                <p class="text-muted text-center" id="hiloVacio">No hay conversación seleccionada.</p>
+            </div>
+            <div class="panel-footer">
+                <form id="formEnviar" class="form-inline" style="display:none;width:100%">
+                    <input type="hidden" id="env_device">
+                    <input type="hidden" id="env_jid">
+                    <input type="text" class="form-control" id="env_texto"
+                           placeholder="Escriba un mensaje…" autocomplete="off" style="width:82%">
+                    <button type="submit" class="btn btn-primary">Enviar</button>
+                </form>
+                <div id="chatMsg" class="alert" style="display:none;margin-top:8px"></div>
+            </div>
         </div>
-
-        <h4>Estado</h4>
-        <table class="table table-condensed">
-            <tbody>
-                <tr><th style="width:240px">Servicio de la instalación</th>
-                    <td>{{if .Global.Enabled}}<span class="label label-success">encendido</span>{{else}}<span class="label label-default">apagado</span>{{end}}</td></tr>
-                <tr><th>Dirección</th><td>{{if .Global.DaemonURL}}{{.Global.DaemonURL}}{{else}}—{{end}}</td></tr>
-                <tr><th>País para los teléfonos</th><td>{{.Empresa.DefaultCountry}}</td></tr>
-                <tr><th>Riesgo aceptado</th>
-                    <td>{{if .Empresa.RiskAcceptedAt}}{{.Empresa.RiskAcceptedBy}} · {{.Empresa.RiskAcceptedAt}}{{else}}—{{end}}</td></tr>
-            </tbody>
-        </table>
-
-        <h4>Proveedores</h4>
-        <table class="table table-condensed table-bordered">
-            <thead><tr><th>Proveedor</th><th>Estado</th></tr></thead>
-            <tbody>
-            {{range .Proveedores}}
-                <tr><td><code>{{.Provider}}</code></td>
-                    <td>{{if .Enabled}}<span class="label label-success">encendido</span>{{else}}<span class="label label-default">apagado</span>{{end}}</td></tr>
-            {{else}}
-                <tr><td colspan="2" class="text-muted">Sin proveedores configurados.</td></tr>
-            {{end}}
-            </tbody>
-        </table>
-
-        <p class="help-block">
-            Un aviso no sale por el primer proveedor encendido: se resuelve por contacto, con la tabla de
-            canales verificados. Si ninguno sirve, el aviso queda bloqueado con el motivo, nunca «enviado».
-        </p>
     </div>
 </div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+// JavaScript nativo. La bandeja lee del historial del ERP (no del daemon) y
+// envía por la cola. Sondeo cada 5 s: suficiente para conversar y mucho más
+// simple que montar SSE en esta fase.
+(function () {
+    var chatActivo = null; // {device, jid}
+
+    function csrfToken() {
+        var m = document.cookie.match(/(?:^|;\s*)erpgo_csrf=([^;]+)/);
+        return m ? decodeURIComponent(m[1]) : '';
+    }
+
+    function aviso(texto, ok) {
+        var caja = document.getElementById('chatMsg');
+        caja.className = 'alert ' + (ok ? 'alert-success' : 'alert-danger');
+        caja.textContent = texto;
+        caja.style.display = 'block';
+        if (ok) { window.setTimeout(function () { caja.style.display = 'none'; }, 3000); }
+    }
+
+    async function pedir(url) {
+        var res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        var json = {};
+        try { json = await res.json(); } catch (e) { /* sin JSON */ }
+        if (!res.ok) { throw new Error(json.error || ('Error HTTP ' + res.status)); }
+        return json;
+    }
+
+    async function enviar(url, datos) {
+        var res = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-CSRF-Token': csrfToken()
+            },
+            body: new URLSearchParams(datos)
+        });
+        var json = {};
+        try { json = await res.json(); } catch (e) { /* sin JSON */ }
+        if (!res.ok) { throw new Error(json.error || ('Error HTTP ' + res.status)); }
+        return json;
+    }
+
+    function textoDeConversacion(c) {
+        var cuerpo = c.ultimo || '';
+        if (c.media === 'image') { cuerpo = '📷 ' + cuerpo; }
+        if (c.media === 'audio') { cuerpo = '🎙 ' + cuerpo; }
+        if (c.media === 'video') { cuerpo = '🎬 ' + cuerpo; }
+        if (c.media === 'document') { cuerpo = '📄 ' + cuerpo; }
+        return cuerpo || '(sin texto)';
+    }
+
+    function pintarConversaciones(lista) {
+        var caja = document.getElementById('listaConversaciones');
+        caja.textContent = '';
+        if (!lista.length) {
+            var vacio = document.createElement('div');
+            vacio.className = 'list-group-item text-muted';
+            vacio.textContent = 'No hay conversaciones. Si no ve ninguna, revise que tenga un dispositivo asignado.';
+            caja.appendChild(vacio);
+            return;
+        }
+        lista.forEach(function (c) {
+            var boton = document.createElement('button');
+            boton.type = 'button';
+            boton.className = 'list-group-item';
+            if (chatActivo && chatActivo.device === c.device_id && chatActivo.jid === c.jid) {
+                boton.className += ' active';
+            }
+            var titulo = document.createElement('strong');
+            titulo.textContent = c.jid.split('@')[0];
+            var cuando = document.createElement('small');
+            cuando.className = 'pull-right text-muted';
+            cuando.textContent = (c.cuando || '').substring(11, 16);
+            var ultimo = document.createElement('div');
+            ultimo.className = 'text-muted';
+            ultimo.style.whiteSpace = 'nowrap';
+            ultimo.style.overflow = 'hidden';
+            ultimo.style.textOverflow = 'ellipsis';
+            ultimo.textContent = (c.direccion === 'out' ? 'Tú: ' : '') + textoDeConversacion(c);
+            boton.appendChild(cuando);
+            boton.appendChild(titulo);
+            boton.appendChild(ultimo);
+            boton.addEventListener('click', function () { abrirChat(c.device_id, c.jid); });
+            caja.appendChild(boton);
+        });
+    }
+
+    async function cargarConversaciones() {
+        try {
+            var r = await pedir('/mensajeria/conversaciones');
+            pintarConversaciones(r.conversaciones || []);
+        } catch (err) {
+            // Un fallo de sondeo no debe llenar la pantalla de errores.
+        }
+    }
+
+    function abrirChat(device, jid) {
+        chatActivo = { device: device, jid: jid };
+        document.getElementById('chatTitulo').textContent = jid.split('@')[0] + ' · ' + device;
+        document.getElementById('env_device').value = device;
+        document.getElementById('env_jid').value = jid;
+        document.getElementById('formEnviar').style.display = 'flex';
+        document.getElementById('hiloVacio').style.display = 'none';
+        cargarMensajes(true);
+        cargarConversaciones();
+    }
+
+    function pintarMensajes(mensajes, bajar) {
+        var hilo = document.getElementById('hilo');
+        var cercaDelFinal = hilo.scrollHeight - hilo.scrollTop - hilo.clientHeight < 80;
+        hilo.textContent = '';
+        if (!mensajes.length) {
+            var vacio = document.createElement('p');
+            vacio.className = 'text-muted text-center';
+            vacio.textContent = 'Sin mensajes en esta conversación.';
+            hilo.appendChild(vacio);
+            return;
+        }
+        mensajes.forEach(function (m) {
+            var fila = document.createElement('div');
+            fila.style.margin = '4px 0';
+            fila.style.textAlign = m.direction === 'out' ? 'right' : 'left';
+
+            var burbuja = document.createElement('span');
+            burbuja.style.display = 'inline-block';
+            burbuja.style.maxWidth = '75%';
+            burbuja.style.padding = '6px 10px';
+            burbuja.style.borderRadius = '8px';
+            burbuja.style.whiteSpace = 'pre-wrap';
+            burbuja.style.background = m.direction === 'out' ? '#dcf8c6' : '#ffffff';
+            burbuja.style.border = '1px solid #e3e3e3';
+
+            var cuerpo = m.body || '';
+            if (!cuerpo && m.media_type) { cuerpo = '[' + m.media_type + ']'; }
+            burbuja.textContent = cuerpo;
+
+            var pie = document.createElement('div');
+            pie.style.fontSize = '11px';
+            pie.style.color = '#888';
+            pie.textContent = (m.created_at || '').substring(11, 16) +
+                (m.direction === 'out' ? ' · ' + (m.status || '') : '');
+
+            fila.appendChild(burbuja);
+            fila.appendChild(pie);
+            hilo.appendChild(fila);
+        });
+        if (bajar || cercaDelFinal) {
+            hilo.scrollTop = hilo.scrollHeight;
+        }
+    }
+
+    async function cargarMensajes(bajar) {
+        if (!chatActivo) { return; }
+        try {
+            var url = '/mensajeria/chat/' + encodeURIComponent(chatActivo.jid) +
+                '/mensajes?device=' + encodeURIComponent(chatActivo.device);
+            var r = await pedir(url);
+            pintarMensajes(r.mensajes || [], bajar);
+        } catch (err) {
+            // El sondeo no interrumpe la escritura.
+        }
+    }
+
+    document.getElementById('formEnviar').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        var texto = document.getElementById('env_texto').value.trim();
+        if (!texto || !chatActivo) { return; }
+        var boton = e.target.querySelector('button[type=submit]');
+        boton.disabled = true;
+        try {
+            var r = await enviar('/mensajeria/enviar', {
+                device_id: chatActivo.device,
+                jid: chatActivo.jid,
+                texto: texto
+            });
+            document.getElementById('env_texto').value = '';
+            aviso(r.msg || 'Mensaje en cola.', true);
+            await cargarMensajes(true);
+        } catch (err) {
+            aviso(err.message, false);
+        } finally {
+            boton.disabled = false;
+        }
+    });
+
+    document.getElementById('env_texto').addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            document.getElementById('formEnviar').requestSubmit();
+        }
+    });
+
+    cargarConversaciones();
+    window.setInterval(cargarConversaciones, 10000);
+    window.setInterval(function () { if (chatActivo) { cargarMensajes(false); } }, 5000);
+})();
+</script>
 {{end}}

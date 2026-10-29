@@ -90,7 +90,7 @@ func msgEscanearOutbox(s interface {
 // El rango se calcula en SQL para que la consulta no dependa de un ORDER BY
 // alfabético, que pondría «marketing» primero.
 const msgPrioridadRank = `CASE priority
-	WHEN 'otp' THEN 0 WHEN 'transaccional' THEN 1 WHEN 'recordatorio' THEN 2 ELSE 3 END`
+	WHEN 'chat' THEN 0 WHEN 'otp' THEN 1 WHEN 'transaccional' THEN 2 WHEN 'recordatorio' THEN 3 ELSE 4 END`
 
 // msgClaveDeIdempotencia arma la clave si el llamador no la dio. Incluye el DÍA
 // para que el mismo aviso de mañana sea una decisión nueva y legítima, y el
@@ -263,9 +263,13 @@ func (s *Server) msgDespacharFila(ctx context.Context, ctl *sql.DB, m msgOutbox,
 		s.msgReencolar(ctl, m.ID, pausado, "el dispositivo está en pausa")
 		return
 	}
-	if siguiente := msgFechaDe(dispositivo.NextSendAt); siguiente.After(ahora) {
-		s.msgReencolar(ctl, m.ID, siguiente, "")
-		return
+	// Un mensaje de chat no espera la pausa entre avisos: la conversación se
+	// atiende cuando la persona escribe, no cuando toca el turno del boletín.
+	if !msgEsChat(m.Kind) {
+		if siguiente := msgFechaDe(dispositivo.NextSendAt); siguiente.After(ahora) {
+			s.msgReencolar(ctl, m.ID, siguiente, "")
+			return
+		}
 	}
 
 	db, err := s.tenantDB(m.Tenant)
@@ -397,14 +401,36 @@ func (s *Server) msgRegistrarEnvio(db, ctl *sql.DB, d msgDevice, m msgOutbox, en
 	if envio.Estado != "" {
 		estado = envio.Estado
 	}
-	_, _ = db.Exec(`INSERT INTO msg_message (device_id, provider, chat_jid, direction, message_id,
-		from_msisdn, to_msisdn, body, status, is_from_me, sent_at, received_at, raw_json, created_at)
-		VALUES (?,?,?, 'out', ?, '', ?, ?, ?, 1, ?, '', '', ?)`,
-		m.DeviceID, m.Provider, m.ToMSISDN, primeroNoVacio(envio.MensajeID, m.IdemKey),
-		m.ToMSISDN, m.Body, estado, ahora.Format("2006-01-02 15:04:05"), now())
+	cuando := ahora.Format("2006-01-02 15:04:05")
+
+	// En el chat la fila ya existe (se escribió al encolar para que el usuario
+	// viera su mensaje). Se ACTUALIZA en vez de insertar otra, y se guarda el id
+	// del proveedor para que los acuses encuentren el mensaje.
+	actualizado := false
+	if msgEsChat(m.Kind) {
+		res, err := db.Exec(`UPDATE msg_message SET message_id=?, status=?, sent_at=?
+			WHERE device_id=? AND message_id=?`,
+			primeroNoVacio(envio.MensajeID, m.IdemKey), estado, cuando, m.DeviceID, m.IdemKey)
+		if err == nil {
+			if n, _ := res.RowsAffected(); n > 0 {
+				actualizado = true
+			}
+		}
+	}
+	if !actualizado {
+		_, _ = db.Exec(`INSERT INTO msg_message (device_id, provider, chat_jid, direction, message_id,
+			from_msisdn, to_msisdn, body, status, is_from_me, sent_at, received_at, raw_json, created_at)
+			VALUES (?,?,?, 'out', ?, '', ?, ?, ?, 1, ?, '', '', ?)`,
+			m.DeviceID, m.Provider, m.ToMSISDN, primeroNoVacio(envio.MensajeID, m.IdemKey),
+			m.ToMSISDN, m.Body, estado, cuando, now())
+	}
 
 	pausa := mensajeria.PausaEntreMensajes(msgPoliticaDe(d), nil)
-	if larga, hay := mensajeria.PausaLarga(nil); hay {
+	if msgEsChat(m.Kind) {
+		// Cinco segundos entre mensajes de la misma conversación: suficiente
+		// para no parecer un robot, corto para poder conversar.
+		pausa = 5 * time.Second
+	} else if larga, hay := mensajeria.PausaLarga(nil); hay {
 		pausa += larga
 	}
 	_, _ = ctl.Exec(`UPDATE msg_outbox SET status=?, provider_ref=?, error='', updated_at=? WHERE id=?`,
@@ -428,6 +454,7 @@ func (s *Server) msgRegistrarFallo(ctl *sql.DB, m msgOutbox, err error, ahora ti
 
 	if !temporal {
 		s.msgCerrar(ctl, m.ID, msgFallido, motivo)
+		s.msgMarcarChat(m, msgFallido)
 		// Credenciales malas o dispositivo inexistente: se pausa el número para
 		// que no siga intentando con cada mensaje de la cola.
 		if fe, ok := err.(*gowa.Error); ok && (fe.Status == 401 || fe.Status == 403 || fe.Status == 404) {
@@ -468,6 +495,21 @@ func (s *Server) msgAbrirCircuitoSiHaceFalta(ctl *sql.DB, deviceID string, ahora
 func (s *Server) msgCerrar(ctl *sql.DB, id int64, estado, motivo string) {
 	_, _ = ctl.Exec(`UPDATE msg_outbox SET status=?, error=?, updated_at=? WHERE id=?`,
 		estado, motivo, now(), id)
+}
+
+// msgMarcarChat refleja en el historial el fallo de un mensaje de chat. La fila
+// se escribió al encolar; si nunca sale, el usuario tiene que verlo ahí y no en
+// una cola que no mira.
+func (s *Server) msgMarcarChat(m msgOutbox, estado string) {
+	if !msgEsChat(m.Kind) {
+		return
+	}
+	db, err := s.tenantDB(m.Tenant)
+	if err != nil || db == nil {
+		return
+	}
+	_, _ = db.Exec(`UPDATE msg_message SET status=? WHERE device_id=? AND message_id=?`,
+		estado, m.DeviceID, m.IdemKey)
 }
 
 func (s *Server) msgReencolar(ctl *sql.DB, id int64, cuando time.Time, motivo string) {
