@@ -164,3 +164,4 @@ La vista de administración de addons está implementada en:
 
 Los addons de terceros son propiedad de sus creadores, quienes eligen su propia
 licencia (comercial o libre). ERPGo no reclama propiedad sobre los addons.
+####################################################################################
