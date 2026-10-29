@@ -221,7 +221,7 @@ func TestLaFacturaEmitidaSeEntregaAlClienteUnaSolaVez(t *testing.T) {
 	host, puerto := smtp.direccion()
 	if _, err := db.Exec(`INSERT INTO notify_channel (kind, name, is_active, ai_allowed, cooldown_days,
 		host, port, from_address, from_name, security, created_at, updated_at)
-		VALUES ('email','Correo de facturación',1,0,0,?,?, 'facturas@erpgow.test', 'Ferretería', 'none', ?, ?)`,
+		VALUES ('email','Correo de facturación',1,0,0,?,?, 'facturas@erpgo.test', 'Ferretería', 'none', ?, ?)`,
 		host, puerto, now(), now()); err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func TestLaEntregaSeNiegaCuandoNoHayQueEntregar(t *testing.T) {
 			}
 			if _, err := db.Exec(`INSERT INTO notify_channel (kind, name, is_active, cooldown_days,
 				host, port, from_address, security, created_at, updated_at)
-				VALUES ('email','Correo',1,0,'localhost',25,'facturas@erpgow.test','none', ?, ?)`, now(), now()); err != nil {
+				VALUES ('email','Correo',1,0,'localhost',25,'facturas@erpgo.test','none', ?, ?)`, now(), now()); err != nil {
 				t.Fatal(err)
 			}
 

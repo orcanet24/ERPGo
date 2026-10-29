@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"time"
 
-	"erpgow/infrastructure/persistence"
+	"erpgo/infrastructure/persistence"
 )
 
 // BackupManager maneja los respaldos del sistema.
@@ -222,3 +222,4 @@ func (bm *BackupManager) ResetDatabase(dbName string) error {
 
 	return nil
 }
+

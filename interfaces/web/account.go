@@ -1,4 +1,4 @@
-package web
+﻿package web
 
 import (
 	"database/sql"
@@ -170,7 +170,7 @@ func (s *Server) coaSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Cuenta guardada", "redirect": saveRedirect(r, "/account/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Cuenta guardada", "redirect": saveRedirect(r, "/account/coa")})
 }
 
 func (s *Server) coaDelete(w http.ResponseWriter, r *http.Request) {
@@ -192,7 +192,7 @@ func (s *Server) coaDelete(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Cuenta eliminada", "redirect": saveRedirect(r, "/account/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Cuenta eliminada", "redirect": saveRedirect(r, "/account/coa")})
 }
 
 func boolInt(b bool) int {
@@ -397,7 +397,7 @@ func (s *Server) voucherApprove(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Comprobante aprobado", "redirect": saveRedirect(r, "/account/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Comprobante aprobado", "redirect": saveRedirect(r, "/account/vouchers")})
 }
 
 func (s *Server) voucherReverse(w http.ResponseWriter, r *http.Request) {
@@ -406,7 +406,7 @@ func (s *Server) voucherReverse(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Comprobante revertido", "redirect": saveRedirect(r, "/account/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Comprobante revertido", "redirect": saveRedirect(r, "/account/vouchers")})
 }
 
 func (s *Server) voucherDelete(w http.ResponseWriter, r *http.Request) {
@@ -415,7 +415,7 @@ func (s *Server) voucherDelete(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Comprobante eliminado", "redirect": saveRedirect(r, "/account/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Comprobante eliminado", "redirect": saveRedirect(r, "/account/vouchers")})
 }
 
 // ---------- Ledger & reports ----------

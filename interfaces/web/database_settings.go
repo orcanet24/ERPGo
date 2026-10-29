@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"erpgow/infrastructure/persistence"
+	"erpgo/infrastructure/persistence"
 )
 
 // ---------- Base de datos (MySQL) ----------
@@ -357,3 +357,4 @@ func (s *Server) databaseBackupList(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]interface{}{"data": list})
 }
+

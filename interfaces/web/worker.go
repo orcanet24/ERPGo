@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"erpgow/internal/queue"
+	"erpgo/internal/queue"
 )
 
 // ---------- Puente entre la cola y el servidor ----------
@@ -227,3 +227,4 @@ func (s *Server) enqueueDueAITasksOf(tenant string, db *sql.DB, nowT time.Time) 
 		}
 	}
 }
+

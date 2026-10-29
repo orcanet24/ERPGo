@@ -28,7 +28,7 @@ import (
 
 	_ "github.com/glebarez/go-sqlite"
 
-	"erpgow/internal/upload"
+	"erpgo/internal/upload"
 )
 
 func nuevaBaseInbox(t *testing.T) *sql.DB {
@@ -434,3 +434,4 @@ func TestDescartarSoloLoQueNoSeCargó(t *testing.T) {
 		t.Errorf("el primer documento debió quedar descartado, quedó %q", f.Estado)
 	}
 }
+

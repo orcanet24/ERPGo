@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"erpgow/interfaces/web/digitalinvoice"
+	"erpgo/interfaces/web/digitalinvoice"
 )
 
 // Estructura de respuesta genérica de Unidigital
@@ -256,3 +256,4 @@ func (p *UnidigitalProvider) mapearDocumento(doc *digitalinvoice.DatosDocumento)
 		"Details":                detalles,
 	}
 }
+

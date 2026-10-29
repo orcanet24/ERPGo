@@ -1,4 +1,4 @@
-package web
+﻿package web
 
 // cycle_count.go — Toma de inventario cíclica.
 //
@@ -835,7 +835,7 @@ func (s *Server) cycleCountAnnotate(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Conteo anotado", "redirect": saveRedirect(r, "/cycle_count/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Conteo anotado", "redirect": saveRedirect(r, "/inventory/cycle-count")})
 }
 
 func (s *Server) cycleCountClose(w http.ResponseWriter, r *http.Request) {

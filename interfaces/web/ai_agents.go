@@ -56,8 +56,15 @@ type aiAgent struct {
 }
 
 // loadAIAgents lista todos los agentes (con nombre de rol y proveedor).
+//
+// La fila del agente vive en la BASE DE CONTROL, junto a su identidad
+// (users, user_login, sec_userrole): user.go la crea dentro de su misma
+// transacción (crearAgenteParaUsuarioTx) y el runner la lee con agentDB.
+// Leerla de la base de la empresa dejaba el listado vacío y sin roles en
+// cualquier empresa que no fuera la maestra —donde ambas bases coinciden, lo
+// que escondió el fallo hasta que se creó una segunda empresa.
 func (s *Server) loadAIAgents(sess *SessionData) []aiAgent {
-	rows, err := s.dbForSession(sess).Query(`SELECT a.id, a.name, a.user_id, a.provider_id, IFNULL(a.model_override,''),
+	rows, err := s.authDB(s.requestForSession(sess)).Query(`SELECT a.id, a.name, a.user_id, a.provider_id, IFNULL(a.model_override,''),
 		a.role_id, IFNULL(sr.type,''), IFNULL(a.operator_enabled,0), a.max_steps, a.max_rows, a.enabled,
 		IFNULL(a.created_by,''), IFNULL(CAST(a.created_at AS CHAR),''),
 		IFNULL(a.department,''), IFNULL(a.config_prompt,''), IFNULL(a.config_prompt_at,'')
@@ -185,8 +192,10 @@ func (s *Server) agentListData(w http.ResponseWriter, r *http.Request) {
 		vendorLabel = p.VendorLabel
 	}
 	for _, g := range list {
+		// El username del agente es identidad del sistema: vive en user_login
+		// de la base de CONTROL, no en la de la empresa.
 		var username sql.NullString
-		_ = s.dbFor(r).QueryRow(`SELECT username FROM user_login WHERE user_id = ?`, g.UserID).Scan(&username)
+		_ = s.authDB(r).QueryRow(`SELECT username FROM user_login WHERE user_id = ?`, g.UserID).Scan(&username)
 		out = append(out, map[string]interface{}{
 			"id": g.ID, "name": g.Name, "username": username.String, "role": g.RoleName,
 			"vendor": vendorLabel, "model": g.ModelOverride,
@@ -226,8 +235,11 @@ func (s *Server) agentForm(w http.ResponseWriter, r *http.Request) {
 		ID   int64
 		Name string
 	}
+	// Los roles del desplegable viven en sec_role, que es de la base de
+	// CONTROL (ver tenant_request.go): el puerto equivocado dejaba el select
+	// vacío ("no aparecen los roles") en toda empresa que no fuera la maestra.
 	roles := []option{}
-	rows, err := s.dbFor(r).Query(`SELECT id, type FROM sec_role ORDER BY type`)
+	rows, err := s.authDB(r).Query(`SELECT id, type FROM sec_role ORDER BY type`)
 	if err == nil {
 		for rows.Next() {
 			var o option
@@ -282,8 +294,15 @@ func (s *Server) agentSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	providerID := proveedor.ID
+	// El rol existe en sec_role, que es de la base de CONTROL. Antes se
+	// preguntaba en la base de la empresa: en la maestra coincidía y funcionaba,
+	// en el resto respondía "Rol no encontrado" aunque el rol estuviera.
+	// Idem toda la identidad del agente: users, user_login y sec_userrole son
+	// datos de control (ver identididad.go); la base de la empresa solo aporta
+	// el contexto en el que el agente trabaja (audit_log).
+	ctl := s.authDB(r)
 	var roleExists int
-	_ = s.dbFor(r).QueryRow(`SELECT COUNT(*) FROM sec_role WHERE id = ?`, roleID).Scan(&roleExists)
+	_ = ctl.QueryRow(`SELECT COUNT(*) FROM sec_role WHERE id = ?`, roleID).Scan(&roleExists)
 	if roleExists == 0 {
 		jsonError(w, "Rol no encontrado", 404)
 		return
@@ -318,7 +337,7 @@ func (s *Server) agentSave(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "Agente no encontrado", 404)
 			return
 		}
-		if _, err := s.dbFor(r).Exec(`UPDATE ai_agent SET name=?, provider_id=?, model_override=?, role_id=?,
+		if _, err := ctl.Exec(`UPDATE ai_agent SET name=?, provider_id=?, model_override=?, role_id=?,
 			operator_enabled=?, max_steps=?, max_rows=?, enabled=?, department=?, config_prompt=?,
 			config_prompt_at=? WHERE id=?`,
 			name, providerID, modelOverride, roleID, operator, maxSteps, maxRows, enabled,
@@ -327,7 +346,7 @@ func (s *Server) agentSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// El rol del usuario agente sigue SIEMPRE al rol del agente.
-		_, _ = s.dbFor(r).Exec(`UPDATE sec_userrole SET roleid=? WHERE user_id=?`, roleID, agent.UserID)
+		_, _ = ctl.Exec(`UPDATE sec_userrole SET roleid=? WHERE user_id=?`, roleID, agent.UserID)
 		s.aiAudit(s.sessionFromRequest(r), creator, "update", "ai_agents", "ai_agent", fmt.Sprintf("%d", id), nil, map[string]interface{}{"name": name, "role_id": roleID, "department": department, "operator": operator == 1})
 		writeJSON(w, map[string]interface{}{"status": 1, "msg": "Agente actualizado", "id": id})
 		return
@@ -350,8 +369,11 @@ func (s *Server) agentSave(w http.ResponseWriter, r *http.Request) {
 	// UNIQUE), así que el id se calcula ANTES de abrir la tx (leer dentro de la
 	// tx de escritura devuelve 0 filas en SQLite).
 	var nextRoleRow int64
-	_ = s.dbFor(r).QueryRow(`SELECT COALESCE(MAX(id),0)+1 FROM sec_userrole`).Scan(&nextRoleRow)
-	tx, err := s.dbFor(r).Begin()
+	_ = ctl.QueryRow(`SELECT COALESCE(MAX(id),0)+1 FROM sec_userrole`).Scan(&nextRoleRow)
+	// ALTA de identidad y fila de agente: TODO en la base de control, la misma
+	// transacción que userSave. Una identidad escrita en la base de la empresa
+	// no la ve ni el login ni el runner.
+	tx, err := ctl.Begin()
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -407,7 +429,11 @@ func (s *Server) agentDelete(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "Agente no encontrado", 404)
 		return
 	}
-	tx, err := s.dbFor(r).Begin()
+	// La identidad y la fila del agente son datos de control: borrarlos de la
+	// base de la empresa dejaría un fantasma que el login y el runner
+	// seguirían viendo.
+	ctl := s.authDB(r)
+	tx, err := ctl.Begin()
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -429,7 +455,7 @@ func (s *Server) agentDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	sess := s.sessionFromRequest(r)
 	s.aiAudit(s.sessionFromRequest(r), sessUserID(sess), "delete", "ai_agents", "ai_agent", fmt.Sprintf("%d", id), map[string]interface{}{"name": agent.Name}, nil)
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Agente eliminado", "redirect": saveRedirect(r, "/ai_agents/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Agente eliminado", "redirect": saveRedirect(r, "/ai/agents")})
 }
 
 // ---------- Catálogo (mapa de BD) ----------

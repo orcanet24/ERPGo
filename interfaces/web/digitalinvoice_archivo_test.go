@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"erpgow/internal/upload"
+	"erpgo/internal/upload"
 )
 
 // baseDeControlConPDFPath es la tabla de la facturación digital ya con la
@@ -159,3 +159,4 @@ func TestSinLaColumnaDeLaMigracionElArchivadoSeCalla(t *testing.T) {
 		t.Error("la fila original se tocó sin columna de destino")
 	}
 }
+

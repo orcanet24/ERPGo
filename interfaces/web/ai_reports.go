@@ -1,4 +1,4 @@
-package web
+﻿package web
 
 // ai_reports.go — Informes personalizados por plantillas JSON. Tanto usuarios
 // como agentes crean plantillas; TODAS pasan por el guardián SQL al ejecutar.
@@ -525,7 +525,7 @@ func (s *Server) reportTemplateDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	sess := s.sessionFromRequest(r)
 	s.appendAudit(r, sessUserID(sess), "ia", "delete", "custom_reports", "report_template", fmt.Sprintf("%d", id), nil, nil)
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Informe eliminado", "redirect": saveRedirect(r, "/ai_reports")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Informe eliminado", "redirect": saveRedirect(r, "/reports/custom")})
 }
 
 // reportTemplateRun ejecuta la plantilla con el rango de fechas elegido.

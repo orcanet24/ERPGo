@@ -285,6 +285,7 @@ func (s *Server) debitNoteSave(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{
 		"status": 1, "msg": "Nota de débito emitida",
 		"note_no": doc.DocNo, "control_no": doc.ControlNo, "id": dnID,
+		"redirect": saveRedirect(r, "/debitnote/list"),
 	})
 }
 

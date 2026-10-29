@@ -27,7 +27,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"erpgow/internal/orchestrator"
+	"erpgo/internal/orchestrator"
 )
 
 // orchMu protege el mapa de orquestadores por empresa.
@@ -179,3 +179,4 @@ func stopOrchestrators() {
 		delete(orquestadores, code)
 	}
 }
+

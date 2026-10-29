@@ -6,8 +6,8 @@ import (
 	"log"
 	"strings"
 
-	"erpgow/configs"
-	"erpgow/infrastructure/persistence"
+	"erpgo/configs"
+	"erpgo/infrastructure/persistence"
 )
 
 // nombreTenantMaestro devuelve el código de la primera empresa configurada.
@@ -76,3 +76,4 @@ func PrepararEmpresaMaestra(cfg *configs.Config, db *sql.DB) error {
 	log.Printf("empresa maestra %q lista en DB_NAME=%q", code, cfg.DBName)
 	return nil
 }
+

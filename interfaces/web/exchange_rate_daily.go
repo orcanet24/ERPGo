@@ -1,4 +1,4 @@
-package web
+﻿package web
 
 // exchange_rate.go — Tipo de cambio BCV / paralelo.
 //
@@ -474,7 +474,7 @@ func (s *Server) tasaSaveBCV(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Tasa BCV registrada", "redirect": saveRedirect(r, "/exchange_rate")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Tasa BCV registrada", "redirect": saveRedirect(r, "/settings/tasas")})
 }
 
 func (s *Server) tasaSaveParalelo(w http.ResponseWriter, r *http.Request) {
@@ -490,7 +490,7 @@ func (s *Server) tasaSaveParalelo(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Tasa paralela registrada", "redirect": saveRedirect(r, "/exchange_rate")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Tasa paralela registrada", "redirect": saveRedirect(r, "/settings/tasas")})
 }
 
 func (s *Server) tasaSaveFuente(w http.ResponseWriter, r *http.Request) {
@@ -502,7 +502,7 @@ func (s *Server) tasaSaveFuente(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Fuente de facturación actualizada", "redirect": saveRedirect(r, "/exchange_rate")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Fuente de facturación actualizada", "redirect": saveRedirect(r, "/settings/tasas")})
 }
 
 // tasaFetchBCV obtiene la tasa oficial del BCV desde https://www.bcv.org.ve/

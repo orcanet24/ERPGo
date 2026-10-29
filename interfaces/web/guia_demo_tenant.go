@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"log"
 
-	"erpgow/infrastructure/persistence"
+	"erpgo/infrastructure/persistence"
 )
 
 // codNombreDemo y etiquetaDemo: constantes públicas del identificador.
@@ -103,3 +103,4 @@ func (s *Server) crearEmpresaDemo(ctl *sql.DB) error {
 	}
 	return nil
 }
+

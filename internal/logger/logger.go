@@ -3,7 +3,7 @@
 // Variables de entorno:
 //   - LOG_ENABLED: activa/desactiva logs (0=off, 1=on). Default: 0
 //   - LOG_LEVEL: nivel mínimo (debug, info, warn, error). Default: info
-//   - LOG_FILE: ruta del archivo de log. Default: logs/erpgow.log
+//   - LOG_FILE: ruta del archivo de log. Default: logs/erpgo.log
 package logger
 
 import (
@@ -50,7 +50,7 @@ func Init(enabled bool, levelStr, filePath string) {
 	level = parseLevel(levelStr)
 
 	if filePath == "" {
-		filePath = "logs/erpgow.log"
+		filePath = "logs/erpgo.log"
 	}
 	outputFile = filePath
 
@@ -184,3 +184,4 @@ func IsEnabled() bool {
 	defer mu.RUnlock()
 	return enabled
 }
+

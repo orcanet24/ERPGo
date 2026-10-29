@@ -112,14 +112,21 @@ $(function () {
         }
     });
 
+    var submittedAction = 'save';
+    $('#settingForm').on('click', 'button[type=submit]', function () { submittedAction = $(this).val(); });
     $('#settingForm').on('submit', function (e) {
         e.preventDefault();
+        var ea = submittedAction;
         var fd = new FormData(this);
         $.ajax({
             url: '/settings/save', type: 'POST', data: fd,
             processData: false, contentType: false,
             success: function (r) {
-                if (r.status == 1) { toastr.success(r.msg); ERPGo.refrescar(); }
+                if (r.status == 1) {
+                    toastr.success(r.msg);
+                    if (ea === 'save_exit') { location.href = r.redirect || '/settings'; }
+                    else { ERPGo.refrescar(); }
+                }
                 else toastr.error(r.error);
             },
             error: function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); }

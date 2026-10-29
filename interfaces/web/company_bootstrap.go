@@ -20,7 +20,7 @@ import (
 	"log"
 	"time"
 
-	"erpgow/infrastructure/persistence"
+	"erpgo/infrastructure/persistence"
 )
 
 // PrepareCompany deja una base de empresa en estado utilizable. Es
@@ -127,3 +127,4 @@ func ensureCurrentFinancialYear(db *sql.DB) {
 	_, _ = db.Exec(`INSERT INTO financial_year (yearName, startDate, endDate, isCloseReq, status, created_by)
 		VALUES (?, ?, ?, 0, 1, 1)`, name, fmt.Sprintf("%d-01-01", year), fmt.Sprintf("%d-12-31", year))
 }
+

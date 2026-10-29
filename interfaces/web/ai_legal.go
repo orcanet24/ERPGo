@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"strings"
 
-	"erpgow/infrastructure/persistence"
+	"erpgo/infrastructure/persistence"
 )
 
 // legalSchema define la base normativa.
@@ -296,3 +296,4 @@ func (s *Server) SaveLegalRule(sess *SessionData, rule *LegalRule) (int64, error
 	}
 	return res.LastInsertId()
 }
+

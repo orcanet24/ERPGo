@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"erpgow/infrastructure/persistence"
+	"erpgo/infrastructure/persistence"
 )
 
 // regla_borrado.go — la regla de no borrado.
@@ -193,3 +193,4 @@ var referenciasProveedor = []consultaReferencia{
 }
 
 const consejoProveedor = "Conserve el registro y corrija el nombre o el RIF si están mal: sus compras, sus retenciones y el libro de compras dependen de ellos."
+

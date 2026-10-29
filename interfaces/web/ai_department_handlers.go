@@ -1,4 +1,4 @@
-package web
+﻿package web
 
 // ai_department_handlers.go — Pantallas de los prompts de departamento y del
 // asiento contable del consumo de IA.
@@ -43,7 +43,7 @@ func (s *Server) departmentPromptSaveHandler(w http.ResponseWriter, r *http.Requ
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Comportamiento guardado", "redirect": saveRedirect(r, "/ai_departments")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Comportamiento guardado", "redirect": saveRedirect(r, "/ai/departments")})
 }
 
 // -----------------------------------------------------------------------------

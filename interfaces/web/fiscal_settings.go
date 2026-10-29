@@ -1,4 +1,4 @@
-package web
+﻿package web
 
 // ============================================================================
 // ERPGo — Ajustes Fiscales (series, IGTF, parámetros SENIAT)
@@ -70,7 +70,7 @@ func (s *Server) fiscalSettingsSave(w http.ResponseWriter, r *http.Request) {
 	if foot != "" {
 		_ = s.setFiscalSetting(r, "fiscal_footnote", foot)
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Ajustes fiscales guardados", "redirect": saveRedirect(r, "/fiscal_settings")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Ajustes fiscales guardados", "redirect": saveRedirect(r, "/settings/fiscal")})
 }
 
 func (s *Server) fiscalSeriesSave(w http.ResponseWriter, r *http.Request) {
@@ -86,5 +86,5 @@ func (s *Server) fiscalSeriesSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Serie actualizada", "redirect": saveRedirect(r, "/fiscal_settings")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Serie actualizada", "redirect": saveRedirect(r, "/settings/fiscal")})
 }

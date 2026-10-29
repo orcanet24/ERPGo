@@ -590,7 +590,7 @@ func (s *Server) vatRetentionSave(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{
 		"status": 1, "retention_no": retentionNo,
 		"msg":      "Retención IVA " + retentionNo + " registrada",
-		"redirect": saveRedirect(r, "/legal_books"),
+		"redirect": saveRedirect(r, "/reports/vat-retention"),
 	})
 }
 
@@ -909,7 +909,7 @@ func (s *Server) islrRetentionSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Retención ISLR guardada", "redirect": saveRedirect(r, "/legal_books")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Retención ISLR guardada", "redirect": saveRedirect(r, "/reports/islr-retention")})
 }
 
 func (s *Server) islrRetentionPrint(w http.ResponseWriter, r *http.Request) {

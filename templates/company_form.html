@@ -57,10 +57,21 @@
 {{define "pagejs"}}
 <script>
 $(function () {
+    // «Guardar y Salir» vuelve a Ajustes (el listado del entorno); «Guardar»
+    // refresca la vista sin navegación. El botón elegido no viaja en el
+    // $.post, por eso se devuelve en el clic y se decide después; si el
+    // servidor mandó redirijo propio, ese manda.
+    var submittedAction = 'save';
+    $('#companyForm').on('click', 'button[type=submit]', function () { submittedAction = $(this).val(); });
     $('#companyForm').on('submit', function (e) {
         e.preventDefault();
+        var ea = submittedAction;
         $.post('/settings/company/save', $(this).serialize(), function (r) {
-            if (r.status == 1) { toastr.success(r.msg); ERPGo.refrescar(); }
+            if (r.status == 1) {
+                toastr.success(r.msg);
+                if (ea === 'save_exit') { location.href = r.redirect || '/settings'; }
+                else { ERPGo.refrescar(); }
+            }
             else toastr.error(r.error);
         }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
     });

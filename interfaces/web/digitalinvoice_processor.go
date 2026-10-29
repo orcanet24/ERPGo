@@ -28,8 +28,8 @@ import (
 	"strings"
 	"time"
 
-	di "erpgow/interfaces/web/digitalinvoice"
-	"erpgow/internal/digitalinvoice"
+	di "erpgo/interfaces/web/digitalinvoice"
+	"erpgo/internal/digitalinvoice"
 )
 
 // diConfigBase es la configuración guardada de UN proveedor para UNA empresa.
@@ -365,3 +365,4 @@ func diTipoDocDeRIF(rif string) string {
 	}
 	return "V"
 }
+

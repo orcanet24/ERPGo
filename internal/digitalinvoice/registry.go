@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync"
 
-	provider "erpgow/interfaces/web/digitalinvoice"
-	"erpgow/interfaces/web/digitalinvoice/unidigital"
+	provider "erpgo/interfaces/web/digitalinvoice"
+	"erpgo/interfaces/web/digitalinvoice/unidigital"
 )
 
 var (
@@ -75,3 +75,4 @@ func NuevoProveedorActivo(codigo string, cfg provider.ProviderConfig) (provider.
 		return nil, fmt.Errorf("proveedor de facturación digital no soportado: %s", codigo)
 	}
 }
+

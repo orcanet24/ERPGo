@@ -4611,7 +4611,7 @@ const file_pos_proto_rawDesc = "" +
 	"\vGetProducts\x12\x11.pos.ProductQuery\x1a\x14.pos.ProductResponse0\x01\x122\n" +
 	"\vSyncOffline\x12\x10.pos.OfflineSale\x1a\x0f.pos.SyncStatus(\x01\x12.\n" +
 	"\vGetAIAdvice\x12\x0e.pos.AIRequest\x1a\x0f.pos.AIResponse\x12!\n" +
-	"\tHeartbeat\x12\t.pos.Ping\x1a\t.pos.PongB\x12Z\x10erpgow/proto/posb\x06proto3"
+	"\tHeartbeat\x12\t.pos.Ping\x1a\t.pos.PongB\x12Z\x10erpgo/proto/posb\x06proto3"
 
 var (
 	file_pos_proto_rawDescOnce sync.Once
@@ -4799,3 +4799,4 @@ func file_pos_proto_init() {
 	file_pos_proto_goTypes = nil
 	file_pos_proto_depIdxs = nil
 }
+

@@ -38,7 +38,7 @@ import (
 	"sync"
 	"time"
 
-	"erpgow/infrastructure/persistence"
+	"erpgo/infrastructure/persistence"
 )
 
 // ErrParado indica que el orquestador ya se está cerrando. Una escritura que
@@ -820,3 +820,4 @@ func IdentificadorSeguro(s string) bool {
 	}
 	return true
 }
+
