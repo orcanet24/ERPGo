@@ -603,7 +603,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		public := []string{"/login", "/api/login", "/api/pos/", "/setup/company", "/static/", "/uploads", "/favicon"}
+		public := []string{"/login",	"/api/login", "/api/pos/", "/health", "/setup/company", "/static/", "/uploads", "/favicon"}
 		for _, p := range public {
 			if strings.HasPrefix(r.URL.Path, p) {
 				next.ServeHTTP(w, r)

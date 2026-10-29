@@ -95,7 +95,7 @@ var routeDirectory = map[string]string{
 var masterOnlyRoutes = map[string]bool{
 	"/user": true, "/permission": true, "/setting": true, "/tenant": true,
 	"/ai": true, "/ai_agents": true, "/database_settings": true,
-	"/setup/company": true,
+	"/setup/company": true, "/admin/pos": true, "/pos/api": true, "/config/menu": true,
 	// /role: la matriz de permisos decide qué puede hacer cada nivel; dejarla
 	// abierta permitía que cualquier usuario con sesión reescribiera su propio
 	// rol (escalamiento de privilegios). Antes solo estaba bajo /permission.
@@ -551,16 +551,10 @@ func (s *Server) permissionMiddleware(next http.Handler) http.Handler {
 		deptID, hasDept := moduleForRoute(r.URL.Path)
 		if hasDept && deptID > 0 {
 			action := actionFromMethod(r.Method)
-
-			depts, _ := loadUserDepartments(db, sess.UserID)
-			enModulo := false
-			for _, d := range depts {
-				if d == deptID {
-					enModulo = true
-					break
-				}
-			}
-			if !enModulo && !canAccessModule(s.roleDBs(r), sess.UserID, level, deptID, action) {
+			// La matriz CRUD es la autorización operativa. user_department solo
+			// identifica áreas de trabajo (p. ej. el POS); no puede convertir una
+			// pertenencia en permiso para ver o modificar todos los datos del módulo.
+			if !canAccessModule(s.roleDBs(r), sess.UserID, level, deptID, action) {
 				jsonError(w, "No tiene permisos para este módulo.", http.StatusForbidden)
 				return
 			}
