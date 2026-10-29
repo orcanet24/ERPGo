@@ -784,6 +784,9 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 	// Un borrador no se emite. Antes solo el POS encolaba, así que las ventas
 	// hechas desde el ERP nunca llegaban a la imprenta digital.
 	if isDraft != "yes" {
+		// Aviso al cliente por el área de facturación. Va en una goroutine y
+		// con recover: un WhatsApp caído no puede tumbar una factura.
+		go s.msgAvisarFacturaEmitida(s.tenantOf(r), customerID, invoiceNo, grandTotal)
 		go s.diEnqueueVenta(s.dbFor(r), s.tenantOf(r), fmt.Sprintf("%d", invoiceNo))
 	}
 

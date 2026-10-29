@@ -577,6 +577,10 @@ func (s *Server) vatRetentionSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Aviso al proveedor por el área de cuentas por pagar. Después del commit:
+	// si el aviso falla, la retención ya está registrada y sigue siendo válida.
+	go s.msgAvisarRetencionEmitida(s.tenantOf(r), supplierID, retentionNo, retAmount)
+
 	// 7. LA TRAZA: quién retuvo, cuándo y sobre qué comprobante. Sin esta fila,
 	// quien reconstruya los hechos no puede saberlo si la tabla cambia por fuera.
 	s.appendAudit(r, sess.Username, clientIP(r), "create", "Retenciones",

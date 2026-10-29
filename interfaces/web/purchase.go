@@ -530,6 +530,10 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Aviso al proveedor por el área de compras. Es un hecho consumado: la
+	// compra ya está registrada, así que el aviso no puede hacerla fallar.
+	go s.msgAvisarCompraRegistrada(s.tenantOf(r), supplierID, purchaseID, chalanNo, grandTotal)
+
 	// El documento de la bandeja queda cargado: la compra ya existe, así que
 	// solo se registra el enlace y su rastro de auditoría. Si esto falla, la
 	// compra sigue siendo válida —lo que se pierde es la puesta enlazada—.
