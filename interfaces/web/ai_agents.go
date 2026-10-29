@@ -229,25 +229,35 @@ func (s *Server) aiProveedorActivoParaAgentes(sess *SessionData) (aiProvider, st
 	return p, etiqueta, true
 }
 
+// rolOpcion es una entrada del desplegable de roles del formulario de agentes.
+type rolOpcion struct {
+	ID   int64
+	Name string
+}
+
+// rolesDeControl lista los roles del desplegable.
+//
+// Los roles viven en sec_role, que es de la base de CONTROL (ver
+// tenant_request.go): el puerto equivocado dejaba el select vacío ("no
+// aparecen los roles") en toda empresa que no fuera la maestra.
+func (s *Server) rolesDeControl(r *http.Request) []rolOpcion {
+	roles := []rolOpcion{}
+	rows, err := s.authDB(r).Query(`SELECT id, type FROM sec_role ORDER BY type`)
+	if err != nil {
+		return roles
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var o rolOpcion
+		_ = rows.Scan(&o.ID, &o.Name)
+		roles = append(roles, o)
+	}
+	return roles
+}
+
 // agentForm muestra el formulario (add/edit) con roles y el proveedor activo.
 func (s *Server) agentForm(w http.ResponseWriter, r *http.Request) {
-	type option struct {
-		ID   int64
-		Name string
-	}
-	// Los roles del desplegable viven en sec_role, que es de la base de
-	// CONTROL (ver tenant_request.go): el puerto equivocado dejaba el select
-	// vacío ("no aparecen los roles") en toda empresa que no fuera la maestra.
-	roles := []option{}
-	rows, err := s.authDB(r).Query(`SELECT id, type FROM sec_role ORDER BY type`)
-	if err == nil {
-		for rows.Next() {
-			var o option
-			_ = rows.Scan(&o.ID, &o.Name)
-			roles = append(roles, o)
-		}
-		rows.Close()
-	}
+	roles := s.rolesDeControl(r)
 	proveedor, etiqueta, hayProveedor := s.aiProveedorActivoParaAgentes(s.sessionFromRequest(r))
 	data := map[string]interface{}{
 		"Title":             "Añadir Agente IA",
@@ -353,12 +363,15 @@ func (s *Server) agentSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Crear identidad del agente: user_login + users + sec_userrole.
+	// La unicidad del username se verifica EN CONTROL, que es donde viven los
+	// user_login: preguntarlo en la base de la empresa dejaba duplicarse el
+	// nombre entre empresas (y un login con dos filas para el mismo username).
 	username := "agente." + aiSlug(name)
 	var dup int
-	_ = s.dbFor(r).QueryRow(`SELECT COUNT(*) FROM user_login WHERE username = ?`, username).Scan(&dup)
+	_ = ctl.QueryRow(`SELECT COUNT(*) FROM user_login WHERE username = ?`, username).Scan(&dup)
 	for i := 2; dup > 0 && i < 100; i++ {
 		username = "agente." + aiSlug(name) + "." + strconv.Itoa(i)
-		_ = s.dbFor(r).QueryRow(`SELECT COUNT(*) FROM user_login WHERE username = ?`, username).Scan(&dup)
+		_ = ctl.QueryRow(`SELECT COUNT(*) FROM user_login WHERE username = ?`, username).Scan(&dup)
 	}
 	hash, err := aiRandomSecret(24)
 	if err != nil {

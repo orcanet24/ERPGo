@@ -38,6 +38,9 @@
 {{define "pagejs"}}
 <script>
 $(function () {
+    var submittedAction = 'save';
+    $('.form-dept-prompt button[type=submit]').on('click', function () { submittedAction = $(this).val(); });
+
     $('.form-dept-prompt').on('submit', function (e) {
         e.preventDefault();
         var f = $(this);
@@ -45,8 +48,12 @@ $(function () {
             department: f.data('dept'),
             prompt: f.find('textarea').val()
         }, function (r) {
-            if (r.status == 1) toastr.success(r.msg);
-            else toastr.error(r.error || 'Error');
+            if (r.status == 1) {
+                toastr.success(r.msg);
+                if (submittedAction === 'save_exit') setTimeout(function () { location.href = r.redirect || '/ai/departments'; }, 700);
+            } else {
+                toastr.error(r.error || 'Error');
+            }
         }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
     });
 });

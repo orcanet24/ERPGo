@@ -410,7 +410,7 @@ func (s *Server) crmOpportunityMove(w http.ResponseWriter, r *http.Request) {
 	}
 	s.crmAudit(r, sessUserID(s.sessionFromRequest(r)), "move_stage", "crm_opportunity",
 		strconv.FormatInt(id, 10), nil, map[string]interface{}{"stage_id": stageID})
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Oportunidad movida", "redirect": saveRedirect(r, "/crm/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Oportunidad movida", "redirect": saveRedirect(r, "/crm")})
 }
 
 // ---------- Actividades ----------
@@ -468,7 +468,7 @@ func (s *Server) crmLinkCustomer(w http.ResponseWriter, r *http.Request) {
 	s.crmAudit(r, sessUserID(s.sessionFromRequest(r)), "link_customer", "crm_contact",
 		r.FormValue("contact_id"), nil,
 		map[string]interface{}{"customer_id": r.FormValue("customer_id")})
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Contacto enlazado con el cliente", "redirect": saveRedirect(r, "/crm/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Contacto enlazado con el cliente", "redirect": saveRedirect(r, "/crm")})
 }
 
 // ---------- Utilidades ----------

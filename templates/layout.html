@@ -453,6 +453,29 @@
                 </div><!-- /.modal-content -->
         </div><!-- /.modal-dialog -->
     </div><!-- /.modal -->
+<script>
+// Modal rápido de cliente (#cust_info / #newcustomer): el layout no tiene
+// pagejs propio (cada vista define el suyo), así que el submit se maneja aquí
+// mismo. El «Guardar y Salir» de un modal cierra el modal y lo deja listo;
+// guardado.js no toca este form porque e.preventDefault() corre antes.
+$(function () {
+    $('#newcustomer').on('submit', function (e) {
+        e.preventDefault();
+        var form = this;
+        $.post('/customer/quick', $(form).serialize(), function (r) {
+            if (r.status == 1) {
+                toastr.success(r.msg || 'Cliente añadido');
+                $('#cust_info').modal('hide');
+                form.reset();
+            } else {
+                toastr.error(r.error || 'Error');
+            }
+        }).fail(function (x) {
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'Error');
+        });
+    });
+});
+</script>
 </body>
 </html>
 {{end}}

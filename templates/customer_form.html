@@ -122,10 +122,9 @@
 {{define "pagejs"}}
 <script>
 // Validación RIF en vivo (módulo 11 SENIAT) — feedback inmediato
+var submittedActionForm = 'save';
 $(function () {
-    var submittedAction = 'save';
-
-    $('button[type=submit]', '#customerForm').on('click', function () { submittedAction = $(this).val(); });
+    $('button[type=submit]', '#customerForm').on('click', function () { submittedActionForm = $(this).val(); });
 
     function validateRIFLive(rif) {
         rif = (rif || '').toUpperCase().replace(/[.\- ]/g, '');
@@ -172,21 +171,19 @@ $(function () {
         $('#rifInput').trigger('input');
     });
 
-    $('#customerForm').on('submit', function (e) {
-        var r = validateRIFLive($('#rifInput').val());
-        if (!r.ok) { e.preventDefault(); toastr.error(r.msg); return false; }
-    });
 });
 </script>
 <script>
 $(function () {
     $('#customerForm').on('submit', function (e) {
+        var rif = validateRIFLive($('#rifInput').val());
+        if (!rif.ok) { e.preventDefault(); toastr.error(rif.msg); return false; }
         e.preventDefault();
         var btn = $(this).find('button[type=submit]').prop('disabled', true);
         $.post('/customer/save', $(this).serialize(), function (r) {
             if (r.status == 1) {
                 toastr.success(r.msg);
-                setTimeout(function () { location.href = '/customer/list'; }, 700);
+                if (submittedActionForm === 'save_exit') setTimeout(function () { location.href = r.redirect || '/customer/list'; }, 700);
             } else {
                 toastr.error(r.error || 'Error');
                 btn.prop('disabled', false);

@@ -103,13 +103,20 @@ $(function () {
         });
     });
 
+    var submittedAction = 'save';
+    $('button[type=submit]', '#unitForm').on('click', function () { submittedAction = $(this).val(); });
+
     $('#unitForm').on('submit', function (e) {
         e.preventDefault();
         $.post('/product/unit/save', $(this).serialize(), function (r) {
             if (r.status == 1) {
                 toastr.success(r.msg);
-                resetForm();
-                loadUnits();
+                if (submittedAction === 'save_exit') {
+                    setTimeout(function () { location.href = r.redirect || '/product/list'; }, 700);
+                } else {
+                    resetForm();
+                    loadUnits();
+                }
             } else toastr.error(r.error || 'Error');
         }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
     });
