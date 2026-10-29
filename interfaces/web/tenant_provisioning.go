@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"erpgow/infrastructure/persistence"
-	"erpgow/internal/security"
+	"erpgo/infrastructure/persistence"
+	"erpgo/internal/security"
 )
 
 // TenantCredentials contiene las credenciales de BD de una empresa específica.
@@ -206,3 +206,4 @@ func (s *Server) ProvisionTenantExtended(legalName, rif, adminUser, adminPass st
 
 	return res, nil
 }
+

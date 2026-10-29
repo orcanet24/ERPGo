@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"erpgow"
+	"erpgo"
 
 	_ "github.com/glebarez/go-sqlite"
 )
@@ -138,7 +138,7 @@ func RunMigrationsFor(db *sql.DB) error {
 // que un archivo guardado con CRLF (";\r\n") no se partiría nunca y el archivo
 // entero se ejecutaría como una sola sentencia rota.
 func readMigrations() ([]migFile, error) {
-	entries, err := fs.ReadDir(erpgow.Migrations(), "migrations")
+	entries, err := fs.ReadDir(erpgo.Migrations(), "migrations")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read embedded migrations: %w", err)
 	}
@@ -148,7 +148,7 @@ func readMigrations() ([]migFile, error) {
 		if f.IsDir() || !strings.HasSuffix(f.Name(), ".sql") {
 			continue
 		}
-		content, err := fs.ReadFile(erpgow.Migrations(), "migrations/"+f.Name())
+		content, err := fs.ReadFile(erpgo.Migrations(), "migrations/"+f.Name())
 		if err != nil {
 			fmt.Printf("  WARN: could not read %s: %v\n", f.Name(), err)
 			continue

@@ -37,7 +37,7 @@ import (
 	"strings"
 	"testing"
 
-	"erpgow"
+	"erpgo"
 )
 
 var (
@@ -50,7 +50,7 @@ var (
 // mismo que usa el arranque—, las sentencias que tocan `menu` o `sub_module`.
 func sentenciasDeMenuEnLasMigraciones(t *testing.T) []string {
 	t.Helper()
-	entradas, err := fs.ReadDir(erpgow.Migrations(), "migrations")
+	entradas, err := fs.ReadDir(erpgo.Migrations(), "migrations")
 	if err != nil {
 		t.Fatalf("no se pudieron listar las migraciones: %v", err)
 	}
@@ -64,7 +64,7 @@ func sentenciasDeMenuEnLasMigraciones(t *testing.T) []string {
 
 	var out []string
 	for _, nombre := range nombres {
-		b, err := fs.ReadFile(erpgow.Migrations(), "migrations/"+nombre)
+		b, err := fs.ReadFile(erpgo.Migrations(), "migrations/"+nombre)
 		if err != nil {
 			t.Fatalf("no se pudo leer %s: %v", nombre, err)
 		}

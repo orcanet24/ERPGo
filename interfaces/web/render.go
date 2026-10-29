@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"erpgow"
+	"erpgo"
 )
 
 // assetVersion devuelve una huella corta del CSS y el JS de la aplicación,
@@ -42,11 +42,11 @@ var assetVersionValue string
 func (s *Server) assetVersion() string {
 	assetVersionOnce.Do(func() {
 		h := sha256.New()
-		_ = fs.WalkDir(erpgow.Static(), ".", func(path string, d fs.DirEntry, err error) error {
+		_ = fs.WalkDir(erpgo.Static(), ".", func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil
 			}
-			if b, err := fs.ReadFile(erpgow.Static(), path); err == nil {
+			if b, err := fs.ReadFile(erpgo.Static(), path); err == nil {
 				h.Write([]byte(path))
 				h.Write(b)
 			}
@@ -157,8 +157,8 @@ var tmplCache = &templateSetCache{sets: map[string]cachedTemplateSet{}}
 // Templates come from the embedded filesystem (single binary), pero si hay una
 // copia en disco (desarrollo) manda esa y se relee al cambiar.
 func (s *Server) buildTemplateSet(name string) (*template.Template, error) {
-	layoutStamp := stampOf(erpgow.Templates(), "templates/layout.html")
-	pageStamp := stampOf(erpgow.Templates(), "templates/"+name)
+	layoutStamp := stampOf(erpgo.Templates(), "templates/layout.html")
+	pageStamp := stampOf(erpgo.Templates(), "templates/"+name)
 
 	tmplCache.mu.RLock()
 	c, ok := tmplCache.sets[name]
@@ -179,14 +179,14 @@ func (s *Server) buildTemplateSet(name string) (*template.Template, error) {
 	// El layout se lee SOLO del núcleo (GlobalTemplate): es el chrome global
 	// (header, footer, appearance) y no puede depender de qué módulos estén
 	// desplegados en este cliente.
-	layout, err := erpgow.GlobalTemplate("templates/layout.html")
+	layout, err := erpgo.GlobalTemplate("templates/layout.html")
 	if err != nil {
 		return nil, fmt.Errorf("layout.html: %w", err)
 	}
 	// La página sí se busca en las raíces de los módulos: una vista escrita en
 	// web/<code>/templates/<name>.html se pinta aquí sin más trámite, y hereda
 	// el layout global de arriba.
-	page, err := fs.ReadFile(erpgow.Templates(), "templates/"+name)
+	page, err := fs.ReadFile(erpgo.Templates(), "templates/"+name)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
@@ -380,7 +380,7 @@ func (s *Server) renderStandalone(r *http.Request, w http.ResponseWriter, name s
 	}
 
 	t, err := template.New(name).Funcs(templateFuncs(s, nil)).
-		ParseFS(erpgow.Templates(), "templates/"+name)
+		ParseFS(erpgo.Templates(), "templates/"+name)
 	if err != nil {
 		http.Error(w, "template "+name+": "+err.Error(), http.StatusInternalServerError)
 		return

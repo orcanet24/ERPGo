@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"erpgow"
+	"erpgo"
 )
 
 // ---------- Settings module (replicates dashboard settings) ----------
@@ -57,7 +57,7 @@ func imageAssetPath(p string) string {
 	}
 	// static/ may live only in the embedded binary (single-file deployment).
 	if strings.HasPrefix(p, "static/") {
-		if _, err := fs.Stat(erpgow.Static(), p); err == nil {
+		if _, err := fs.Stat(erpgo.Static(), p); err == nil {
 			return p
 		}
 	}

@@ -26,7 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	"erpgow"
+	"erpgo"
 
 	_ "github.com/glebarez/go-sqlite"
 )
@@ -242,11 +242,11 @@ func TestSinProveedorActivoNoSeCreaAgente(t *testing.T) {
 func paginaAI(t *testing.T, archivo string) *template.Template {
 	t.Helper()
 	tpl, err := template.New(archivo).Funcs(templateFuncs(nil, nil)).
-		ParseFS(erpgow.Templates(), "templates/"+archivo)
+		ParseFS(erpgo.Templates(), "templates/"+archivo)
 	if err != nil {
 		t.Fatalf("la plantilla %s no se puede cargar: %v", archivo, err)
 	}
-	if _, err := tpl.ParseFS(erpgow.Templates(), "templates/layout.html"); err != nil {
+	if _, err := tpl.ParseFS(erpgo.Templates(), "templates/layout.html"); err != nil {
 		t.Fatalf("%s no convive con layout.html: %v", archivo, err)
 	}
 	return tpl

@@ -34,7 +34,7 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"erpgow/internal/security"
+	"erpgo/internal/security"
 )
 
 // TenantConfigDir es la carpeta de archivos de conexión por empresa.
@@ -169,3 +169,4 @@ func LoadTenantConfigFile(code string) (*TenantConn, error) {
 	}
 	return conn, nil
 }
+

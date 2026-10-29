@@ -19,18 +19,18 @@ import (
 	"strings"
 	"testing"
 
-	"erpgow"
+	"erpgo"
 )
 
 // TestLaPantallaDeLaBandejaSeRepresenta cubre la tabla con los tres estados y
 // su script.
 func TestLaPantallaDeLaBandejaSeRepresenta(t *testing.T) {
 	tpl, err := template.New("purchase_inbox.html").Funcs(templateFuncs(nil, nil)).
-		ParseFS(erpgow.Templates(), "templates/purchase_inbox.html")
+		ParseFS(erpgo.Templates(), "templates/purchase_inbox.html")
 	if err != nil {
 		t.Fatalf("la plantilla no se puede cargar: %v", err)
 	}
-	if _, err := tpl.ParseFS(erpgow.Templates(), "templates/layout.html"); err != nil {
+	if _, err := tpl.ParseFS(erpgo.Templates(), "templates/layout.html"); err != nil {
 		t.Fatalf("la página no convive con layout.html: %v", err)
 	}
 
@@ -134,11 +134,11 @@ func TestElFormularioDeCompraRepresentaLaPropuestaYElCasoNormal(t *testing.T) {
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
 			tpl, err := template.New("purchase_form.html").Funcs(templateFuncs(nil, nil)).
-				ParseFS(erpgow.Templates(), "templates/purchase_form.html")
+				ParseFS(erpgo.Templates(), "templates/purchase_form.html")
 			if err != nil {
 				t.Fatalf("la plantilla no se puede cargar: %v", err)
 			}
-			if _, err := tpl.ParseFS(erpgow.Templates(), "templates/layout.html"); err != nil {
+			if _, err := tpl.ParseFS(erpgo.Templates(), "templates/layout.html"); err != nil {
 				t.Fatalf("la página no convive con layout.html: %v", err)
 			}
 

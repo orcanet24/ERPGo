@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"erpgow/configs"
-	"erpgow/infrastructure/persistence"
-	"erpgow/internal/security"
+	"erpgo/configs"
+	"erpgo/infrastructure/persistence"
+	"erpgo/internal/security"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -429,7 +429,7 @@ func (w *Wizard) runFreshInstall() error {
 		MasterKey: jwtSecret, JWTExpiry: 24,
 		AppName: "ERPGo", AppURL: fmt.Sprintf("http://localhost:%d", serverPort),
 		AppEnv: "production", UploadPath: "./uploads",
-		LogEnabled: true, LogLevel: "info", LogFile: "logs/erpgow.log",
+		LogEnabled: true, LogLevel: "info", LogFile: "logs/erpgo.log",
 	}).WriteEnvFile(); err != nil {
 		return fmt.Errorf("guardando configuración .env: %w", err)
 	}
@@ -458,7 +458,7 @@ func (w *Wizard) runFreshInstall() error {
 	fmt.Printf("  Usuario: %s\n", superUser)
 	fmt.Println()
 	fmt.Println("  Arrancar manualmente:")
-	fmt.Println("    Windows: .\\erpgow.exe")
+	fmt.Println("    Windows: .\\erpgo.exe")
 	fmt.Println("    Linux:   ./erpgow")
 	fmt.Println()
 
@@ -1155,3 +1155,5 @@ func generateRandomSecret(length int) string {
 	}
 	return string(b)
 }
+
+

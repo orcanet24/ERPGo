@@ -1,7 +1,6 @@
 package web
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -282,11 +281,14 @@ func (s *Server) deliveryOrderUpdateStatus(w http.ResponseWriter, r *http.Reques
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	deliveredAtSQL := "NULL"
+	// delivered_at se asigna con NOW() al marcar entregado; si no, se limpia a NULL.
+	// No viene del usuario, así que la columna va literal en la sentencia (no es
+	// parametizable porque NULL y NOW() son expresiones, no valores).
+	deliveredAtExpr := "NULL"
 	if newStatus == "delivered" {
-		deliveredAtSQL = "NOW()"
+		deliveredAtExpr = "NOW()"
 	}
-	_, err = tx.Exec(fmt.Sprintf("UPDATE delivery_order SET status=?, delivered_at=%s WHERE id=?", deliveredAtSQL), newStatus, id)
+	_, err = tx.Exec("UPDATE delivery_order SET status=?, delivered_at=" + deliveredAtExpr + " WHERE id=?", newStatus, id)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return

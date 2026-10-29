@@ -1,4 +1,4 @@
-module erpgow
+module erpgo
 
 go 1.26.5
 

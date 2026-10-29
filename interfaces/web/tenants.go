@@ -12,9 +12,9 @@ import (
 	"regexp"
 	"strings"
 
-	"erpgow/configs"
-	"erpgow/infrastructure/persistence"
-	"erpgow/internal/security"
+	"erpgo/configs"
+	"erpgo/infrastructure/persistence"
+	"erpgo/internal/security"
 )
 
 // ---------- Registro de empresas (multi-tenant sobre MySQL) ----------
@@ -1375,3 +1375,4 @@ func empresaVacia(db *sql.DB) bool {
 	}
 	return n == 0
 }
+

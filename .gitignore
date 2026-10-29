@@ -8,3 +8,7 @@ __pycache__/
 config/empresas/
 backup/
 logs/
+
+# Documentacion historica del ERP PHP original (~38 MB): se conserva en disco pero no en el repositorio
+/doc/
+
