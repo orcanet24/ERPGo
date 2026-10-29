@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -182,7 +183,20 @@ func (s *Server) agentList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) agentListData(w http.ResponseWriter, r *http.Request) {
-	list := s.loadAIAgents(s.sessionFromRequest(r))
+	// Recover de cualquier panic en la consulta: un panic aquí deja la
+	// conexión colgada y DataTables recibe vacío → "Cannot read length of undefined".
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("agentListData panic: %v", rec)
+			writeJSON(w, []map[string]interface{}{})
+		}
+	}()
+	sess := s.sessionFromRequest(r)
+	if sess == nil {
+		writeJSON(w, []map[string]interface{}{})
+		return
+	}
+	list := s.loadAIAgents(sess)
 	out := make([]map[string]interface{}, 0, len(list))
 	// El proveedor que muestra la lista es el que de verdad usan los agentes:
 	// el activo de Configuración IA. La fila vieja de cada agente apunta a lo
