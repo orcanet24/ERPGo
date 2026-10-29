@@ -26,7 +26,13 @@ type menuNode struct {
 	icon     string
 	perm     string
 	active   string
-	children []*menuNode
+	// moduleOff es true SOLO cuando la entrada pertenece a un módulo que EXISTE
+	// en `modules` y está apagado. El valor cero (el caso de todo el menú core,
+	// cuyo module_id es 'core' y no tiene fila) significa «se pinta». Se eligió
+	// el cero como «visible» a propósito: cualquier nodo construido a mano
+	// —pruebas incluidas— no puede desaparecer por olvidar un campo.
+	moduleOff bool
+	children  []*menuNode
 }
 
 // menuTree carga el menú de la base y lo poda a lo que este request puede ver.
@@ -54,13 +60,14 @@ func (s *Server) menuTree(r *http.Request, perm map[string]bool, currentURL stri
 // caché construye su propio árbol en cada petición, así que dos renders nunca
 // comparten estructura mutable.
 type menuFila struct {
-	id       int
-	parentID sql.NullInt64
-	label    string
-	url      string
-	icon     string
-	perm     string
-	active   string
+	id        int
+	parentID  sql.NullInt64
+	label     string
+	url       string
+	icon      string
+	perm      string
+	active    string
+	moduleOff bool
 }
 
 // loadMenu lee la tabla `menu` y arma el árbol en memoria. Devuelve solo las
@@ -81,6 +88,7 @@ func (s *Server) loadMenu(r *http.Request) ([]*menuNode, error) {
 		n := &menuNode{
 			id: f.id, parentID: f.parentID, label: f.label,
 			url: f.url, icon: f.icon, perm: f.perm, active: f.active,
+			moduleOff: f.moduleOff,
 		}
 		all = append(all, n)
 		byID[n.id] = n
@@ -103,7 +111,62 @@ func (s *Server) loadMenu(r *http.Request) ([]*menuNode, error) {
 }
 
 // leerMenuFilas es la consulta, sin caché: es la fuente que llena la caché.
+//
+// LA CONSULTA LLEVA EL ESTADO DEL MÓDULO, y esa es la única forma de que
+// `modules.is_active` signifique algo. Antes el menú solo miraba `menu.status`
+// y el permiso: un módulo apagado seguía en la barra lateral para todo el que
+// tuviera el permiso concedido.
+//
+// El LEFT JOIN no es un detalle: `menu.module_id` tiene DEFAULT 'core' y no
+// existe ninguna fila en `modules` con id 'core'. Con un JOIN normal, TODO el
+// menú del ERP desaparecería. COALESCE(...,1) deja visible lo que no tiene
+// módulo registrado; solo se oculta lo que pertenece a un módulo que existe y
+// está en 0.
+//
+// Si la base es antigua y no tiene `modules`, la consulta falla: se reintenta
+// sin el JOIN para no dejar al usuario sin menú por una tabla que aún no se
+// migró.
 func (s *Server) leerMenuFilas(r *http.Request) ([]menuFila, error) {
+	filas, err := s.leerMenuFilasConModulo(r)
+	if err == nil {
+		return filas, nil
+	}
+	return s.leerMenuFilasSinModulo(r)
+}
+
+func (s *Server) leerMenuFilasConModulo(r *http.Request) ([]menuFila, error) {
+	rows, err := s.authDB(r).Query(`
+		SELECT m.id, m.parent_id, m.label, m.url, m.icon, m.perm, m.active_prefix,
+		       COALESCE(mod.is_active, 1)
+		FROM menu m
+		LEFT JOIN modules mod ON mod.id = m.module_id
+		WHERE m.status = 1
+		ORDER BY m.sort_order, m.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var filas []menuFila
+	for rows.Next() {
+		f := menuFila{}
+		var url, icon, perm, active sql.NullString
+		var activo sql.NullInt64
+		if err := rows.Scan(&f.id, &f.parentID, &f.label, &url, &icon, &perm, &active, &activo); err != nil {
+			continue
+		}
+		f.url, f.icon, f.perm, f.active = url.String, icon.String, perm.String, active.String
+		// Sin fila de módulo (activo NULL) la entrada se pinta.
+		f.moduleOff = activo.Valid && activo.Int64 == 0
+		filas = append(filas, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return filas, nil
+}
+
+func (s *Server) leerMenuFilasSinModulo(r *http.Request) ([]menuFila, error) {
 	rows, err := s.authDB(r).Query(`
 		SELECT id, parent_id, label, url, icon, perm, active_prefix
 		FROM menu
@@ -134,6 +197,12 @@ func (s *Server) leerMenuFilas(r *http.Request) ([]menuFila, error) {
 // El segundo valor es false cuando el nodo debe ocultarse.
 func buildMenuItem(n *menuNode, perm map[string]bool, currentURL string) (MenuItem, bool) {
 	isLeaf := n.url != ""
+
+	// Un módulo apagado no se anuncia. Va ANTES del permiso porque no depende
+	// de quién pregunta: si el módulo está apagado, no lo ve ni el master.
+	if n.moduleOff {
+		return MenuItem{}, false
+	}
 
 	// EL PERMISO DEL PROPIO NODO MANDA, sea enlace o grupo.
 	//

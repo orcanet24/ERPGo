@@ -435,6 +435,7 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	// módulos porque son su tablero, no un módulo aparte.
 	s.registerFinanceAlertRoutes()
 	s.registerNotifyChannelRoutes()
+	s.registerMensajeriaRoutes()
 	s.registerPOSAPIRoutes()
 	s.registerPOSAdminRoutes()
 	s.registerPOSSyncRoutes()

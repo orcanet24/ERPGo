@@ -1,0 +1,46 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Mensajería</h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <div class="alert alert-info">
+            El módulo está encendido en la instalación y en esta empresa. La bandeja de conversaciones,
+            los dispositivos y el envío llegan en las fases siguientes; esta pantalla existe para que el
+            super administrador compruebe que el candado funciona y que el menú aparece solo cuando debe.
+        </div>
+
+        <h4>Estado</h4>
+        <table class="table table-condensed">
+            <tbody>
+                <tr><th style="width:240px">Servicio de la instalación</th>
+                    <td>{{if .Global.Enabled}}<span class="label label-success">encendido</span>{{else}}<span class="label label-default">apagado</span>{{end}}</td></tr>
+                <tr><th>Dirección</th><td>{{if .Global.DaemonURL}}{{.Global.DaemonURL}}{{else}}—{{end}}</td></tr>
+                <tr><th>País para los teléfonos</th><td>{{.Empresa.DefaultCountry}}</td></tr>
+                <tr><th>Riesgo aceptado</th>
+                    <td>{{if .Empresa.RiskAcceptedAt}}{{.Empresa.RiskAcceptedBy}} · {{.Empresa.RiskAcceptedAt}}{{else}}—{{end}}</td></tr>
+            </tbody>
+        </table>
+
+        <h4>Proveedores</h4>
+        <table class="table table-condensed table-bordered">
+            <thead><tr><th>Proveedor</th><th>Estado</th></tr></thead>
+            <tbody>
+            {{range .Proveedores}}
+                <tr><td><code>{{.Provider}}</code></td>
+                    <td>{{if .Enabled}}<span class="label label-success">encendido</span>{{else}}<span class="label label-default">apagado</span>{{end}}</td></tr>
+            {{else}}
+                <tr><td colspan="2" class="text-muted">Sin proveedores configurados.</td></tr>
+            {{end}}
+            </tbody>
+        </table>
+
+        <p class="help-block">
+            Un aviso no sale por el primer proveedor encendido: se resuelve por contacto, con la tabla de
+            canales verificados. Si ninguno sirve, el aviso queda bloqueado con el motivo, nunca «enviado».
+        </p>
+    </div>
+</div>
+{{end}}

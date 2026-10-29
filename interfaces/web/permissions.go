@@ -73,6 +73,11 @@ var routeDepartment = map[string]int{
 	//   /module    → administración de addons (14, configuración).
 	"/reports": 8, "/debitnote": 1, "/accounting": 9,
 	"/data": 14, "/module": 14,
+
+	// Mensajería tiene su propio módulo (25). No comparte id con ninguno, así
+	// que el middleware puede decidir por módulo; el permiso fino de chat,
+	// envío y administración se comprueba en el handler y en routeDirectory.
+	"/mensajeria": 25,
 }
 
 // routeDirectory exige, ADEMÁS del módulo, el permiso concreto de la entrada de
@@ -89,6 +94,11 @@ var routeDepartment = map[string]int{
 var routeDirectory = map[string]string{
 	"/cost": "cost|cost_timesheet|cost_close",
 	"/crm":  "crm",
+	// Mensajería: ver una conversación y mandar un mensaje son permisos
+	// distintos, y administrar los números es un tercero. El módulo (25) solo
+	// dice «esta persona trabaja en mensajería»; la entrada de menú y esta
+	// comprobación deciden qué puede hacer.
+	"/mensajeria": "mensajeria_chat|mensajeria_send|mensajeria_admin",
 }
 
 // Rutas que requieren master (gestión global del sistema)
@@ -104,6 +114,12 @@ var masterOnlyRoutes = map[string]bool{
 	// (no en /setting, que es el prefijo viejo). Sin esta entrada cualquier
 	// usuario con sesión podía abrir /settings/fiscal y reconfigurar el RIF.
 	"/settings": true,
+	// /module: activar o desactivar un módulo cambia lo que ve TODA la empresa y
+	// enciende o apaga funciones completas (mensajería, addons). Estaba solo en
+	// routeDepartment, así que un gerente con el módulo de configuración
+	// concedido podía pulsar «Activar» en /module/list. Encender mensajería es
+	// una decisión del super administrador, igual que /setting y /tenant.
+	"/module": true,
 }
 
 // Rutas que requieren admin o master (gestión de empresa)

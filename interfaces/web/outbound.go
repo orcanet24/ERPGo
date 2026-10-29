@@ -201,6 +201,12 @@ func (s *Server) finDestinatario(db *sql.DB, canal notifyChannel, alerta map[str
 	case "webhook":
 		return "webhook://" + canal.Name, ""
 	default:
+		if canalUsaMovil(canal.Kind) {
+			if strings.TrimSpace(movil) == "" {
+				return "", "La ficha no tiene teléfono. Cárguelo en " + etiquetaContraparte(partyType) + " y vuelva a intentarlo: el destinatario del aviso sale siempre del registro, nunca de la pantalla."
+			}
+			return movil, ""
+		}
 		if strings.TrimSpace(email) == "" {
 			return "", "La ficha no tiene correo. Cárguelo en " + etiquetaContraparte(partyType) + " y vuelva a intentarlo: el destinatario del aviso sale siempre del registro, nunca de la pantalla."
 		}
@@ -213,6 +219,22 @@ func etiquetaContraparte(partyType string) string {
 		return "Proveedores"
 	}
 	return "Clientes"
+}
+
+// canalUsaMovil dice si el destinatario de este canal es un teléfono y no un
+// correo.
+//
+// EXISTE PORQUE EL `default` DE finDestinatario ERA EL CORREO. Un canal `wapp`
+// caía ahí y el ERP le entregaba a la pasarela de WhatsApp el email de la ficha
+// como «to»: el aviso salía (o fallaba) contra una dirección que no es un
+// teléfono. Los tipos nuevos de mensajería (gowa, telegram) tienen el mismo
+// problema, así que la decisión se toma en un solo sitio y no en cada `switch`.
+func canalUsaMovil(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "wapp", "gowa", "telegram":
+		return true
+	}
+	return false
 }
 
 // finUltimoAviso dice cuándo se le mandó a esta referencia por este canal, para

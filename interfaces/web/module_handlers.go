@@ -188,6 +188,10 @@ func (s *Server) moduleToggle(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
+	// El menú se cachea 30 s. Sin invalidar aquí, el módulo seguía apareciendo
+	// (o seguía oculto) después de pulsar el botón, y el usuario creía que el
+	// interruptor no funcionaba.
+	invalidarCacheMenu()
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Módulo actualizado"})
 }
 
