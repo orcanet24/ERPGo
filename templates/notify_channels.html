@@ -51,7 +51,7 @@
                                 data-host="{{.Host}}" data-port="{{.Port}}" data-user="{{.Username}}"
                                 data-from="{{.FromAddress}}" data-fromname="{{.FromName}}" data-security="{{.Security}}"
                                 data-url="{{.URL}}" data-method="{{.Method}}" data-authheader="{{.AuthHeader}}"
-                                data-device="{{.MsgDeviceID}}"
+                                data-device="{{.MsgDeviceID}}" data-template="{{.MsgTemplateCode}}"
                                 data-notes="{{.Notes}}"><i class="fa fa-pencil"></i> Editar</button>
                             <button class="btn btn-xs btn-success canal-probar"
                                 data-id="{{.ID}}" data-kind="{{.Kind}}" data-name="{{.Name}}"><i class="fa fa-bolt"></i> Probar</button>
@@ -197,6 +197,14 @@
               </select>
               <span class="help-block">El aviso entra en la cola de ese número; no sale en el momento. El despachador aplica horario, cupo y pausas.</span>
             </div></div>
+            <div class="col-md-6"><div class="form-group">
+              <label for="cn_template">Plantilla (opcional)</label>
+              <select class="form-control" id="cn_template" name="msg_template_code">
+                <option value="">— asunto y cuerpo libres —</option>
+                {{range .Plantillas}}{{if .IsActive}}<option value="{{.Code}}">{{.Code}} · {{.Name}}</option>{{end}}{{end}}
+              </select>
+              <span class="help-block">Si elige una plantilla, el texto sale de ella y no del asunto. Las plantillas se editan en Configuración → Mensajería → Plantillas.</span>
+            </div></div>
           </div>
         </div>
 
@@ -285,6 +293,7 @@ $(function () {
         $('#cn_method').val(d.method || 'POST');
         $('#cn_authheader').val(d.authheader);
         $('#cn_device').val(d.device);
+        $('#cn_template').val(d.template);
         $('#cn_notes').val(d.notes);
         cnCampos();
         $('#modalCanal').modal('show');

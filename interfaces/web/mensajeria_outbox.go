@@ -480,7 +480,7 @@ func (s *Server) msgReencolar(ctl *sql.DB, id int64, cuando time.Time, motivo st
 // Devuelve la referencia «outbox:<id>» que se guarda en finance_message. El
 // aviso NO se envía aquí: se envía cuando el despachador lo decida, con el ritmo
 // y el cupo del número. Decir «enviado» en este punto sería mentir.
-func (s *Server) msgEncolarAviso(r *http.Request, canal notifyChannel, destino, asunto, cuerpo,
+func (s *Server) msgEncolarAviso(r *http.Request, canal notifyChannel, destino, texto,
 	refType, refID, usuario string) (string, error) {
 	ctl, err := s.controlStore()
 	if err != nil || ctl == nil {
@@ -495,7 +495,7 @@ func (s *Server) msgEncolarAviso(r *http.Request, canal notifyChannel, destino, 
 	id, nuevo, err := s.msgEncolar(ctl, msgOutbox{
 		Tenant: s.tenantOf(r), Provider: "whatsapp_gowa", DeviceID: canal.MsgDeviceID,
 		Priority: "transaccional", Kind: "aviso", ToMSISDN: msisdn,
-		Body: asunto + "\n\n" + cuerpo, RefType: refType, RefID: refID,
+		Body: texto, RefType: refType, RefID: refID,
 		CreatedBy: usuario,
 	})
 	if err != nil {

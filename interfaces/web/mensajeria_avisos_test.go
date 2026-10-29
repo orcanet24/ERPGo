@@ -29,7 +29,7 @@ func baseAvisos(t *testing.T) (*Server, *sql.DB) {
 			cooldown_days INTEGER DEFAULT 3, host TEXT, port INTEGER DEFAULT 587, username TEXT, password TEXT,
 			from_address TEXT, from_name TEXT, security TEXT DEFAULT 'starttls', url TEXT,
 			http_method TEXT DEFAULT 'POST', auth_header TEXT, auth_token TEXT, sign_secret TEXT,
-			msg_device_id TEXT DEFAULT '', notes TEXT, created_at TEXT DEFAULT '', updated_at TEXT DEFAULT '')`,
+			msg_device_id TEXT DEFAULT '', msg_template_code TEXT DEFAULT '', notes TEXT, created_at TEXT DEFAULT '', updated_at TEXT DEFAULT '')`,
 		`CREATE TABLE finance_message (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id INTEGER DEFAULT 0,
 			channel TEXT DEFAULT '', channel_kind TEXT DEFAULT '', recipient TEXT DEFAULT '', subject TEXT DEFAULT '',
 			body TEXT, ref_type TEXT DEFAULT '', ref_id TEXT DEFAULT '', status TEXT DEFAULT 'enviando', error TEXT,

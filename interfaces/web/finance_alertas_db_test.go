@@ -76,7 +76,7 @@ func nuevaBaseDeCartera(t *testing.T) *sql.DB {
 			cooldown_days INTEGER NOT NULL DEFAULT 3, host TEXT, port INTEGER NOT NULL DEFAULT 587,
 			username TEXT, password TEXT, from_address TEXT, from_name TEXT,
 			security TEXT NOT NULL DEFAULT 'starttls', url TEXT, http_method TEXT NOT NULL DEFAULT 'POST',
-			auth_header TEXT, auth_token TEXT, sign_secret TEXT, msg_device_id TEXT NOT NULL DEFAULT '', notes TEXT,
+			auth_header TEXT, auth_token TEXT, sign_secret TEXT, msg_device_id TEXT NOT NULL DEFAULT '', msg_template_code TEXT NOT NULL DEFAULT '', notes TEXT,
 			created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
 	}
 	for _, s := range ddl {

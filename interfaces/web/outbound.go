@@ -42,6 +42,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"erpgo/internal/mensajeria"
 )
 
 // notifyChannel es la configuración de un canal de salida.
@@ -69,8 +71,10 @@ type notifyChannel struct {
 	AuthToken  string
 	SignSecret string
 
-	// Mensajería (canal «gowa»): qué dispositivo de la empresa manda el aviso.
-	MsgDeviceID string
+	// Mensajería (canal «gowa»): qué dispositivo de la empresa manda el aviso y,
+	// si se eligió, qué plantilla fija el texto.
+	MsgDeviceID     string
+	MsgTemplateCode string
 
 	Notes string
 }
@@ -80,7 +84,8 @@ type notifyChannel struct {
 const notifyCanalesSQL = `SELECT id, IFNULL(kind,''), IFNULL(name,''), is_active, ai_allowed, cooldown_days,
 	IFNULL(host,''), port, IFNULL(username,''), IFNULL(password,''), IFNULL(from_address,''), IFNULL(from_name,''),
 	IFNULL(security,'starttls'), IFNULL(url,''), IFNULL(http_method,'POST'), IFNULL(auth_header,''),
-	IFNULL(auth_token,''), IFNULL(sign_secret,''), IFNULL(msg_device_id,''), IFNULL(notes,'')
+	IFNULL(auth_token,''), IFNULL(sign_secret,''), IFNULL(msg_device_id,''), IFNULL(msg_template_code,''),
+	IFNULL(notes,'')
 	FROM notify_channel`
 
 // notifyCanalEscanear llena una fila del canal.
@@ -91,7 +96,7 @@ func notifyCanalEscanear(s interface {
 	err := s.Scan(&c.ID, &c.Kind, &c.Name, &c.IsActive, &c.AIAllowed, &c.CooldownDays,
 		&c.Host, &c.Port, &c.Username, &c.Password, &c.FromAddress, &c.FromName,
 		&c.Security, &c.URL, &c.Method, &c.AuthHeader, &c.AuthToken, &c.SignSecret,
-		&c.MsgDeviceID, &c.Notes)
+		&c.MsgDeviceID, &c.MsgTemplateCode, &c.Notes)
 	return c, err
 }
 
@@ -350,7 +355,21 @@ func (s *Server) financeEnviarAviso(r *http.Request, db *sql.DB, canal notifyCha
 		if strings.TrimSpace(canal.MsgDeviceID) == "" {
 			envioErr = fmt.Errorf("el canal de WhatsApp «%s» no tiene un dispositivo asignado", canal.Name)
 		} else {
-			prov, envioErr = s.msgEncolarAviso(r, canal, destino, asunto, cuerpo, refType, refID, usuario)
+			texto := asunto + "\n\n" + cuerpo
+			if strings.TrimSpace(canal.MsgTemplateCode) != "" {
+				plantilla, perr := s.msgPlantillaPorCodigo(db, canal.MsgTemplateCode)
+				if perr != nil {
+					envioErr = perr
+				} else {
+					texto, envioErr = mensajeria.Render(plantilla.Body, s.msgVariablesDeAviso(db, alerta, refID))
+					if envioErr != nil {
+						envioErr = fmt.Errorf("plantilla «%s»: %w", plantilla.Code, envioErr)
+					}
+				}
+			}
+			if envioErr == nil {
+				prov, envioErr = s.msgEncolarAviso(r, canal, destino, texto, refType, refID, usuario)
+			}
 		}
 	case "webhook":
 		if strings.TrimSpace(canal.URL) == "" {
@@ -389,6 +408,44 @@ func (s *Server) financeEnviarAviso(r *http.Request, db *sql.DB, canal notifyCha
 		"enviado": true, "id": msgID, "destino": destino, "canal": canal.Name, "kind": canal.Kind,
 		"msg": "Aviso enviado a " + destino + " por " + canal.Name + ".",
 	}, nil
+}
+
+// msgVariablesDeAviso arma los datos que una plantilla puede usar. Si un dato no
+// existe, se devuelve vacío y el render falla: el aviso no sale con un hueco.
+func (s *Server) msgVariablesDeAviso(db *sql.DB, alerta map[string]interface{}, refID string) map[string]string {
+	partyType := fmt.Sprintf("%v", alerta["party_type"])
+	var id int64
+	switch v := alerta["party_id"].(type) {
+	case int64:
+		id = v
+	case float64:
+		id = int64(v)
+	}
+	nombre := ""
+	if id > 0 {
+		if partyType == "supplier" {
+			nombre, _, _ = s.finContactoProveedor(db, id)
+		} else {
+			nombre, _, _ = s.finContactoCliente(db, id)
+		}
+	}
+	monto := ""
+	switch v := alerta["amount"].(type) {
+	case float64:
+		monto = fmt.Sprintf("%.2f", v)
+	case int64:
+		monto = fmt.Sprintf("%.2f", float64(v))
+	case string:
+		monto = v
+	}
+	return map[string]string{
+		"cliente":    nombre,
+		"monto":      monto,
+		"fecha":      time.Now().Format("02/01/2006"),
+		"empresa":    s.finEmpresa(db),
+		"referencia": refID,
+		"enlace":     "",
+	}
 }
 
 // ---------- Entrega: correo ----------
