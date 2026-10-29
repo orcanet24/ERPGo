@@ -11,6 +11,7 @@
     </div>
     <div class="panel-body">
         <p class="help-block">{{.Nota}}</p>
+        <div id="dvMsg" class="alert" style="display:none"></div>
 
         {{if not .Activa}}
         <div class="alert alert-warning">
@@ -72,73 +73,112 @@
     </div>
 </div>
 
-<div class="modal fade" id="modalQR" tabindex="-1" role="dialog">
-  <div class="modal-dialog" role="document">
-    <div class="modal-content">
-      <div class="modal-header">
-        <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
-        <h4 class="modal-title">Vincular <span id="qr_device"></span></h4>
-      </div>
-      <div class="modal-body text-center">
-        <p class="text-muted">WhatsApp → Dispositivos vinculados → Vincular un dispositivo.</p>
-        <img id="qr_img" alt="Código QR de WhatsApp" style="max-width:280px;width:100%">
-        <p class="help-block">El QR caduca en menos de un minuto. Si expira, cierre y vuelva a pedirlo.</p>
-      </div>
-    </div>
+<div class="panel panel-default" id="qrPanel" style="display:none">
+  <div class="panel-body text-center">
+    <h5>Vincular <span id="qr_device"></span></h5>
+    <p class="text-muted">WhatsApp → Dispositivos vinculados → Vincular un dispositivo.</p>
+    <img id="qr_img" alt="Código QR de WhatsApp" style="max-width:280px;width:100%">
+    <p class="help-block">El QR caduca en menos de un minuto. Si expira, cierre y vuelva a pedirlo.</p>
+    <button type="button" class="btn btn-default btn-sm" id="qrCerrar">Cerrar</button>
   </div>
 </div>
 {{end}}
 
 {{define "pagejs"}}
 <script>
-function dvAviso(x, ok) {
-    var t = x && x.responseJSON ? x.responseJSON : x;
-    if (ok) { toastr.success(t.msg || 'Listo'); ERPGo.refrescar(); }
-    else { toastr.error((t && (t.error || t.msg)) || 'No se pudo completar'); }
-}
+// JavaScript nativo: sin jQuery. Las acciones son fetch + FormData.
+(function () {
+    function csrfToken() {
+        var m = document.cookie.match(/(?:^|;\s*)erpgo_csrf=([^;]+)/);
+        return m ? decodeURIComponent(m[1]) : '';
+    }
 
-$(function () {
-    $('#dv_area').on('change', function () { $('#dv_area_preview').text($(this).val()); });
+    function aviso(texto, ok) {
+        var caja = document.getElementById('dvMsg');
+        caja.className = 'alert ' + (ok ? 'alert-success' : 'alert-warning');
+        caja.textContent = texto;
+        caja.style.display = 'block';
+        if (ok) { window.setTimeout(function () { ERPGo.refrescar(); }, 700); }
+    }
 
-    $('#formDevice').on('submit', function (e) {
+    async function enviar(url, datos) {
+        var res = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-CSRF-Token': csrfToken()
+            },
+            body: new URLSearchParams(datos || {})
+        });
+        var json = {};
+        try { json = await res.json(); } catch (e) { /* sin JSON */ }
+        if (!res.ok) { throw new Error(json.error || ('Error HTTP ' + res.status)); }
+        return json;
+    }
+
+    document.getElementById('dv_area').addEventListener('change', function () {
+        document.getElementById('dv_area_preview').textContent = this.value;
+    });
+
+    document.getElementById('formDevice').addEventListener('submit', async function (e) {
         e.preventDefault();
-        $.post('/settings/mensajeria/dispositivos/crear', $(this).serialize())
-            .done(function (r) { dvAviso(r, true); })
-            .fail(function (x) { dvAviso(x, false); });
+        try {
+            var r = await enviar('/settings/mensajeria/dispositivos/crear', new FormData(e.target));
+            aviso(r.msg || 'Dispositivo creado.', true);
+        } catch (err) {
+            aviso(err.message, false);
+        }
     });
 
-    $('.dv-qr').on('click', function () {
-        var id = $(this).data('id');
-        $('#qr_device').text(id);
-        $('#qr_img').attr('src', '/settings/mensajeria/dispositivos/' + encodeURIComponent(id) + '/qr?t=' + Date.now());
-        $('#modalQR').modal('show');
+    document.querySelectorAll('.dv-qr').forEach(function (boton) {
+        boton.addEventListener('click', function () {
+            var id = boton.dataset.id;
+            document.getElementById('qr_device').textContent = id;
+            document.getElementById('qr_img').src = '/settings/mensajeria/dispositivos/' +
+                encodeURIComponent(id) + '/qr?t=' + Date.now();
+            document.getElementById('qrPanel').style.display = 'block';
+        });
+    });
+    document.getElementById('qrCerrar').addEventListener('click', function () {
+        document.getElementById('qrPanel').style.display = 'none';
+        document.getElementById('qr_img').removeAttribute('src');
     });
 
-    $('.dv-estado').on('click', function () {
-        var id = $(this).data('id');
-        $.get('/settings/mensajeria/dispositivos/' + encodeURIComponent(id) + '/estado')
-            .done(function (r) {
-                if (r.status == 1) { toastr.success('Estado: ' + r.state + (r.msisdn ? ' · ' + r.msisdn : '')); ERPGo.refrescar(); }
-                else { toastr.warning(r.error || 'Sin respuesta'); }
-            })
-            .fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'No respondió'); });
+    document.querySelectorAll('.dv-estado').forEach(function (boton) {
+        boton.addEventListener('click', async function () {
+            var id = boton.dataset.id;
+            try {
+                var res = await fetch('/settings/mensajeria/dispositivos/' + encodeURIComponent(id) + '/estado');
+                var r = await res.json();
+                if (r.status === 1) {
+                    aviso('Estado: ' + r.state + (r.msisdn ? ' · ' + r.msisdn : ''), true);
+                } else {
+                    aviso(r.error || 'Sin respuesta', false);
+                }
+            } catch (err) {
+                aviso(err.message, false);
+            }
+        });
     });
 
-    function dvAccion(clase, url, confirmar) {
-        $(clase).on('click', function () {
-            var id = $(this).data('id');
-            var hacer = function () {
-                $.post(url.replace('{id}', encodeURIComponent(id)))
-                    .done(function (r) { dvAviso(r, true); })
-                    .fail(function (x) { dvAviso(x, false); });
-            };
-            if (confirmar) { swal({title: "¿Seguro?", text: confirmar, type: "warning", showCancelButton: true}, hacer); }
-            else { hacer(); }
+    function accion(clase, url, pregunta) {
+        document.querySelectorAll(clase).forEach(function (boton) {
+            boton.addEventListener('click', async function () {
+                if (pregunta && !window.confirm(pregunta)) { return; }
+                try {
+                    var r = await enviar(url.replace('{id}', encodeURIComponent(boton.dataset.id)), {});
+                    aviso(r.msg || 'Listo.', true);
+                } catch (err) {
+                    aviso(err.message, false);
+                }
+            });
         });
     }
-    dvAccion('.dv-reconectar', '/settings/mensajeria/dispositivos/{id}/reconectar', '');
-    dvAccion('.dv-logout', '/settings/mensajeria/dispositivos/{id}/logout', 'Se cerrará la sesión en el teléfono. Para volver a usarlo habrá que escanear el QR otra vez.');
-    dvAccion('.dv-borrar', '/settings/mensajeria/dispositivos/{id}/borrar', 'Se dará de baja el número en el servicio. El historial se conserva y el identificador no se podrá reutilizar.');
-});
+    accion('.dv-reconectar', '/settings/mensajeria/dispositivos/{id}/reconectar', '');
+    accion('.dv-logout', '/settings/mensajeria/dispositivos/{id}/logout',
+        'Se cerrará la sesión en el teléfono. Para volver a usarlo habrá que escanear el QR otra vez.');
+    accion('.dv-borrar', '/settings/mensajeria/dispositivos/{id}/borrar',
+        'Se dará de baja el número en el servicio. El historial se conserva y el identificador no se podrá reutilizar.');
+})();
 </script>
 {{end}}

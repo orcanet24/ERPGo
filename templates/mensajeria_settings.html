@@ -15,6 +15,7 @@
     </div>
     <div class="panel-body">
         <p class="help-block">{{.Nota}}</p>
+        <div id="msgAviso" class="alert" style="display:none"></div>
 
         <div class="row">
             <div class="col-md-4">
@@ -161,42 +162,77 @@
 
 {{define "pagejs"}}
 <script>
-function msgAviso(x, ok) {
-    var t = x && x.responseJSON ? x.responseJSON : x;
-    if (ok) { toastr.success(t.msg || 'Guardado'); ERPGo.refrescar(); }
-    else { toastr.error((t && (t.error || t.msg)) || 'No se pudo completar'); }
-}
+// JavaScript nativo: sin jQuery. El token CSRF se lee de la cookie del layout.
+(function () {
+    function csrfToken() {
+        var m = document.cookie.match(/(?:^|;\s*)erpgo_csrf=([^;]+)/);
+        return m ? decodeURIComponent(m[1]) : '';
+    }
 
-$(function () {
-    $('#formGlobal').on('submit', function (e) {
-        e.preventDefault();
-        $.post('/settings/mensajeria/global', $(this).serialize())
-            .done(function (r) { msgAviso(r, true); })
-            .fail(function (x) { msgAviso(x, false); });
+    function aviso(texto, ok) {
+        var caja = document.getElementById('msgAviso');
+        caja.className = 'alert ' + (ok ? 'alert-success' : 'alert-danger');
+        caja.textContent = texto;
+        caja.style.display = 'block';
+        if (ok) {
+            window.setTimeout(function () { ERPGo.refrescar(); }, 700);
+        }
+    }
+
+    async function enviar(url, datos) {
+        var res = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-CSRF-Token': csrfToken()
+            },
+            body: new URLSearchParams(datos)
+        });
+        var json = {};
+        try { json = await res.json(); } catch (e) { /* sin JSON */ }
+        if (!res.ok) { throw new Error(json.error || ('Error HTTP ' + res.status)); }
+        return json;
+    }
+
+    function conectar(formId, url) {
+        var form = document.getElementById(formId);
+        form.addEventListener('submit', async function (e) {
+            e.preventDefault();
+            try {
+                var r = await enviar(url, new FormData(form));
+                aviso(r.msg || 'Guardado.', true);
+            } catch (err) {
+                aviso(err.message, false);
+            }
+        });
+    }
+    conectar('formGlobal', '/settings/mensajeria/global');
+    conectar('formEmpresa', '/settings/mensajeria/empresa');
+
+    document.getElementById('btnModulo').addEventListener('click', async function () {
+        try {
+            var r = await enviar('/settings/mensajeria/modulo', {});
+            aviso(r.msg || 'Módulo actualizado.', true);
+        } catch (err) {
+            aviso(err.message, false);
+        }
     });
 
-    $('#formEmpresa').on('submit', function (e) {
-        e.preventDefault();
-        $.post('/settings/mensajeria/empresa', $(this).serialize())
-            .done(function (r) { msgAviso(r, true); })
-            .fail(function (x) { msgAviso(x, false); });
+    document.getElementById('btnProbar').addEventListener('click', async function () {
+        var boton = this;
+        var original = boton.innerHTML;
+        boton.disabled = true;
+        boton.textContent = 'Probando…';
+        try {
+            var r = await enviar('/settings/mensajeria/probar', {});
+            if (r.status === 1) { aviso(r.msg, true); } else { aviso(r.error || 'Sin respuesta', false); }
+        } catch (err) {
+            aviso(err.message, false);
+        } finally {
+            boton.disabled = false;
+            boton.innerHTML = original;
+        }
     });
-
-    $('#btnModulo').on('click', function () {
-        $.post('/settings/mensajeria/modulo', {})
-            .done(function (r) { msgAviso(r, true); })
-            .fail(function (x) { msgAviso(x, false); });
-    });
-
-    $('#btnProbar').on('click', function () {
-        var b = $(this).prop('disabled', true).text('Probando…');
-        $.post('/settings/mensajeria/probar', {})
-            .done(function (r) {
-                if (r.status == 1) { toastr.success(r.msg); } else { toastr.error(r.error || 'Sin respuesta'); }
-            })
-            .fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'El servicio no respondió'); })
-            .always(function () { b.prop('disabled', false).html('<i class="fa fa-bolt"></i> Probar conexión'); });
-    });
-});
+})();
 </script>
 {{end}}
