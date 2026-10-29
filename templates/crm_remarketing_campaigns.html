@@ -1,0 +1,76 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Campañas <a href="/crm/remarketing/campaign/add" class="btn btn-primary btn-sm pull-right"><i class="fa fa-plus"></i> Nueva Campaña</a></h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        {{if not .Canales}}
+        <div class="alert alert-warning">
+            <i class="fa fa-exclamation-triangle"></i> No tienes canales de aviso activos.
+            <a href="/settings/notify" class="btn btn-xs btn-warning">Configurar canales</a>
+        </div>
+        {{end}}
+
+        <table class="table table-striped table-bordered" id="campTable" width="100%">
+            <thead>
+                <tr>
+                    <th>Nombre</th>
+                    <th>Segmento</th>
+                    <th>Canal</th>
+                    <th>Estado</th>
+                    <th class="text-right">Total</th>
+                    <th class="text-right">Enviados</th>
+                    <th class="text-right">Errores</th>
+                    <th>Creada</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Campañas}}
+                <tr>
+                    <td><strong>{{.Name}}</strong></td>
+                    <td>{{.Segment}}</td>
+                    <td><span class="label {{if eq .ChannelKind "email"}}label-info{{else if eq .ChannelKind "sms"}}label-success{{else if eq .ChannelKind "wapp"}}label-success{{else}}label-warning{{end}}">{{.Channel}} ({{.ChannelKind}})</span></td>
+                    <td><span class="label {{if eq .Status 0}}label-default{{else if eq .Status 1}}label-warning{{else if eq .Status 2}}label-success{{else}}label-danger{{end}}">{{.StatusLabel}}</span></td>
+                    <td class="text-right">{{.Total}}</td>
+                    <td class="text-right">{{.Sent}}</td>
+                    <td class="text-right">{{.Errors}}</td>
+                    <td>{{.CreatedAt}}</td>
+                    <td>
+                        <a href="/crm/remarketing/campaign/view/{{.ID}}" class="btn btn-info btn-xs" title="Ver detalle"><i class="fa fa-eye"></i></a>
+                        {{if eq .Status 0}}
+                        <button class="btn btn-success btn-xs" onclick="launchCamp({{.ID}})" title="Lanzar"><i class="fa fa-paper-plane"></i></button>
+                        {{end}}
+                        {{if or (eq .Status 0) (eq .Status 1)}}
+                        <button class="btn btn-danger btn-xs" onclick="cancelCamp({{.ID}})" title="Cancelar"><i class="fa fa-stop"></i></button>
+                        {{end}}
+                    </td>
+                </tr>
+                {{else}}
+                <tr><td colspan="9" class="text-center text-muted">No hay campañas.</td></tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+function launchCamp(id) {
+    if (!confirm('¿Lanzar esta campaña ahora? Se enviará un mensaje a cada contacto del segmento.')) return;
+    $.post('/crm/remarketing/campaign/launch/' + id, function(r) {
+        if (r.status == 1) { alert(r.msg); if (r.redirect) location.href = r.redirect; } else { alert(r.msg); }
+    }, 'json');
+}
+
+function cancelCamp(id) {
+    if (!confirm('¿Cancelar esta campaña?')) return;
+    $.post('/crm/remarketing/campaign/cancel/' + id, function(r) {
+        if (r.status == 1) { location.reload(); } else { alert(r.msg); }
+    }, 'json');
+}
+</script>
+{{end}}

@@ -308,6 +308,15 @@ func (s *Server) financeEnviarAviso(r *http.Request, db *sql.DB, canal notifyCha
 				"to": destino, "message": asunto + "\n" + cuerpo, "subject": asunto,
 			})
 		}
+	case "wapp":
+		if strings.TrimSpace(canal.URL) == "" {
+			envioErr = fmt.Errorf("el canal de WhatsApp «%s» no tiene dirección de la pasarela configurada", canal.Name)
+		} else {
+			prov, envioErr = s.envioHTTP(canal, "wapp.message", map[string]interface{}{
+				"to": destino, "message": "*" + asunto + "*\n\n" + cuerpo,
+				"subject": asunto,
+			})
+		}
 	case "webhook":
 		if strings.TrimSpace(canal.URL) == "" {
 			envioErr = fmt.Errorf("el canal webhook «%s» no tiene URL configurada", canal.Name)

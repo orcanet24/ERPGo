@@ -1,0 +1,56 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Plantillas <a href="/crm/remarketing/template/add" class="btn btn-primary btn-sm pull-right"><i class="fa fa-plus"></i> Nueva Plantilla</a></h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <div class="alert alert-info">
+            <i class="fa fa-magic"></i> Variables disponibles: <code>%nombre%</code>, <code>%empresa%</code>, <code>%telefono%</code>, <code>%email%</code>.
+            Se reemplazan automáticamente al enviar cada mensaje.
+        </div>
+
+        <table class="table table-striped table-bordered">
+            <thead>
+                <tr>
+                    <th>Nombre</th>
+                    <th>Asunto</th>
+                    <th>Vista previa</th>
+                    <th>Estado</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Plantillas}}
+                <tr>
+                    <td><strong>{{.Name}}</strong></td>
+                    <td>{{.Subject}}</td>
+                    <td class="text-muted">{{.Body}}</td>
+                    <td>{{if eq .Status 1}}<span class="label label-success">Activa</span>{{else}}<span class="label label-default">Inactiva</span>{{end}}</td>
+                    <td>
+                        <a href="/crm/remarketing/template/edit/{{.ID}}" class="btn btn-warning btn-xs"><i class="fa fa-pencil"></i></a>
+                        {{if eq .Status 1}}
+                        <button class="btn btn-danger btn-xs" onclick="deleteTpl({{.ID}})"><i class="fa fa-trash"></i></button>
+                        {{end}}
+                    </td>
+                </tr>
+                {{else}}
+                <tr><td colspan="5" class="text-center text-muted">No hay plantillas.</td></tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+function deleteTpl(id) {
+    if (!confirm('¿Desactivar esta plantilla?')) return;
+    $.post('/crm/remarketing/template/delete/' + id, function(r) {
+        if (r.status == 1) { location.reload(); } else { alert(r.msg); }
+    }, 'json');
+}
+</script>
+{{end}}

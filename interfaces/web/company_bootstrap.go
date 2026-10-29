@@ -36,6 +36,9 @@ func PrepareCompany(db *sql.DB, dialect, legalName, rif string) {
 	if err := SeedCRM(db); err != nil {
 		log.Printf("CRM (etapas base): %v", err)
 	}
+	if err := SeedRemarketingSegments(db); err != nil {
+		log.Printf("CRM (segmentos remarketing base): %v", err)
+	}
 	if err := EnsureLegalSchema(db); err != nil {
 		log.Printf("base normativa para la IA: %v", err)
 	}
@@ -61,6 +64,9 @@ func PrepareCompanyAs(db *sql.DB, dialect, legalName, rif, adminUser, adminPass 
 	// el nuestro.
 	if err := SeedCRM(db); err != nil {
 		log.Printf("CRM (etapas base): %v", err)
+	}
+	if err := SeedRemarketingSegments(db); err != nil {
+		log.Printf("CRM (segmentos remarketing base): %v", err)
 	}
 	if err := EnsureLegalSchema(db); err != nil {
 		log.Printf("base normativa para la IA: %v", err)
