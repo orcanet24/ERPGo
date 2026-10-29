@@ -34,7 +34,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"erpgow/infrastructure/persistence"
+	"erpgo/infrastructure/persistence"
 )
 
 // ErrFull indica que la cola lleva lleno más de EnqueueTimeout. Con el
@@ -512,3 +512,4 @@ func (q *Queue) run(t Task) {
 func nowStr() string { return time.Now().Format(nowLayout) }
 
 const nowLayout = "2006-01-02 15:04:05"
+

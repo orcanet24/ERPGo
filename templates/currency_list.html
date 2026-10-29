@@ -55,10 +55,17 @@
 {{define "pagejs"}}
 <script>
 $(function () {
+    var submittedAction = 'save';
+    $('#curForm').on('click', 'button[type=submit]', function () { submittedAction = $(this).val(); });
     $('#curForm').on('submit', function (e) {
         e.preventDefault();
+        var ea = submittedAction;
         $.post('/settings/currency/save', $(this).serialize(), function (r) {
-            if (r.status == 1) { toastr.success(r.msg); ERPGo.refrescar(); }
+            if (r.status == 1) {
+                toastr.success(r.msg);
+                if (ea === 'save_exit') { location.href = r.redirect || '/settings'; }
+                else { ERPGo.refrescar(); }
+            }
             else toastr.error(r.error);
         });
     });

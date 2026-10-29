@@ -28,9 +28,9 @@ import (
 	"os"
 	"strings"
 
-	"erpgow/configs"
-	"erpgow/infrastructure/persistence"
-	"erpgow/interfaces/web"
+	"erpgo/configs"
+	"erpgo/infrastructure/persistence"
+	"erpgo/interfaces/web"
 )
 
 func main() {
@@ -208,3 +208,4 @@ func pedirConfirmacion(base string) error {
 	}
 	return nil
 }
+

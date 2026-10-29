@@ -46,8 +46,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"erpgow/infrastructure/persistence"
-	"erpgow/internal/orchestrator"
+	"erpgo/infrastructure/persistence"
+	"erpgo/internal/orchestrator"
 )
 
 func main() {
@@ -936,3 +936,4 @@ func aMarkdown(r *Resultado) string {
 	}
 	return b.String()
 }
+

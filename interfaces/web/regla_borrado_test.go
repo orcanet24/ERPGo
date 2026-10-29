@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	"erpgow"
-	"erpgow/infrastructure/persistence"
+	"erpgo"
+	"erpgo/infrastructure/persistence"
 )
 
 func TestRevisarBorradoSinMovimientoNoBloquea(t *testing.T) {
@@ -235,7 +235,7 @@ var restriccion = map[string]bool{
 // CREATE TABLE más las que añaden los ALTER TABLE.
 func esquemaDeLasMigraciones(t *testing.T) map[string]map[string]bool {
 	t.Helper()
-	entradas, err := fs.ReadDir(erpgow.Migrations(), "migrations")
+	entradas, err := fs.ReadDir(erpgo.Migrations(), "migrations")
 	if err != nil {
 		t.Fatalf("no se pudieron listar las migraciones: %v", err)
 	}
@@ -244,7 +244,7 @@ func esquemaDeLasMigraciones(t *testing.T) map[string]map[string]bool {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
 		}
-		b, err := fs.ReadFile(erpgow.Migrations(), "migrations/"+e.Name())
+		b, err := fs.ReadFile(erpgo.Migrations(), "migrations/"+e.Name())
 		if err != nil {
 			t.Fatalf("no se pudo leer %s: %v", e.Name(), err)
 		}

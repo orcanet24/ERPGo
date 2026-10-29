@@ -96,7 +96,7 @@ func MensajeAdmin() string {
 		return ""
 	}
 	return fmt.Sprintf(
-		"⚠️ El sistema tiene %d tablas pendientes. Ejecute ./erpgow.exe -migrate para activar las nuevas funcionalidades. Tablas faltantes: %s",
+		"⚠️ El sistema tiene %d tablas pendientes. Ejecute ./erpgo.exe -migrate para activar las nuevas funcionalidades. Tablas faltantes: %s",
 		len(f), strings.Join(f, ", "),
 	)
 }
@@ -111,3 +111,4 @@ func LoguearResultado() {
 	log.Printf("⚠ MIGRACIÓN PENDIENTE: faltan %d tablas: %s", len(f), strings.Join(f, ", "))
 	log.Printf("⚠ Ejecute: %s -migrate", os.Args[0])
 }
+

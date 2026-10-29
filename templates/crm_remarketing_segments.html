@@ -1,0 +1,139 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Segmentos <button class="btn btn-primary btn-sm pull-right" onclick="document.getElementById('segForm').style.display='block'"><i class="fa fa-plus"></i> Nuevo Segmento</button></h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <div class="alert alert-info">
+            <i class="fa fa-info-circle"></i> Un segmento es un grupo de contactos definido por una regla: "no compran hace 60 días", "oportunidad perdida", etc.
+        </div>
+
+        <!-- Formulario nuevo segmento -->
+        <div class="well" id="segForm" style="display:none">
+            <form id="segmentForm" onsubmit="return saveSegment()">
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="form-group">
+                            <label>Nombre del segmento</label>
+                            <input type="text" class="form-control" name="name" required placeholder="Ej: Clientes inactivos">
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="form-group">
+                            <label>Regla</label>
+                            <select class="form-control" name="rule_type" id="ruleType" onchange="toggleDays()">
+                                <option value="no_purchase_60d">No compran hace 60 días</option>
+                                <option value="no_purchase_30d">No compran hace 30 días</option>
+                                <option value="no_purchase_90d">No compran hace 90 días</option>
+                                <option value="opportunity_lost">Oportunidades perdidas</option>
+                                <option value="quote_sent_open">Cotizaciones enviadas sin cerrar</option>
+                                <option value="customer_all">Todos los clientes</option>
+                                <option value="contact_all">Todos los contactos</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-2" id="daysField" style="display:none">
+                        <div class="form-group">
+                            <label>Días</label>
+                            <input type="number" class="form-control" name="rule_days" value="60" min="1">
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="form-group">
+                            <label>Descripción</label>
+                            <input type="text" class="form-control" name="description" placeholder="Opcional">
+                        </div>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-success"><i class="fa fa-save"></i> Guardar</button>
+                <button type="button" class="btn btn-default" onclick="document.getElementById('segForm').style.display='none'">Cancelar</button>
+            </form>
+        </div>
+
+        <table class="table table-striped table-bordered" id="segTable" width="100%">
+            <thead>
+                <tr>
+                    <th>Nombre</th>
+                    <th>Regla</th>
+                    <th>Días</th>
+                    <th>Estado</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Segmentos}}
+                <tr>
+                    <td><strong>{{.Name}}</strong></td>
+                    <td>{{.RuleType}}</td>
+                    <td class="text-right">{{.RuleDays}}</td>
+                    <td>{{if eq .Status 1}}<span class="label label-success">Activo</span>{{else}}<span class="label label-default">Inactivo</span>{{end}}</td>
+                    <td>
+                        <button class="btn btn-info btn-xs" onclick="previewSegment({{.ID}})" title="Vista previa"><i class="fa fa-eye"></i></button>
+                        {{if eq .Status 1}}
+                        <button class="btn btn-danger btn-xs" onclick="deleteSegment({{.ID}})" title="Desactivar"><i class="fa fa-trash"></i></button>
+                        {{end}}
+                    </td>
+                </tr>
+                {{else}}
+                <tr><td colspan="5" class="text-center text-muted">No hay segmentos.</td></tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Modal vista previa -->
+<div class="modal fade" id="previewModal">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header"><h4 class="modal-title">Vista previa del segmento</h4></div>
+            <div class="modal-body">
+                <p id="previewCount"></p>
+                <div id="previewList" style="max-height:300px;overflow-y:auto"></div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">Cerrar</button></div>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+function toggleDays() {
+    var t = document.getElementById('ruleType').value;
+    document.getElementById('daysField').style.display = (t.indexOf('no_purchase') === 0) ? 'block' : 'none';
+}
+
+function saveSegment() {
+    var f = $('#segmentForm');
+    $.post('/crm/remarketing/segment/save', f.serialize(), function(r) {
+        if (r.status == 1) { location.reload(); } else { alert(r.msg); }
+    }, 'json');
+    return false;
+}
+
+function previewSegment(id) {
+    $.get('/crm/remarketing/segment/preview/' + id, function(r) {
+        if (r.status == 1) {
+            $('#previewCount').text(r.total + ' contactos en este segmento');
+            var html = '<table class="table table-condensed table-bordered"><thead><tr><th>Nombre</th><th>Empresa</th><th>Email</th><th>Teléfono</th></tr></thead><tbody>';
+            r.contacts.forEach(function(c) {
+                html += '<tr><td>' + c.name + '</td><td>' + c.company + '</td><td>' + c.email + '</td><td>' + c.phone + '</td></tr>';
+            });
+            html += '</tbody></table>';
+            $('#previewList').html(html);
+            $('#previewModal').modal('show');
+        }
+    }, 'json');
+}
+
+function deleteSegment(id) {
+    if (!confirm('¿Desactivar este segmento?')) return;
+    $.post('/crm/remarketing/segment/delete/' + id, function(r) {
+        if (r.status == 1) { location.reload(); } else { alert(r.msg); }
+    }, 'json');
+}
+</script>
+{{end}}

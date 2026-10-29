@@ -1,0 +1,76 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>{{.Title}}</h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <form id="campForm" method="post" action="/crm/remarketing/campaign/save">
+            <input type="hidden" name="id" value="{{if .Camp}}{{.Camp.ID}}{{end}}">
+
+            <div class="form-group">
+                <label>Nombre de la campaña</label>
+                <input type="text" class="form-control" name="name" required placeholder="Ej: Reactivación Q4 clientes inactivos"
+                    value="{{if .Camp}}{{.Camp.Name}}{{end}}">
+            </div>
+
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Segmento (destinatarios)</label>
+                        <select class="form-control" name="segment_id" required>
+                            <option value="">— Elegir segmento —</option>
+                            {{range .Segmentos}}
+                            <option value="{{.ID}}" {{if and $.Camp (eq $.Camp.SegmentID .ID)}}selected{{end}}>{{.Name}}</option>
+                            {{end}}
+                        </select>
+                        {{if not .Segmentos}}
+                        <p class="text-muted" style="font-size:12px">No hay segmentos. <a href="/crm/remarketing/segments">Crea uno primero</a>.</p>
+                        {{end}}
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Plantilla (mensaje)</label>
+                        <select class="form-control" name="template_id" required>
+                            <option value="">— Elegir plantilla —</option>
+                            {{range .Plantillas}}
+                            <option value="{{.ID}}" {{if and $.Camp (eq $.Camp.TemplateID .ID)}}selected{{end}}>{{.Name}}</option>
+                            {{end}}
+                        </select>
+                        {{if not .Plantillas}}
+                        <p class="text-muted" style="font-size:12px">No hay plantillas. <a href="/crm/remarketing/templates">Crea una primero</a>.</p>
+                        {{end}}
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Canal de envío</label>
+                        <select class="form-control" name="channel_id" required>
+                            <option value="">— Elegir canal —</option>
+                            {{range .Canales}}
+                            <option value="{{.ID}}" {{if and $.Camp (eq $.Camp.ChannelID .ID)}}selected{{end}}>{{.Name}} ({{.Kind}})</option>
+                            {{end}}
+                        </select>
+                        {{if not .Canales}}
+                        <p class="text-muted" style="font-size:12px">No hay canales activos. <a href="/settings/notify">Configurar canales</a>.</p>
+                        {{end}}
+                    </div>
+                </div>
+            </div>
+
+            <div class="callout callout-warning">
+                <h5>Flujo</h5>
+                <p>1. Guardas la campaña en estado <strong>borrador</strong>.<br>
+                   2. Revisas el segmento (vista previa para ver cuántos contactos recibirán).<br>
+                   3. Pulsas <strong>Lanzar</strong> y el sistema envía uno por uno.<br>
+                   4. Cada envío queda registrado: enviado, error o sin destino.</p>
+            </div>
+
+            <button type="submit" class="btn btn-success"><i class="fa fa-save"></i> Guardar campaña</button>
+            <a href="/crm/remarketing/campaigns" class="btn btn-default">Volver</a>
+        </form>
+    </div>
+</div>
+{{end}}

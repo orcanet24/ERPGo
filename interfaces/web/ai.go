@@ -206,7 +206,8 @@ func (s *Server) aiSettingsSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, map[string]interface{}{"status": "success", "msg": "Configuración guardada"})
+	writeJSON(w, map[string]interface{}{"status": "success", "msg": "Configuración guardada",
+		"redirect": saveRedirect(r, "/ai/settings")})
 }
 
 // ---------- Chat page ----------

@@ -577,10 +577,18 @@ func (s *Server) purchaseDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// remove vouchers + transactions tied to this purchase
-	_, _ = tx.Exec(`DELETE FROM acc_transaction WHERE referenceNo = ?`, id)
-	_, _ = tx.Exec(`DELETE FROM acc_vaucher WHERE referenceNo = ?`, id)
-	_, _ = tx.Exec(`DELETE FROM product_purchase_details WHERE purchase_id = ?`, id)
+	// remove vouchers + transactions tied to this purchase. Si cualquiera falla,
+	// la compra queda sin borrar: la transacción se revierte al final del handler.
+	for _, q := range []string{
+		`DELETE FROM acc_transaction WHERE referenceNo = ?`,
+		`DELETE FROM acc_vaucher WHERE referenceNo = ?`,
+		`DELETE FROM product_purchase_details WHERE purchase_id = ?`,
+	} {
+		if _, err := tx.Exec(q, id); err != nil {
+			jsonError(w, fmt.Sprintf("limpiar compra: %v", err), 500)
+			return
+		}
+	}
 	res, err := tx.Exec(`DELETE FROM product_purchase WHERE purchase_id = ?`, id)
 	if err != nil {
 		jsonError(w, err.Error(), 500)

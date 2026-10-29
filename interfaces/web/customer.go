@@ -237,8 +237,14 @@ func (s *Server) customerDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	_, _ = tx.Exec(`DELETE FROM acc_subcode WHERE referenceNo = ? AND subTypeId = 3`, id)
-	_, _ = tx.Exec(`DELETE FROM acc_coa WHERE customer_id = ?`, id)
+	if _, err := tx.Exec(`DELETE FROM acc_subcode WHERE referenceNo = ? AND subTypeId = 3`, id); err != nil {
+		jsonError(w, fmt.Sprintf("limpiar subcuenta contable: %v", err), 500)
+		return
+	}
+	if _, err := tx.Exec(`DELETE FROM acc_coa WHERE customer_id = ?`, id); err != nil {
+		jsonError(w, fmt.Sprintf("limpiar cuenta contable: %v", err), 500)
+		return
+	}
 	res, err := tx.Exec(`DELETE FROM customer_information WHERE customer_id = ?`, id)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
@@ -496,12 +502,18 @@ func (s *Server) customerQuickCreate(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	_, _ = tx.Exec(`INSERT INTO acc_coa (HeadCode, HeadName, PHeadName, HeadLevel, IsActive, IsTransaction, IsGL,
+	if _, err := tx.Exec(`INSERT INTO acc_coa (HeadCode, HeadName, PHeadName, HeadLevel, IsActive, IsTransaction, IsGL,
 		HeadType, IsBudget, IsDepreciation, DepreciationRate, customer_id, CreateBy, CreateDate, isSubType, subType)
 		VALUES (?,?,?,?,1,1,0,'A',0,0,0,?,?,?,0,1)`,
-		headcode, fmt.Sprintf("%d-%s", customerID, name), "Customer Receivable", 4, customerID, sessUserID(sess), now())
-	_, _ = tx.Exec(`INSERT INTO acc_subcode (subTypeId, name, referenceNo, status, created_by, created_date)
-		VALUES (3, ?, ?, 1, ?, ?)`, name, customerID, sessUserID(sess), today())
+		headcode, fmt.Sprintf("%d-%s", customerID, name), "Customer Receivable", 4, customerID, sessUserID(sess), now()); err != nil {
+		jsonError(w, fmt.Sprintf("crear cuenta contable del cliente: %v", err), 500)
+		return
+	}
+	if _, err := tx.Exec(`INSERT INTO acc_subcode (subTypeId, name, referenceNo, status, created_by, created_date)
+		VALUES (3, ?, ?, 1, ?, ?)`, name, customerID, sessUserID(sess), today()); err != nil {
+		jsonError(w, fmt.Sprintf("crear subcuenta del cliente: %v", err), 500)
+		return
+	}
 
 	if err := tx.Commit(); err != nil {
 		jsonError(w, err.Error(), 500)

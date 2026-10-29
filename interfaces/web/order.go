@@ -102,11 +102,20 @@ func (s *Server) orderToDelivery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Cancelar reservas de stock del pedido (evitar doble descuento)
-	_, _ = tx.Exec("UPDATE stock_reservation SET status = 'cancelled', cancelled_at = NOW() WHERE document_type = 'order' AND document_id = ?", id)
+	// Cancelar reservas de stock del pedido (evitar doble descuento).
+	// Si falla, la reserva sigue activa y el stock queda bloqueado: revierte.
+	if _, err := tx.Exec("UPDATE stock_reservation SET status = 'cancelled', cancelled_at = NOW() WHERE document_type = 'order' AND document_id = ?", id); err != nil {
+		_ = tx.Rollback()
+		jsonError(w, "no se pudo cancelar la reserva de stock", 500)
+		return
+	}
 
-	// Actualizar estado del pedido
-	_, _ = tx.Exec("UPDATE sale_order SET status = 'delivered' WHERE id = ?", id)
+	// Actualizar estado del pedido.
+	if _, err := tx.Exec("UPDATE sale_order SET status = 'delivered' WHERE id = ?", id); err != nil {
+		_ = tx.Rollback()
+		jsonError(w, "no se pudo actualizar el estado del pedido", 500)
+		return
+	}
 
 	if err := tx.Commit(); err != nil {
 		jsonError(w, err.Error(), 500)
@@ -284,10 +293,14 @@ func (s *Server) orderConfirm(w http.ResponseWriter, r *http.Request) {
 			var productID int
 			var qty float64
 			rows.Scan(&productID, &qty)
-			_, _ = tx.Exec(`
+			if _, err := tx.Exec(`
 				INSERT INTO stock_reservation (document_type, document_id, product_id, quantity, status, created_at)
 				VALUES ('order', ?, ?, ?, 'pending', NOW())`,
-				id, productID, qty)
+				id, productID, qty); err != nil {
+				_ = tx.Rollback()
+				jsonError(w, "no se pudo reservar el stock del pedido", 500)
+				return
+			}
 		}
 		rows.Close()
 	}

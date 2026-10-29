@@ -127,6 +127,9 @@ $(function () {
     $('#btnPrint').on('click', function () {
         window.open('/reports/islr-retention/print?month=' + $('#month').val() + '&year=' + $('#year').val(), '_blank');
     });
+    var submittedAction = 'save';
+    $('button[type=submit]', '#frmIslrRetention').on('click', function () { submittedAction = $(this).val(); });
+
     $('#frmIslrRetention').on('submit', function (e) {
         e.preventDefault();
         $.post('/reports/islr-retention/save', $(this).serialize(), function (d) {
@@ -135,16 +138,20 @@ $(function () {
                 // recarga de la vista. load() vuelve a pedir las filas y los
                 // totales al servidor.
                 toastr.success(d.msg || 'Retención guardada');
-                load();
-                // El formulario se limpia: es lo que hacía la recarga y es lo
-                // que evita que un segundo clic mande la misma retención dos
-                // veces.
-                var frm = document.getElementById('frmIslrRetention');
-                if (frm) { frm.reset(); }
+                if (submittedAction === 'save_exit') {
+                    setTimeout(function () { location.href = d.redirect || '/reports/islr-retention'; }, 700);
+                } else {
+                    load();
+                    // El formulario se limpia: es lo que hacía la recarga y es lo
+                    // que evita que un segundo clic mande la misma retención dos
+                    // veces.
+                    var frm = document.getElementById('frmIslrRetention');
+                    if (frm) { frm.reset(); }
+                }
             } else {
-                alert('Error: ' + d.error);
+                toastr.error(d.error || 'Error');
             }
-        });
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
     });
     load();
 });

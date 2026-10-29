@@ -1,4 +1,4 @@
-package web
+﻿package web
 
 // ai_tasks.go — Tareas de agente: instrucciones claras + programación. El
 // runner ejecuta el bucle modelo-herramientas con límites estrictos y deja
@@ -31,10 +31,18 @@ type aiTask struct {
 }
 
 // loadAITasks lista todas las tareas.
+//
+// La tarea es de la empresa (ai_task vive en su base) pero el AGENTE vive en
+// control: el JOIN cross-db no existe, así que el nombre se resuelve aparte
+// con la lista de agentes (una sola consulta en lugar de una por tarea).
 func (s *Server) loadAITasks(sess *SessionData) []aiTask {
-	rows, err := s.dbForSession(sess).Query(`SELECT t.id, t.agent_id, IFNULL(a.name,''), t.name, t.instructions,
+	nombres := map[int64]string{}
+	for _, a := range s.loadAIAgents(sess) {
+		nombres[a.ID] = a.Name
+	}
+	rows, err := s.dbForSession(sess).Query(`SELECT t.id, t.agent_id, t.name, t.instructions,
 		t.schedule_type, IFNULL(t.schedule_value,''), t.enabled, IFNULL(t.created_by,''), IFNULL(CAST(t.created_at AS CHAR),'')
-		FROM ai_task t LEFT JOIN ai_agent a ON a.id = t.agent_id
+		FROM ai_task t
 		ORDER BY t.id DESC`)
 	if err != nil {
 		return []aiTask{}
@@ -44,10 +52,11 @@ func (s *Server) loadAITasks(sess *SessionData) []aiTask {
 	for rows.Next() {
 		var t aiTask
 		var created sql.NullString
-		if err := rows.Scan(&t.ID, &t.AgentID, &t.AgentName, &t.Name, &t.Instructions,
+		if err := rows.Scan(&t.ID, &t.AgentID, &t.Name, &t.Instructions,
 			&t.ScheduleType, &t.ScheduleValue, &t.Enabled, &t.CreatedBy, &created); err != nil {
 			continue
 		}
+		t.AgentName = nombres[t.AgentID]
 		t.CreatedAt = created.String
 		list = append(list, t)
 	}
@@ -213,7 +222,7 @@ func (s *Server) aiTaskSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.aiAudit(s.sessionFromRequest(r), creator, "update", "ai_tasks", "ai_task", fmt.Sprintf("%d", id), nil, map[string]interface{}{"name": name})
-		writeJSON(w, map[string]interface{}{"status": 1, "msg": "Tarea actualizada", "redirect": saveRedirect(r, "/ai_tasks")})
+		writeJSON(w, map[string]interface{}{"status": 1, "msg": "Tarea actualizada", "redirect": saveRedirect(r, "/ai/tasks")})
 		return
 	}
 	res, err := s.dbFor(r).Exec(`INSERT INTO ai_task (agent_id, name, instructions, schedule_type, schedule_value, enabled, created_by)
@@ -245,7 +254,7 @@ func (s *Server) aiTaskDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	sess := s.sessionFromRequest(r)
 	s.aiAudit(s.sessionFromRequest(r), sessUserID(sess), "delete", "ai_tasks", "ai_task", fmt.Sprintf("%d", id), nil, nil)
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Tarea eliminada", "redirect": saveRedirect(r, "/ai_tasks")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Tarea eliminada", "redirect": saveRedirect(r, "/ai/tasks")})
 }
 
 // aiTaskRunNow lanza la ejecución manual de una tarea.
@@ -364,7 +373,7 @@ func (s *Server) aiTaskUndo(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Tarea revertida", "redirect": saveRedirect(r, "/ai_tasks")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Tarea revertida", "redirect": saveRedirect(r, "/ai/tasks")})
 }
 
 // aiExecuteTask es el bucle principal del runner. Devuelve el run_id.

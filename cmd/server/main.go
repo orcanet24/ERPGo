@@ -25,13 +25,13 @@ import (
 	"syscall"
 	"time"
 
-	"erpgow/configs"
-	"erpgow/infrastructure/persistence"
-	"erpgow/interfaces/web"
-	"erpgow/internal/logger"
-	"erpgow/internal/pos"
-	"erpgow/internal/service"
-	"erpgow/internal/setup"
+	"erpgo/configs"
+	"erpgo/infrastructure/persistence"
+	"erpgo/interfaces/web"
+	"erpgo/internal/logger"
+	"erpgo/internal/pos"
+	"erpgo/internal/service"
+	"erpgo/internal/setup"
 )
 
 // resolvePath finds a directory relative to the executable or working dir.
@@ -71,11 +71,11 @@ func resolvePath(name string) string {
 
 func main() {
 	// Usage:
-	//   erpgow.exe              -> start server (schema applied automatically)
-	//   erpgow.exe --setup      -> run setup wizard (fresh install / maintenance)
-	//   erpgow.exe --migrate    -> apply schema and exit
-	//   erpgow.exe --install    -> install as Windows service (auto-start, restart on failure)
-	//   erpgow.exe --uninstall  -> stop and remove Windows service
+	//   erpgo.exe              -> start server (schema applied automatically)
+	//   erpgo.exe --setup      -> run setup wizard (fresh install / maintenance)
+	//   erpgo.exe --migrate    -> apply schema and exit
+	//   erpgo.exe --install    -> install as Windows service (auto-start, restart on failure)
+	//   erpgo.exe --uninstall  -> stop and remove Windows service
 	migrate := flag.Bool("migrate", false, "Apply migrations and exit")
 	install := flag.Bool("install", false, "Install ERPGo as a Windows service")
 	uninstall := flag.Bool("uninstall", false, "Uninstall the ERPGo Windows service")
@@ -107,7 +107,7 @@ func main() {
 		fmt.Printf("Servicio instalado correctamente.\n")
 		fmt.Printf("Para arrancar:   net start %s\n", service.ServiceName)
 		fmt.Printf("Para detener:    net stop %s\n", service.ServiceName)
-		fmt.Printf("Para desinstalar: erpgow.exe --uninstall\n")
+		fmt.Printf("Para desinstalar: erpgo.exe --uninstall\n")
 		return
 	}
 	if *uninstall {
@@ -403,3 +403,5 @@ func retireSQLiteFile(path string) {
 		}
 	}
 }
+
+

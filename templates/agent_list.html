@@ -19,7 +19,14 @@
 $(function () {
     $('#agentTable').DataTable({
         processing: true,
-        ajax: { url: '/ai/agents/data', type: 'GET' },
+        ajax: {
+            url: '/ai/agents/data',
+            type: 'GET',
+            error: function (xhr, err, thrown) {
+                console.error('agentTable AJAX error:', xhr.status, err, thrown);
+                alert('No se pudieron cargar los agentes (estado ' + xhr.status + '). Recarga la pantalla.');
+            }
+        },
         columns: [
             { data: 'id' },
             { data: 'name' },

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"erpgow"
+	"erpgo"
 )
 
 // ---------- Gestor de Menús (mover y reordenar) ----------
@@ -437,7 +437,7 @@ func (s *Server) menuRestaurarSnapshot(w http.ResponseWriter, r *http.Request, b
 // menuRestaurarFabrica re-ejecuta el seed embebido del menú (ON DUPLICATE KEY
 // UPDATE), que es el ÚNICO lugar donde vive el orden de fábrica.
 func (s *Server) menuRestaurarFabrica(w http.ResponseWriter, r *http.Request) {
-	migs, err := fs.ReadFile(erpgow.Migrations(), "migrations/schema_z_menu.sql")
+	migs, err := fs.ReadFile(erpgo.Migrations(), "migrations/schema_z_menu.sql")
 	if err != nil {
 		jsonError(w, "Seed de menús no disponible en el binario: "+err.Error(), http.StatusInternalServerError)
 		return

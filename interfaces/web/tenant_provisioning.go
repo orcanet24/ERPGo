@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"erpgow/infrastructure/persistence"
-	"erpgow/internal/security"
+	"erpgo/infrastructure/persistence"
+	"erpgo/internal/security"
 )
 
 // TenantCredentials contiene las credenciales de BD de una empresa específica.
@@ -52,7 +52,7 @@ func (s *Server) provisionCredentials(code string) (dbUser, dbPassPlain string, 
 	dbPassPlain = generateSecurePassword(24)
 
 	// Encriptar contraseña para guardar en catálogo
-	key := security.DeriveKey(s.config.JWTSecret)
+	key := security.DeriveKey(s.config.MasterKey)
 	dbPassEnc, err = security.Encrypt(dbPassPlain, key)
 	if err != nil {
 		return "", "", "", fmt.Errorf("no se pudo encriptar la contraseña de la empresa: %w", err)
@@ -162,7 +162,7 @@ func (s *Server) getTenantCredentials(code string) *TenantCredentials {
 	tc.DBPasswordEnc = passEnc
 
 	// Desencriptar contraseña
-	key := security.DeriveKey(s.config.JWTSecret)
+	key := security.DeriveKey(s.config.MasterKey)
 	tc.DBPasswordPlain, err = security.Decrypt(string(passEnc), key)
 	if err != nil {
 		log.Printf("tenant %q: no se pudo desencriptar la clave de BD guardada (%v) — se usarán las credenciales globales; re-guárdalas con --setup", code, err)
@@ -206,3 +206,4 @@ func (s *Server) ProvisionTenantExtended(legalName, rif, adminUser, adminPass st
 
 	return res, nil
 }
+

@@ -35,7 +35,7 @@ import (
 	"sort"
 	"time"
 
-	"erpgow/infrastructure/persistence"
+	"erpgo/infrastructure/persistence"
 )
 
 func main() {
@@ -90,3 +90,4 @@ func main() {
 	}
 	fmt.Println("\nPara borrarlas: go run ./tools/limpiar")
 }
+

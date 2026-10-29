@@ -20,7 +20,7 @@ import (
 	"log"
 	"time"
 
-	"erpgow/infrastructure/persistence"
+	"erpgo/infrastructure/persistence"
 )
 
 // PrepareCompany deja una base de empresa en estado utilizable. Es
@@ -35,6 +35,9 @@ func PrepareCompany(db *sql.DB, dialect, legalName, rif string) {
 	SeedHR(db)
 	if err := SeedCRM(db); err != nil {
 		log.Printf("CRM (etapas base): %v", err)
+	}
+	if err := SeedRemarketingSegments(db); err != nil {
+		log.Printf("CRM (segmentos remarketing base): %v", err)
 	}
 	if err := EnsureLegalSchema(db); err != nil {
 		log.Printf("base normativa para la IA: %v", err)
@@ -61,6 +64,9 @@ func PrepareCompanyAs(db *sql.DB, dialect, legalName, rif, adminUser, adminPass 
 	// el nuestro.
 	if err := SeedCRM(db); err != nil {
 		log.Printf("CRM (etapas base): %v", err)
+	}
+	if err := SeedRemarketingSegments(db); err != nil {
+		log.Printf("CRM (segmentos remarketing base): %v", err)
 	}
 	if err := EnsureLegalSchema(db); err != nil {
 		log.Printf("base normativa para la IA: %v", err)
@@ -124,6 +130,9 @@ func ensureCurrentFinancialYear(db *sql.DB) {
 	if n > 0 {
 		return
 	}
-	_, _ = db.Exec(`INSERT INTO financial_year (yearName, startDate, endDate, isCloseReq, status, created_by)
-		VALUES (?, ?, ?, 0, 1, 1)`, name, fmt.Sprintf("%d-01-01", year), fmt.Sprintf("%d-12-31", year))
+	if _, err := db.Exec(`INSERT INTO financial_year (yearName, startDate, endDate, isCloseReq, status, created_by)
+		VALUES (?, ?, ?, 0, 1, 1)`, name, fmt.Sprintf("%d-01-01", year), fmt.Sprintf("%d-12-31", year)); err != nil {
+		log.Printf("bootstrap: no se pudo crear el año fiscal %s: %v", name, err)
+	}
 }
+

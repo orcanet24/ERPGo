@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"erpgow"
+	"erpgo"
 )
 
 func TestDuracionLegible(t *testing.T) {
@@ -71,7 +71,7 @@ func TestTextoDeTurnosAbiertos(t *testing.T) {
 // se pudiera ejecutar, el cierre de sesión con turno abierto devolvería un error
 // de servidor, que es exactamente lo contrario de lo que se busca.
 func TestLaPantallaDeTurnoAbiertoSeRenderiza(t *testing.T) {
-	tpl, err := template.New("logout_turno_abierto.html").ParseFS(erpgow.Templates(), "templates/logout_turno_abierto.html")
+	tpl, err := template.New("logout_turno_abierto.html").ParseFS(erpgo.Templates(), "templates/logout_turno_abierto.html")
 	if err != nil {
 		t.Fatalf("la pantalla de turno abierto no se puede cargar: %v", err)
 	}

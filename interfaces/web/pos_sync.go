@@ -22,7 +22,7 @@ import (
 	"net/http"
 	"strings"
 
-	"erpgow/internal/pos"
+	"erpgo/internal/pos"
 )
 
 // posSyncDBKey es la clave de contexto con la que el middleware deja la base YA
@@ -357,3 +357,4 @@ func (s *Server) handlePOSCustomersSync(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, map[string]interface{}{"results": resp})
 }
+

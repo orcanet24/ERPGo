@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"erpgow"
-	"erpgow/configs"
-	"erpgow/internal/queue"
-	"erpgow/internal/upload"
+	"erpgo"
+	"erpgo/configs"
+	"erpgo/internal/queue"
+	"erpgo/internal/upload"
 )
 
 // Server is the ERPGo web application.
@@ -250,7 +250,7 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 
 	// Static files — served from the disk copy when present (live edits in
 	// development) and from the embedded filesystem otherwise (single binary).
-	staticRoot, err := fs.Sub(erpgow.Static(), "static")
+	staticRoot, err := fs.Sub(erpgo.Static(), "static")
 	if err != nil {
 		log.Fatalf("embedded static files: %v", err)
 	}
@@ -369,6 +369,8 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	s.registerPayrollRoutes()
 	// CRM (contactos, embudo comercial, actividades)
 	s.registerCRMRoutes()
+	// Remarketing (campañas segmentadas, plantillas, envío multicanal)
+	s.registerRemarketingRoutes()
 	// Cierre de períodos contables
 	s.registerPeriodRoutes()
 	// Motor de informes por plantilla (con parámetros y exportación)

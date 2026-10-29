@@ -39,6 +39,9 @@
 {{define "pagejs"}}
 <script>
 $(function () {
+    var submittedAction = 'save';
+    $('button[type=submit]', '#permForm').on('click', function () { submittedAction = $(this).val(); });
+
     $('#permForm').on('submit', function (e) {
         e.preventDefault();
         var data = $(this).serialize();
@@ -47,8 +50,12 @@ $(function () {
             if (!$(this).is(':checked')) data += '&' + this.name + '=0';
         });
         $.post('/role/permissions', data, function (r) {
-            if (r.status == 1) toastr.success(r.msg);
-            else toastr.error(r.error);
+            if (r.status == 1) {
+                toastr.success(r.msg);
+                if (submittedAction === 'save_exit') setTimeout(function () { location.href = r.redirect || '/role/list'; }, 700);
+            } else {
+                toastr.error(r.error);
+            }
         }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
     });
 });

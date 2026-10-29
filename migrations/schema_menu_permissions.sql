@@ -84,4 +84,8 @@ INSERT INTO `sub_module` (`id`, `mid`, `name`, `directory`, `status`) VALUES
 -- registrar una llamada y mover una oportunidad son el mismo trabajo comercial.
 -- Quien no comercializa no necesita el modulo; quien lo usa necesita el
 -- completo.
-(45, 12, 'crm', 'crm', 1);
+(45, 12, 'crm', 'crm', 1),
+-- Remarketing (submódulo del CRM). Comparte el permiso `crm` del menú padre,
+-- pero se registra aquí para que el sistema de permisos lo reconozca como
+-- propia área funcional.
+(46, 12, 'crm_remarketing', 'crm_remarketing', 1);

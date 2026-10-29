@@ -1,4 +1,4 @@
-package web
+﻿package web
 
 // reorder_point.go — Punto de pedido y sugerencias de reposición.
 //
@@ -575,7 +575,7 @@ func (s *Server) reorderPolicySave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Política guardada", "redirect": saveRedirect(r, "/reorder_point/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Política guardada", "redirect": saveRedirect(r, "/inventory/reorder")})
 }
 
 func (s *Server) reorderRecalc(w http.ResponseWriter, r *http.Request) {
@@ -628,5 +628,5 @@ func (s *Server) reorderSuggestionStatus(w http.ResponseWriter, r *http.Request)
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Sugerencia actualizada", "redirect": saveRedirect(r, "/reorder_point/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Sugerencia actualizada", "redirect": saveRedirect(r, "/inventory/reorder")})
 }

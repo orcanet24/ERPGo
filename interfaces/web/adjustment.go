@@ -377,9 +377,15 @@ func (s *Server) adjustmentDelete(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = tx.Rollback() }()
 
 	// Remove stock adjustments
-	_, _ = tx.Exec(`DELETE FROM product_purchase_details WHERE purchase_id = ?`, adjNo.String)
-	// Remove adjustment details
-	_, _ = tx.Exec(`DELETE FROM store_adjustment_details WHERE adjustment_no = ?`, adjNo.String)
+	for _, q := range []string{
+		`DELETE FROM product_purchase_details WHERE purchase_id = ?`,
+		`DELETE FROM store_adjustment_details WHERE adjustment_no = ?`,
+	} {
+		if _, err := tx.Exec(q, adjNo.String); err != nil {
+			jsonError(w, fmt.Sprintf("limpiar ajuste: %v", err), 500)
+			return
+		}
+	}
 	// Soft delete header
 	res, err := tx.Exec(`UPDATE store_adjustment SET status=0 WHERE id = ?`, id)
 	if err != nil {

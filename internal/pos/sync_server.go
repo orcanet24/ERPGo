@@ -188,13 +188,15 @@ func (s *SyncServer) SyncSale(req *SyncSaleRequest) (*SyncSaleResponse, error) {
 		itemTotal := item.UnitPrice * item.Quantity
 		itemTax := itemTotal * item.TaxRate / 100
 
-		_, _ = s.db.Exec(`
+		if _, err := s.db.Exec(`
 			INSERT INTO invoice_details (invoice_details_id, invoice_id, product_id, description,
 				quantity, rate, total_price, vat_amnt, status)
 			VALUES (?,?,?,?,?,?,?,?,?)`,
 			fmt.Sprintf("POS-%d-%s", invoiceNo, productID),
 			fmt.Sprintf("%d", invoiceNo), productID, item.Description,
-			item.Quantity, item.UnitPrice, itemTotal, itemTax, 1)
+			item.Quantity, item.UnitPrice, itemTotal, itemTax, 1); err != nil {
+			return &SyncSaleResponse{Status: "error", Error: fmt.Sprintf("detalle de factura POS: %v", err)}, err
+		}
 
 		// Stock movement: POS siempre descuenta al facturar (modo invoice)
 		// Servicios no mueven stock
@@ -205,11 +207,13 @@ func (s *SyncServer) SyncSale(req *SyncSaleRequest) (*SyncSaleResponse, error) {
 			WHERE pi.product_id = ?`, productID).Scan(&productType)
 
 		if productType != "service" {
-			_, _ = s.db.Exec(`
+			if _, err := s.db.Exec(`
 				INSERT INTO stock_movement (movement_type, product_id, warehouse_id, quantity, unit_cost,
 					reference_type, reference_id, reference_no, date, is_posted, posted_at, created_at)
 				VALUES ('sale', ?, 'WH-MAIN', ?, ?, 'invoice', ?, ?, ?, 1, NOW(), NOW())`,
-				productID, item.Quantity, item.UnitPrice, invoiceNo, fmt.Sprintf("INV-%d", invoiceNo), now)
+				productID, item.Quantity, item.UnitPrice, invoiceNo, fmt.Sprintf("INV-%d", invoiceNo), now); err != nil {
+				return &SyncSaleResponse{Status: "error", Error: fmt.Sprintf("inventario POS: %v", err)}, err
+			}
 		}
 	}
 

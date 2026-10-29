@@ -181,6 +181,9 @@ $(function () {
           .then(function (j) { alert(j.msg || 'Sugerencias guardadas'); });
     });
 
+    var submittedActionPolitica = 'save';
+    $('button[type=submit]', '#formPolitica').on('click', function () { submittedActionPolitica = $(this).val(); });
+
     $('#formPolitica').on('submit', function (e) {
         e.preventDefault();
         fetch('/inventory/reorder/policy', {
@@ -188,7 +191,15 @@ $(function () {
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
             body: $(this).serialize() + '&active=yes'
         }).then(function (r) { return r.json(); })
-          .then(function (j) { alert(j.msg || j.msg_error || 'Error'); cargar(); });
+          .then(function (j) {
+              if (j.status == 1) {
+                  toastr.success(j.msg || 'Política guardada');
+                  if (submittedActionPolitica === 'save_exit') setTimeout(function () { location.href = j.redirect || '/inventory/reorder'; }, 700);
+                  else cargar();
+              } else {
+                  toastr.error(j.msg_error || j.error || 'Error');
+              }
+          }).catch(function () { toastr.error('Error'); });
     });
 });
 </script>

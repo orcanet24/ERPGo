@@ -206,7 +206,8 @@ func (s *Server) reportDailyClosing(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		writeJSON(w, map[string]interface{}{"status": 1, "msg": "Cierre guardado", "amount": amount})
+		writeJSON(w, map[string]interface{}{"status": 1, "msg": "Cierre guardado", "amount": amount,
+			"redirect": saveRedirect(r, "/reports/daily-closing")})
 		return
 	}
 

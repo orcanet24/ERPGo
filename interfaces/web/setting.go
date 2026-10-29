@@ -1,4 +1,4 @@
-package web
+﻿package web
 
 import (
 	"database/sql"
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"erpgow"
+	"erpgo"
 )
 
 // ---------- Settings module (replicates dashboard settings) ----------
@@ -57,7 +57,7 @@ func imageAssetPath(p string) string {
 	}
 	// static/ may live only in the embedded binary (single-file deployment).
 	if strings.HasPrefix(p, "static/") {
-		if _, err := fs.Stat(erpgow.Static(), p); err == nil {
+		if _, err := fs.Stat(erpgo.Static(), p); err == nil {
 			return p
 		}
 	}
@@ -203,7 +203,7 @@ func (s *Server) settingSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.reloadSettings()
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Configuración guardada", "redirect": saveRedirect(r, "/setting")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Configuración guardada", "redirect": saveRedirect(r, "/settings")})
 }
 
 func (s *Server) companyForm(w http.ResponseWriter, r *http.Request) {
@@ -237,7 +237,7 @@ func (s *Server) companySave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.reloadSettings()
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Empresa guardada", "redirect": saveRedirect(r, "/setting")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Empresa guardada", "redirect": saveRedirect(r, "/settings")})
 }
 
 // ---------- Currency ----------
@@ -285,7 +285,7 @@ func (s *Server) currencySave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Moneda guardada", "redirect": saveRedirect(r, "/setting")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Moneda guardada", "redirect": saveRedirect(r, "/settings")})
 }
 
 func (s *Server) currencyDelete(w http.ResponseWriter, r *http.Request) {
@@ -293,7 +293,7 @@ func (s *Server) currencyDelete(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Eliminada", "redirect": saveRedirect(r, "/setting")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Eliminada", "redirect": saveRedirect(r, "/settings")})
 }
 
 // ---------- Backup ----------
@@ -374,10 +374,15 @@ func (s *Server) backupRun(w http.ResponseWriter, r *http.Request) {
 				if v == nil {
 					sb.WriteString("NULL")
 				} else {
+					// Escape estándar de MySQL para que el dump sea restaurable.
+					// Orden: primero la barra invertida; después el resto.
 					esc := strings.ReplaceAll(string(v), "\\", "\\\\")
 					esc = strings.ReplaceAll(esc, "'", "\\'")
+					esc = strings.ReplaceAll(esc, "\"", "\\\"")
 					esc = strings.ReplaceAll(esc, "\n", "\\n")
 					esc = strings.ReplaceAll(esc, "\r", "\\r")
+					esc = strings.ReplaceAll(esc, "\x00", "\\0")
+					esc = strings.ReplaceAll(esc, "\x1a", "\\Z")
 					sb.WriteString("'" + esc + "'")
 				}
 			}

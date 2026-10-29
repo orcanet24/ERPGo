@@ -221,8 +221,11 @@ func (s *Server) bankSave(w http.ResponseWriter, r *http.Request) {
 		// columnas de tablas con collations distintas)
 		var oldBankID string
 		if err := tx.QueryRow(`SELECT bank_id FROM bank_information WHERE id = ?`, id).Scan(&oldBankID); err == nil {
-			_, _ = tx.Exec(`UPDATE acc_coa SET HeadName=?, UpdateBy=?, UpdateDate=? WHERE bank_id = ?`,
-				bankHeadName(name, acNumber), sessUserID(sess), now(), oldBankID)
+			if _, err := tx.Exec(`UPDATE acc_coa SET HeadName=?, UpdateBy=?, UpdateDate=? WHERE bank_id = ?`,
+				bankHeadName(name, acNumber), sessUserID(sess), now(), oldBankID); err != nil {
+				jsonError(w, fmt.Sprintf("actualizar cuenta contable del banco: %v", err), 500)
+				return
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -268,7 +271,10 @@ func (s *Server) bankDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	_, _ = tx.Exec(`DELETE FROM acc_coa WHERE bank_id = ?`, bankID)
+	if _, err := tx.Exec(`DELETE FROM acc_coa WHERE bank_id = ?`, bankID); err != nil {
+		jsonError(w, fmt.Sprintf("limpiar cuenta contable del banco: %v", err), 500)
+		return
+	}
 	res, err := tx.Exec(`DELETE FROM bank_information WHERE id = ?`, id)
 	if err != nil {
 		jsonError(w, err.Error(), 500)

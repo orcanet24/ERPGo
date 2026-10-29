@@ -15,8 +15,8 @@ import (
 	"net/http"
 	"time"
 
-	di "erpgow/interfaces/web/digitalinvoice"
-	"erpgow/internal/digitalinvoice"
+	di "erpgo/interfaces/web/digitalinvoice"
+	"erpgo/internal/digitalinvoice"
 )
 
 // diProveedorCatalogo es el catálogo de empresas de facturación digital que el
@@ -396,3 +396,4 @@ func diBoolToInt(b bool) int {
 	}
 	return 0
 }
+

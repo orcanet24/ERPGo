@@ -210,13 +210,19 @@ func (s *Server) supplierSave(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		_, _ = tx.Exec(`
+		if _, err := tx.Exec(`
 			INSERT INTO acc_coa (HeadCode, HeadName, PHeadName, HeadLevel, IsActive, IsTransaction, IsGL,
 				HeadType, IsBudget, IsDepreciation, DepreciationRate, supplier_id, CreateBy, CreateDate, UpdateBy, UpdateDate, isSubType, subType)
 			VALUES (?,?,?,?,1,1,0,'L',0,0,0,?,?,?,?,?,1,4)`,
-			headcode, fmt.Sprintf("%d-%s", supplierID, name), "Suppliers", 4, supplierID, sessUserID(sess), now(), sessUserID(sess), now())
-		_, _ = tx.Exec(`INSERT INTO acc_subcode (subTypeId, name, referenceNo, status, created_by, created_date, updated_by)
-			VALUES (4, ?, ?, 1, ?, ?, ?)`, name, supplierID, sessUserID(sess), today(), sessUserID(sess))
+			headcode, fmt.Sprintf("%d-%s", supplierID, name), "Suppliers", 4, supplierID, sessUserID(sess), now(), sessUserID(sess), now()); err != nil {
+			jsonError(w, fmt.Sprintf("crear cuenta contable del proveedor: %v", err), 500)
+			return
+		}
+		if _, err := tx.Exec(`INSERT INTO acc_subcode (subTypeId, name, referenceNo, status, created_by, created_date, updated_by)
+			VALUES (4, ?, ?, 1, ?, ?, ?)`, name, supplierID, sessUserID(sess), today(), sessUserID(sess)); err != nil {
+			jsonError(w, fmt.Sprintf("crear subcuenta del proveedor: %v", err), 500)
+			return
+		}
 	} else {
 		supplierID, _ = strconv.ParseInt(idStr, 10, 64)
 		_, err = tx.Exec(`
@@ -256,8 +262,14 @@ func (s *Server) supplierDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
-	_, _ = tx.Exec(`DELETE FROM acc_subcode WHERE referenceNo = ? AND subTypeId = 4`, id)
-	_, _ = tx.Exec(`DELETE FROM acc_coa WHERE supplier_id = ?`, id)
+	if _, err := tx.Exec(`DELETE FROM acc_subcode WHERE referenceNo = ? AND subTypeId = 4`, id); err != nil {
+		jsonError(w, fmt.Sprintf("limpiar subcuenta contable: %v", err), 500)
+		return
+	}
+	if _, err := tx.Exec(`DELETE FROM acc_coa WHERE supplier_id = ?`, id); err != nil {
+		jsonError(w, fmt.Sprintf("limpiar cuenta contable: %v", err), 500)
+		return
+	}
 	res, err := tx.Exec(`DELETE FROM supplier_information WHERE supplier_id = ?`, id)
 	if err != nil {
 		jsonError(w, err.Error(), 500)

@@ -92,14 +92,22 @@
 {{define "pagejs"}}
 <script>
 $(function () {
+    var submittedAction = 'save';
+    $('button[type=submit]', '#fsForm').on('click', function () { submittedAction = $(this).val(); });
+
     $('#fsForm').on('submit', function (e) {
         e.preventDefault();
         var data = $(this).serialize();
         if (!$('[name=igtf_enabled]').prop('checked')) data += '&igtf_enabled=0';
         if (!$('[name=walkin_rif_required]').prop('checked')) data += '&walkin_rif_required=0';
         $.post('/settings/fiscal/save', data, function (r) {
-            if (r.status == 1) toastr.success(r.msg); else toastr.error(r.error);
-        });
+            if (r.status == 1) {
+                toastr.success(r.msg);
+                if (submittedAction === 'save_exit') setTimeout(function () { location.href = r.redirect || '/settings/fiscal'; }, 700);
+            } else {
+                toastr.error(r.error);
+            }
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
     });
     $('.s-save').on('click', function () {
         var $tr = $(this).closest('tr');

@@ -272,8 +272,11 @@ $(function () {
         resetProviderForm();
     });
 
+    var submittedAction = 'save';
+    $('#providerForm').on('click', 'button[type=submit]', function () { submittedAction = $(this).val(); });
     $('#providerForm').on('submit', function (e) {
         e.preventDefault();
+        var ea = submittedAction;
         $.ajax({
             url: '/ai/providers/save',
             type: 'POST',
@@ -282,7 +285,14 @@ $(function () {
             success: function (r) {
                 if (r.status === 'success') {
                     toastr.success(r.msg || 'Proveedor guardado');
-                    ERPGo.refrescar();
+                    // «Guardar y Salir» honra el redirijo del servidor si la
+                    // pantalla lo trae; si no (Configuración IA es a la vez la
+                    // lista y el formulario del módulo), refresca aquí mismo.
+                    if (ea === 'save_exit' && r.redirect && r.redirect !== location.pathname) {
+                        location.href = r.redirect;
+                    } else {
+                        ERPGo.refrescar();
+                    }
                 } else {
                     toastr.error(r.message || 'No se pudo guardar el proveedor');
                 }

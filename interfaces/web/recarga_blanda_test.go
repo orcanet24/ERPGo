@@ -22,11 +22,11 @@ import (
 	"strings"
 	"testing"
 
-	"erpgow"
+	"erpgo"
 )
 
 func TestElLayoutEnvuelveElPagejsDondeLaRecargaLoReejecuta(t *testing.T) {
-	layout, err := fs.ReadFile(erpgow.Templates(), "templates/layout.html")
+	layout, err := fs.ReadFile(erpgo.Templates(), "templates/layout.html")
 	if err != nil {
 		t.Fatalf("no se pudo leer layout.html: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestElLayoutEnvuelveElPagejsDondeLaRecargaLoReejecuta(t *testing.T) {
 }
 
 func TestGuardadoJsPublicaLoQueLasVistasLlaman(t *testing.T) {
-	b, err := fs.ReadFile(erpgow.Static(), "static/js/guardado.js")
+	b, err := fs.ReadFile(erpgo.Static(), "static/js/guardado.js")
 	if err != nil {
 		t.Fatalf("no existe static/js/guardado.js: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestGuardadoJsPublicaLoQueLasVistasLlaman(t *testing.T) {
 const recargaPermitida = "{{/* recarga completa permitida */}}"
 
 func TestNingunaVistaRecargaLaPaginaEnteraTrasGuardar(t *testing.T) {
-	entradas, err := fs.ReadDir(erpgow.Templates(), "templates")
+	entradas, err := fs.ReadDir(erpgo.Templates(), "templates")
 	if err != nil {
 		t.Fatalf("no se pudo leer templates/: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestNingunaVistaRecargaLaPaginaEnteraTrasGuardar(t *testing.T) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".html") {
 			continue
 		}
-		b, err := fs.ReadFile(erpgow.Templates(), "templates/"+e.Name())
+		b, err := fs.ReadFile(erpgo.Templates(), "templates/"+e.Name())
 		if err != nil {
 			continue
 		}

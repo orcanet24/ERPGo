@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"erpgow/internal/security"
+	"erpgo/internal/security"
 )
 
 // El ciclo entero de una empresa: guardar (la clave llega en claro y queda
@@ -70,3 +70,4 @@ func TestTenantConfigNoExiste(t *testing.T) {
 		t.Fatal("debería devolver nil sin archivo")
 	}
 }
+

@@ -24,7 +24,7 @@ import (
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
-	pb "erpgow/proto/pos"
+	pb "erpgo/proto/pos"
 )
 
 // DBResolver devuelve la base de la EMPRESA a la que pertenece una API key de

@@ -121,10 +121,22 @@ $(function () {
             $('#headInfo').html(html);
         });
     });
+    // «Guardar» a secas refresca la vista (guardado sin navegación); «Guardar
+    // y Salir» debe devolver al listado del módulo. La clave es capturar QUÉ
+    // botón disparó el submit: el propio $.post se lo come (serialize() no
+    // incluye los botones), así que anotamos el chosen al clic y honramos el
+    // redirijo que manda el servidor si lo trae.
+    var submittedAction = 'save';
+    $('#accountForm').on('click', 'button[type=submit]', function () { submittedAction = $(this).val(); });
     $('#accountForm').on('submit', function (e) {
         e.preventDefault();
+        var ea = submittedAction;
         $.post('/account/coa/save', $(this).serialize(), function (r) {
-            if (r.status == 1) { toastr.success(r.msg); ERPGo.refrescar(); }
+            if (r.status == 1) {
+                toastr.success(r.msg);
+                if (ea === 'save_exit') { location.href = r.redirect || '/account/coa'; }
+                else { ERPGo.refrescar(); }
+            }
             else toastr.error(r.error || 'Error');
         }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
     });

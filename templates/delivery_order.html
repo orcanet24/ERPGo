@@ -1,8 +1,8 @@
-{{define "content"}}
+﻿{{define "content"}}
 <div class="panel panel-bd">
     <div class="panel-heading">
         <div class="panel-title"><h4>{{.Title}}
-            <a href="/deliveryorder/list" class="btn btn-default btn-sm pull-right"><i class="fa fa-arrow-left"></i> Volver</a>
+            <a href="/delivery_order/list" class="btn btn-default btn-sm pull-right"><i class="fa fa-arrow-left"></i> Volver</a>
         </h4></div>
     </div>
     <div class="panel-body">
@@ -86,7 +86,7 @@
 
             <hr>
             <div class="text-right">
-                <a href="/deliveryorder/list" class="btn btn-default">Cancelar</a>
+                <a href="/delivery_order/list" class="btn btn-default">Cancelar</a>
                 <button type="submit" class="btn btn-success btn-lg"><i class="fa fa-save"></i> Guardar Orden de Entrega</button>
             </div>
         </form>
@@ -166,7 +166,7 @@ $('#deliveryOrderForm').on('submit', function (e) {
     $.post('/deliveryorder/save', $(this).serialize(), function (r) {
         if (r.status == 1) {
             toastr.success(r.msg);
-            setTimeout(function () { location.href = '/deliveryorder/list'; }, 700);
+            setTimeout(function () { location.href = '/delivery_order/list'; }, 700);
         } else {
             toastr.error(r.error || 'Error');
             btn.prop('disabled', false);

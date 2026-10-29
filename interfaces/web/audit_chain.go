@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -284,7 +285,12 @@ func (s *Server) appendAuditAt(r *http.Request, userID, ip, action, module, tabl
 	// The hash is written right after INSERT so the row is complete; this is the
 	// only UPDATE the system ever issues on audit_log and it only fills the hash
 	// of the row we just created (never touches previous rows).
-	_, _ = s.dbFor(r).Exec(`UPDATE audit_log SET record_hash=? WHERE id=? AND record_hash=''`, hash, id)
+	if _, err := s.dbFor(r).Exec(`UPDATE audit_log SET record_hash=? WHERE id=? AND record_hash=''`, hash, id); err != nil {
+		// La cadena de hashes queda rota para esta fila; no es deseable pero no hay
+		// transacción abierta aquí para deshacer el INSERT. Se logguea para que el
+		// administrador sepa que la integridad de auditoría está comprometida.
+		log.Printf("auditoría: no se pudo escribir la huella del registro %d: %v", id, err)
+	}
 
 	// Sella los períodos cerrados. Barato: solo corre al cambiar de mes.
 	s.sealClosedAuditBlocks(r, at)

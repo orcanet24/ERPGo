@@ -479,7 +479,7 @@ func (s *Server) costConfigSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Configuración guardada", "redirect": saveRedirect(r, "/cost/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Configuración guardada", "redirect": saveRedirect(r, "/cost")})
 }
 
 // costEnteroForm lee un entero del formulario devolviendo 0 si no viene o no es
@@ -515,7 +515,7 @@ func (s *Server) costRecipeSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Componente guardado", "redirect": saveRedirect(r, "/cost/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Componente guardado", "redirect": saveRedirect(r, "/cost")})
 }
 
 func (s *Server) costRecipeDelete(w http.ResponseWriter, r *http.Request) {
@@ -531,7 +531,7 @@ func (s *Server) costRecipeDelete(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Componente borrado", "redirect": saveRedirect(r, "/cost/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Componente borrado", "redirect": saveRedirect(r, "/cost")})
 }
 
 func (s *Server) costYieldSave(w http.ResponseWriter, r *http.Request) {
@@ -554,7 +554,7 @@ func (s *Server) costYieldSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Rendimiento guardado", "redirect": saveRedirect(r, "/cost/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Rendimiento guardado", "redirect": saveRedirect(r, "/cost")})
 }
 
 func (s *Server) costGradeSave(w http.ResponseWriter, r *http.Request) {
@@ -602,7 +602,7 @@ func (s *Server) costCenterSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Centro de costo guardado", "redirect": saveRedirect(r, "/cost/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Centro de costo guardado", "redirect": saveRedirect(r, "/cost")})
 }
 
 func (s *Server) costPriceSave(w http.ResponseWriter, r *http.Request) {
@@ -623,7 +623,7 @@ func (s *Server) costPriceSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Precio guardado", "redirect": saveRedirect(r, "/cost/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Precio guardado", "redirect": saveRedirect(r, "/cost")})
 }
 
 func (s *Server) costTimesheetSave(w http.ResponseWriter, r *http.Request) {
@@ -643,7 +643,7 @@ func (s *Server) costTimesheetSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Horas registradas", "redirect": saveRedirect(r, "/cost/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Horas registradas", "redirect": saveRedirect(r, "/cost")})
 }
 
 func (s *Server) costTimesheetDelete(w http.ResponseWriter, r *http.Request) {
@@ -658,7 +658,7 @@ func (s *Server) costTimesheetDelete(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 400)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Renglón borrado", "redirect": saveRedirect(r, "/cost/list")})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Renglón borrado", "redirect": saveRedirect(r, "/cost")})
 }
 
 // ---------------------------------------------------------------------------

@@ -84,12 +84,21 @@ $(function () {
             }}
         ]
     });
+    var submittedAction = 'save';
+    $('button[type=submit]', '#roleForm').on('click', function () { submittedAction = $(this).val(); });
+
     $('#roleForm').on('submit', function (e) {
         e.preventDefault();
         $.post('/role/save', $(this).serialize(), function (r) {
-            if (r.status == 1) { toastr.success(r.msg); $('#roleModal').modal('hide'); table.ajax.reload(); }
-            else toastr.error(r.error);
-        });
+            if (r.status == 1) {
+                toastr.success(r.msg);
+                $('#roleModal').modal('hide');
+                table.ajax.reload();
+                if (submittedAction === 'save_exit') setTimeout(function () { location.href = r.redirect || '/role/list'; }, 700);
+            } else {
+                toastr.error(r.error);
+            }
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
     });
 });
 </script>

@@ -1,0 +1,44 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>{{.Title}}</h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <form id="tplForm" method="post" action="/crm/remarketing/template/save">
+            <input type="hidden" name="id" value="{{if .Tpl}}{{.Tpl.ID}}{{end}}">
+
+            <div class="form-group">
+                <label>Nombre de la plantilla</label>
+                <input type="text" class="form-control" name="name" required placeholder="Ej: Reactivación clientes inactivos"
+                    value="{{if .Tpl}}{{.Tpl.Name}}{{end}}">
+            </div>
+
+            <div class="form-group">
+                <label>Asunto (ignorado en SMS y WhatsApp)</label>
+                <input type="text" class="form-control" name="subject" placeholder="Ej: ¡Tenemos novedades para ti!"
+                    value="{{if .Tpl}}{{.Tpl.Subject}}{{end}}">
+            </div>
+
+            <div class="form-group">
+                <label>Cuerpo del mensaje</label>
+                <textarea class="form-control" name="body" rows="6" required placeholder="Hola %nombre%, en %empresa% queremos que sepas que...">{{if .Tpl}}{{.Tpl.Body}}{{end}}</textarea>
+            </div>
+
+            <div class="callout callout-warning">
+                <h5>Variables</h5>
+                <p>
+                    <code>%nombre%</code> → nombre del contacto<br>
+                    <code>%empresa%</code> → empresa del contacto<br>
+                    <code>%telefono%</code> → teléfono<br>
+                    <code>%email%</code> → correo
+                </p>
+            </div>
+
+            <button type="submit" class="btn btn-success"><i class="fa fa-save"></i> Guardar plantilla</button>
+            <a href="/crm/remarketing/templates" class="btn btn-default">Volver</a>
+        </form>
+    </div>
+</div>
+{{end}}

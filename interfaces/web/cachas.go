@@ -43,7 +43,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"erpgow"
+	"erpgo"
 )
 
 // ttlCacheRender es la vida de las cachés de pintado: corta a propósito.
@@ -105,7 +105,7 @@ func assetVer(ruta string) string {
 	if len(nombre) < 7 || nombre[:7] != "static/" {
 		nombre = "static/" + nombre
 	}
-	sello := stampOf(erpgow.Static(), nombre)
+	sello := stampOf(erpgo.Static(), nombre)
 
 	assetsCache.mu.RLock()
 	h, ok := assetsCache.porArchivo[ruta]
@@ -115,7 +115,7 @@ func assetVer(ruta string) string {
 	}
 
 	valor := ""
-	if b, err := fs.ReadFile(erpgow.Static(), nombre); err == nil {
+	if b, err := fs.ReadFile(erpgo.Static(), nombre); err == nil {
 		suma := sha256.Sum256(b)
 		valor = hex.EncodeToString(suma[:])[:10]
 	}

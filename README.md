@@ -95,12 +95,31 @@ defecto y queda listo para vender.
 
 ## Licencia
 
-ERPGo es **freeware**: gratuito para uso, no open source.
-El binario es gratuito y distribuido por Orcanet1724 C.A.
-Sin embargo, el **código fuente es propietario** — no se redistribuye.
+ERPGo es **freeware**: el binario es gratuito para uso, no open source.
+Distribuido por Orcanet1724 C.A.
+El **código fuente es propietario** — no se redistribuye.
 
 El SDK para crear addons (ERPGo-SDK) tiene su propia licencia (gratuita para usar,
 no para revender).
+
+## Modelo de Soporte
+
+Cada cliente es un cliente. No hay foros de comunidad, no es open source.
+
+Orcanet1724 C.A. ofrece soporte por niveles según el tipo de cuenta:
+
+| Nivel | Binario ERPGo | Soporte |
+|---|---|---|
+| **Gratuito** | ✅ Gratis | 50 tickets/mes vía sistema de tickets |
+| **De pago** | ✅ Gratis | Tickets ilimitados + soporte remoto |
+
+Adicionalmente, Orcanet1724 C.A. ofrece por separado:
+
+- **Hosting** — alojamiento del ERP en servidor administrado
+- **Servicios de IA** — proveedores de inferencia, agentes, configuración personalizada
+
+> El ERP siempre es gratis. Lo que se contrata es el soporte, el hosting y los
+> servicios profesionales alrededor de la herramienta.
 
 ---
 
@@ -145,3 +164,4 @@ La vista de administración de addons está implementada en:
 
 Los addons de terceros son propiedad de sus creadores, quienes eligen su propia
 licencia (comercial o libre). ERPGo no reclama propiedad sobre los addons.
+####################################################################################

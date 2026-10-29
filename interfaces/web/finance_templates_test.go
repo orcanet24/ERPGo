@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"erpgow"
+	"erpgo"
 )
 
 func TestLasPantallasDeCarteraYCanalesSeRenderizan(t *testing.T) {
@@ -92,11 +92,11 @@ func TestLasPantallasDeCarteraYCanalesSeRenderizan(t *testing.T) {
 	for _, c := range casos {
 		t.Run(c.archivo, func(t *testing.T) {
 			tpl, err := template.New(c.archivo).Funcs(templateFuncs(nil, nil)).
-				ParseFS(erpgow.Templates(), "templates/"+c.archivo)
+				ParseFS(erpgo.Templates(), "templates/"+c.archivo)
 			if err != nil {
 				t.Fatalf("la plantilla no se puede cargar: %v", err)
 			}
-			if _, err := tpl.ParseFS(erpgow.Templates(), "templates/layout.html"); err != nil {
+			if _, err := tpl.ParseFS(erpgo.Templates(), "templates/layout.html"); err != nil {
 				t.Fatalf("la página no convive con layout.html: %v", err)
 			}
 

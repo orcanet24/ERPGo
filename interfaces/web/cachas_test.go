@@ -27,9 +27,9 @@ import (
 	"strings"
 	"testing"
 
-	"erpgow"
-	"erpgow/configs"
-	"erpgow/infrastructure/persistence"
+	"erpgo"
+	"erpgo/configs"
+	"erpgo/infrastructure/persistence"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -128,7 +128,7 @@ func TestHuellaPorArchivo(t *testing.T) {
 // pone huella existen de verdad. Un recurso mal escrito saldría con `?v=` vacío
 // y nadie se enteraría de que dejó de cachearse.
 func TestLayoutPideHuellaPorArchivoYTodosLosRecursosExisten(t *testing.T) {
-	layout, err := fs.ReadFile(erpgow.Templates(), "templates/layout.html")
+	layout, err := fs.ReadFile(erpgo.Templates(), "templates/layout.html")
 	if err != nil {
 		t.Fatalf("leer layout: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestLayoutPideHuellaPorArchivoYTodosLosRecursosExisten(t *testing.T) {
 	}
 	for _, m := range visibles {
 		ruta := "static/" + m[1]
-		info, err := erpgow.Static().Open(ruta)
+		info, err := erpgo.Static().Open(ruta)
 		if err != nil {
 			t.Errorf("el layout pide huella de %s pero no se puede abrir: %v", ruta, err)
 			continue

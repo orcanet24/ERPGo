@@ -46,8 +46,8 @@ func (s *Server) notifyChannelSave(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue("id")), 10, 64)
 	kind := strings.ToLower(strings.TrimSpace(r.FormValue("kind")))
 	nombre := strings.TrimSpace(r.FormValue("name"))
-	if kind != "email" && kind != "sms" && kind != "webhook" {
-		jsonError(w, "Elija el tipo de canal: correo, SMS o webhook.", http.StatusBadRequest)
+	if kind != "email" && kind != "sms" && kind != "webhook" && kind != "wapp" {
+		jsonError(w, "Elija el tipo de canal: correo, SMS, WhatsApp o webhook.", http.StatusBadRequest)
 		return
 	}
 	if nombre == "" {
@@ -102,7 +102,7 @@ func (s *Server) notifyChannelSave(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "Un canal de correo necesita servidor (host) y dirección del remitente.", http.StatusBadRequest)
 			return
 		}
-	case "sms", "webhook":
+	case "sms", "wapp", "webhook":
 		if campos["url"] == "" {
 			jsonError(w, "Un canal de "+kind+" necesita la URL a la que se entrega el mensaje.", http.StatusBadRequest)
 			return

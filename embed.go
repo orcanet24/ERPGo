@@ -1,11 +1,11 @@
 // Package erpgow embeds the application assets — templates, static files and
-// SQL migrations — so erpgow.exe is a single self-contained binary.
+// SQL migrations — so erpgo.exe is a single self-contained binary.
 //
 // Every lookup goes to disk first (working directory, then the directory of
 // the executable) and falls back to the embedded copy. That keeps local
 // development convenient (edits are picked up without rebuilding) while a
 // deployment that only ships the binary keeps working.
-package erpgow
+package erpgo
 
 import (
 	"embed"
@@ -241,3 +241,4 @@ func scanModuleRoots() []string {
 	sort.Strings(salida)
 	return salida
 }
+
