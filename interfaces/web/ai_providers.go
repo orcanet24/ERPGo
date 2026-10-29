@@ -696,6 +696,10 @@ type aiTokenUsage struct {
 // key is only sent in the Authorization header (and only when the provider
 // has one: local servers like Ollama need none); it is never logged back.
 //
+// El destino lo decide aiRespanDestino (ai_respan.go): con RESPAN_API_KEY en el
+// entorno y un proveedor de terceros, la llamada sale por la pasarela de Respan
+// y se autentica con esa clave; en cualquier otro caso va directa al proveedor.
+//
 // Devuelve además el uso reportado por el proveedor (tokens), que el caller
 // pasa al metering. Es una función libre (sin *Server) porque la capa de IA la
 // usa desde sitios sin petición; por eso el registro de consumo lo hace quien
@@ -732,13 +736,13 @@ func callChatCompletion(p aiProvider, prompt string) (string, aiTokenUsage, erro
 		return "", aiTokenUsage{}, fmt.Errorf("No se pudo preparar la petición a %q: %v", p.Name, err)
 	}
 
-	endpoint := aiCompletionsEndpoint(baseURL)
+	endpoint, apiKey, _ := aiRespanDestino(p)
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", aiTokenUsage{}, fmt.Errorf("No se pudo preparar la petición a %q: %v", p.Name, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if apiKey := strings.TrimSpace(p.APIKey); apiKey != "" {
+	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
