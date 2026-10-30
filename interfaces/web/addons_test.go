@@ -10,7 +10,8 @@ package web
 //     hooks_out a eventos que el núcleo no emite).
 //   - El registro: addons → filas de modules/menu en la base de empresa, y el
 //     desinstalado queda «no instalado» con filas inactivas, jamás borradas.
-//   - El proxy: reenvía con X-ERP-* y SIN cookies del ERP.
+//   - El proxy: reenvía con X-ERP-* (usuario, empresa, permisos y la base de
+//     la empresa activa, X-ERP-DB) y SIN cookies del ERP.
 //   - El canal de negocio: 403 sin token / fuera de loopback / token ajeno;
 //     en fase 2, un verb que el manifiesto NO declara en db_write da 403
 //     (el manifiesto es el candado, aunque el handler exista).
@@ -281,19 +282,28 @@ func TestElEscaneoInformaAvisoPorCarpetaDefectuosa(t *testing.T) {
 // ---------- El proxy inverso ----------
 
 func TestElProxyReenviaConContextoYNoConCookies(t *testing.T) {
-	var vistasDe, vistasTenant, vistasPerms, vistasCookies []string
+	var vistasDe, vistasTenant, vistasPerms, vistasCookies, vistasBase, vistasAuth, vistasCSRF []string
 	fin := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		vistasDe = append(vistasDe, r.Header.Get("X-ERP-User"))
 		vistasTenant = append(vistasTenant, r.Header.Get("X-ERP-Tenant"))
 		vistasPerms = append(vistasPerms, r.Header.Get("X-ERP-Perms"))
 		vistasCookies = append(vistasCookies, r.Header.Get("Cookie"))
+		vistasBase = append(vistasBase, r.Header.Get("X-ERP-DB"))
+		vistasAuth = append(vistasAuth, r.Header.Get("X-ERP-Auth-DB"))
+		vistasCSRF = append(vistasCSRF, r.Header.Get("X-ERP-CSRF"))
 		_, _ = w.Write([]byte("pantalla del addon"))
 		close(fin)
 	}))
 	defer upstream.Close()
 
 	s, h := hostDeAddon(t, addonDirPrueba(t, manifiestoHola))
+	// Toda instalación real trae DB_NAME: sin él la cabecera de base saldría
+	// vacía y la prueba estaría midiendo un arranque a medias. El código de
+	// empresa maestra se separa del de control para que las dos cabeceras de
+	// base sean distinguibles y no se cuelen la una por la otra.
+	s.config.DBName = "erpgo_prueba"
+	s.config.DBMasterTenantCode = "empresa_maestra"
 	h.reescanear()
 	h.mu.Lock()
 	p := h.progs["hola"]
@@ -301,7 +311,9 @@ func TestElProxyReenviaConContextoYNoConCookies(t *testing.T) {
 	p.proxy = makeProxy(upstream.URL)
 	h.mu.Unlock()
 
-	r := reqPrueba(s, sessPrueba("master"), "/hola")
+	ses := sessPrueba("master")
+	ses.CSRFToken = "token-csrf-de-prueba"
+	r := reqPrueba(s, ses, "/hola")
 	r.Header.Set("Cookie", "erpgow_session=secreta-del-ERP")
 	rr := httptest.NewRecorder()
 	s.addonRouter(rr, r)
@@ -325,6 +337,22 @@ func TestElProxyReenviaConContextoYNoConCookies(t *testing.T) {
 	}
 	if vistasCookies[0] != "" {
 		t.Fatalf("las cookies del ERP llegaron al addon: %q", vistasCookies[0])
+	}
+	// La lectura granular solo sirve si el addon sabe EN QUÉ base consultar:
+	// sin esta cabecera, el grant y el DSN no se encuentran.
+	if vistasBase[0] != s.tenantDBName(defaultTenantCode) {
+		t.Fatalf("X-ERP-DB debía ser la base de la empresa activa (%q), dio %q", s.tenantDBName(defaultTenantCode), vistasBase[0])
+	}
+	if vistasAuth[0] != "erpgo_prueba" {
+		t.Fatalf("X-ERP-Auth-DB debía ser la base de identidad (\"erpgo_prueba\"), dio %q", vistasAuth[0])
+	}
+	if vistasAuth[0] == vistasBase[0] {
+		t.Fatal("las dos cabeceras de base salieron iguales: el addon no podría distinguir empresa de identidad")
+	}
+	// El token CSRF va para que el formulario del addon lo adjunte: el candado
+	// lo aplica el núcleo antes de reenviar.
+	if vistasCSRF[0] != "token-csrf-de-prueba" {
+		t.Fatalf("X-ERP-CSRF debía traer el token de la sesión, dio %q", vistasCSRF[0])
 	}
 	if !strings.Contains(rr.Body.String(), "pantalla del addon") {
 		t.Fatalf("el cuerpo del addon no llegó al usuario: %s", rr.Body.String())
@@ -350,6 +378,59 @@ func TestLaRutaDelAddonPideSesion(t *testing.T) {
 	}
 	if loc := rr.Header().Get("Location"); loc != "/login" {
 		t.Fatalf("el redirect fue a %q, debía ser /login", loc)
+	}
+}
+
+// TestElCanalDeNegocioAtraviesaLaCadenaDeMiddlewares: el canal se prueba AQUÍ
+// contra la cadena EXACTA de producción —authMiddleware envolviendo a
+// permissionMiddleware—, no contra el handler suelto.
+//
+// Por qué hace falta esta prueba: authMiddleware manda al login a todo lo que
+// no esté en SU lista de públicos y corre ANTES que el de permisos, donde
+// /__addon/ ya estaba declarado. Un addon no tiene cookie ni va a tener, así
+// que su escritura moría en un 302 que no puede seguir: ningún verbo de
+// ningún módulo (nota.crear incluido) llegaba al orquestador en un ERP real,
+// y las pruebas no lo veían porque llamaban al canal directamente.
+func TestElCanalDeNegocioAtraviesaLaCadenaDeMiddlewares(t *testing.T) {
+	// El manifiesto fase 2 declara tables_own: sin schema.sql el escáner ni
+	// carga el addon y no hay canal que probar.
+	dir := addonDirPrueba(t, manifiestoHolaFase2)
+	escribirSchema(t, dir, schemaHola)
+	s, h := hostDeAddon(t, dir)
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	h.progs["hola"].token = "token-canal"
+	h.mu.Unlock()
+
+	pasar := func(r *http.Request) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		s.authMiddleware(s.permissionMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s.addonCanal(w, r)
+		}))).ServeHTTP(rr, r)
+		return rr
+	}
+
+	// a) El ping sin cookie: tiene que responder EL CANAL, no el login.
+	ping := httptest.NewRequest(http.MethodGet, "/__addon/hola/ping", nil)
+	ping.RemoteAddr = "127.0.0.1:50000"
+	ping.Header.Set("X-ERP-Addon-Token", "token-canal")
+	if rr := pasar(ping); rr.Code != http.StatusOK {
+		t.Fatalf("el canal debía responder 200 al atravesar la cadena, dio %d (Location=%q): la escritura de los addons volvería a estar cortada",
+			rr.Code, rr.Header().Get("Location"))
+	}
+
+	// b) Una escritura sin usuario en el contexto: la rechaza EL CANAL, con su
+	//    403 y su motivo — no un redirect, que es lo que pasaba antes.
+	escritura := httptest.NewRequest(http.MethodPost, "/__addon/hola/mensaje.registrar",
+		strings.NewReader(`{"mensaje":"hola"}`))
+	escritura.RemoteAddr = "127.0.0.1:50000"
+	escritura.Header.Set("X-ERP-Addon-Token", "token-canal")
+	escritura.Header.Set("Content-Type", "application/json")
+	if rr := pasar(escritura); rr.Code != http.StatusForbidden || !strings.Contains(rr.Body.String(), "sesión viva") {
+		t.Fatalf("la escritura sin sesión debía rechazarla el canal (403 con su motivo), dio %d: %s",
+			rr.Code, rr.Body.String())
 	}
 }
 

@@ -1,6 +1,6 @@
 package web
 
-// addons.go — La frontera de los addons externos (docs/PLAN-ADDONS.md, fase 1).
+// addons.go — La frontera de los addons externos (docs/PLAN-ADDONS.md, fases 1 y 2).
 //
 // POR QUÉ EXISTE. El SDK anterior (retirado en 2cfcc15) vivía en go.mod: «agregar
 // un addon» era recompilar el binario. El módulo de GOWA se tejó en permisos,
@@ -13,9 +13,11 @@ package web
 // los addons ya no tocan el resto del código.
 //
 // Qué es fase 3. Fase 1 (frontera viva: escáner, manifiesto, lanzamiento,
-// proxy, canal) y fase 2 (lectura granular, escritura por el orquestador, tablas
-// propias) ya respiran. La fase 3 añade confianza y reactividad: el manifiesto
-// se verifica con ed25519 (clave pública del dueño en addons/ + manifest.sig;
+// proxy, canal de negocio /__addon/ autenticado) y fase 2 (lectura granular
+// por empresa activa con X-ERP-DB, escritura por el orquestador, tablas
+// propias e identidad con CSRF para las pantallas del addon) ya respiran.
+// La fase 3 añade confianza y reactividad: el manifiesto se verifica con
+// ed25519 (clave pública del dueño en addons/ + manifest.sig;
 // ADDONS_UNSIGNED=1 solo para desarrollo, y hasta una firma INCORRECTA se
 // rechaza en cualquier modo), y los hooks: hooks_out con cola persistente en la
 // BD de control y reintentos (patrón del runner de facturación digital),
@@ -31,9 +33,9 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"database/sql"
-	"erpgo/infrastructure/persistence"
 	"encoding/hex"
 	"encoding/json"
+	"erpgo/infrastructure/persistence"
 	"fmt"
 	"log"
 	"net"
@@ -103,13 +105,13 @@ const addonDirPorDefecto = "addons"
 
 // addonMenuEntry es una entrada de menú del addon.
 type addonMenuEntry struct {
-	ParentID    *int     `json:"parent_id"`
-	Label       string   `json:"label"`
-	URL         string   `json:"url"`
-	Icon        string   `json:"icon"`
-	Perms       []string `json:"perms"`
-	SortOrder   int      `json:"sort_order"`
-	ActivePrefix string  `json:"active_prefix"`
+	ParentID     *int     `json:"parent_id"`
+	Label        string   `json:"label"`
+	URL          string   `json:"url"`
+	Icon         string   `json:"icon"`
+	Perms        []string `json:"perms"`
+	SortOrder    int      `json:"sort_order"`
+	ActivePrefix string   `json:"active_prefix"`
 }
 
 // addonPermiso es un permiso declarado por el addon. El código SIEMPRE lleva
@@ -383,9 +385,9 @@ func addonVersionNumeros(v string) ([3]int, bool) {
 
 // Estados visibles en el panel de addons.
 const (
-	estadoActivo  = "activo"
-	estadoCaydo   = "caído"
-	estadoSinBin  = "sin binario"
+	estadoActivo   = "activo"
+	estadoCaydo    = "caído"
+	estadoSinBin   = "sin binario"
 	estadoDetenido = "detenido"
 )
 
@@ -898,14 +900,14 @@ func (h *addonHost) registrarEnDB(db *sql.DB, m addonManifest, migraciones []str
 // addonMigracionesDeCarpeta lee y valida el schema.sql de un addon con
 // tables_own. El contrato es de piedra:
 //
-//	- El archivo existe: declarar tables_own sin schema.sql no carga (el
-//	  addon se quedaría sin tabla y su pantalla fallaría en silencio).
-//	- Cada sentencia es CREATE TABLE IF NOT EXISTS <tabla>, con <tabla>
-//	  declarada por el manifiesto. Ni DROP, ni ALTER, ni INSERT de siembra: el
-//	  esquema propio se SIEMBRA una vez con código del addon, no con DDL suelto,
-//	  y el esquema ajeno no lo toca nadie.
-//	- Cada tabla declarada tiene su CREATE (si faltara, la tabla no
-//	  existiría y el addon fallaría lejos del error real).
+//   - El archivo existe: declarar tables_own sin schema.sql no carga (el
+//     addon se quedaría sin tabla y su pantalla fallaría en silencio).
+//   - Cada sentencia es CREATE TABLE IF NOT EXISTS <tabla>, con <tabla>
+//     declarada por el manifiesto. Ni DROP, ni ALTER, ni INSERT de siembra: el
+//     esquema propio se SIEMBRA una vez con código del addon, no con DDL suelto,
+//     y el esquema ajeno no lo toca nadie.
+//   - Cada tabla declarada tiene su CREATE (si faltara, la tabla no
+//     existiría y el addon fallaría lejos del error real).
 func addonMigracionesDeCarpeta(dir string, m *addonManifest) ([]string, error) {
 	contenido, err := os.ReadFile(filepath.Join(dir, "schema.sql"))
 	if err != nil {
@@ -978,9 +980,9 @@ func addonPartirSQL(sql string) []string {
 		switch {
 		case c == '-' && i+1 < len(sql) && sql[i+1] == '-':
 			// Comentario de línea: se salta hasta el fin de línea (puede
-		// contener ';' o citas que confundirían la sierra).
-		comentario = true
-		i++
+			// contener ';' o citas que confundirían la sierra).
+			comentario = true
+			i++
 		case c == '\'' || c == '"' || c == '`':
 			enComilla = c
 			actual.WriteByte(c)
@@ -1463,6 +1465,29 @@ func (s *Server) addonProxyRequest(w http.ResponseWriter, r *http.Request, sess 
 	req.Header.Set("X-ERP-User", sess.UserID)
 	req.Header.Set("X-ERP-Tenant", s.tenantOf(r))
 	req.Header.Set("X-ERP-Perms", s.addonPermsDelUsuario(r, sess, p.manifiesto))
+	// La base de la empresa activa (fase 2). Sin esta cabecera el DSN de
+	// lectura granular es una llave sin puerta: el manifiesto pide tablas y el
+	// usuario lector tiene los grants, pero nadie le dice en qué base están
+	// las filas de ESTA sesión —el mismo addon atiende a varias empresas—.
+	// El nombre de base no es secreto: sin el grant de SELECT, entrar en ella
+	// no deja leer nada.
+	if s.config != nil {
+		req.Header.Set("X-ERP-DB", s.tenantDBName(s.tenantOf(r)))
+		// La base de IDENTIDAD (control): aquí viven users y user_login, y los
+		// grants del lector ya la cubren —crearUsuarioLectorAddon empieza por
+		// DB_NAME—, pero sin su nombre el addon no puede usarlas. Un módulo que
+		// quiera enseñar a la gente de la empresa o compartir con alguien no
+		// tiene otra puerta: su propia tabla no guarda el nombre de nadie.
+		req.Header.Set("X-ERP-Auth-DB", s.config.DBName)
+	}
+	// El token CSRF de la sesión, para que la página del addon pueda ponerlo en
+	// su formulario. El candado lo aplica EL NÚCLEO antes de reenviar
+	// (enforceCSRF): el addon no valida CSRF, solo recibe la petición ya
+	// pasado por el filtro. Sin esta cabecera, todo POST desde una pantalla de
+	// addon saldría 403 — la plantilla no tendría cómo adjuntar el token.
+	if sess.CSRFToken != "" {
+		req.Header.Set("X-ERP-CSRF", sess.CSRFToken)
+	}
 	p.proxy.ServeHTTP(w, req)
 }
 
@@ -1716,7 +1741,7 @@ func (s *Server) addonsEstado() map[string]interface{} {
 			"firma": p.firma,
 			"hooks_out": m.HooksOut, "hooks_in": m.HooksIn,
 			"concedido": map[string]bool{
-				"db_read": len(m.DBRead) > 0 && p.lecturaOK,
+				"db_read":  len(m.DBRead) > 0 && p.lecturaOK,
 				"db_write": len(m.DBWrite) > 0,
 				"tables": len(m.TablesOwn) > 0,
 				"hooks": len(m.HooksOut) > 0 || len(m.HooksIn) > 0,
@@ -1734,10 +1759,10 @@ func (s *Server) addonsEstado() map[string]interface{} {
 	historia := s.addonsHooksHistoria(30)
 	h.mu.Lock()
 	return map[string]interface{}{
-		"fase":    addonFase,
-		"core":    addonCoreVersion,
-		"addons":  limpio,
-		"avisos":  avisos,
+		"fase":       addonFase,
+		"core":       addonCoreVersion,
+		"addons":     limpio,
+		"avisos":     avisos,
 		"directorio": h.directorio,
 		// Fase 3: confianza. Si la clave pública del dueño no está en addons/
 		// pubkey.ed25519, NADA se verifica y el panel lo dice de frente.

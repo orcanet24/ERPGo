@@ -237,6 +237,7 @@ Se sirve por el proxy inverso con la sesión del ERP ya validada.</p>
 <p style="color:#b00">%s</p>
 <p style="color:#060">%s</p>
 <form method="post" action="/hola/mensaje" style="margin:1.5em 0">
+	<input type="hidden" name="csrf_token" value="%s">
 	<label>Mensaje para la tabla propia del addon (hola_mensajes):<br>
 	<textarea name="mensaje" rows="3" cols="50" maxlength="512"></textarea></label><br>
 	<button type="submit">Guardar por el canal (mensaje.registrar)</button>
@@ -244,7 +245,7 @@ Se sirve por el proxy inverso con la sesión del ERP ya validada.</p>
 <p><a href="/home">← volver al ERP</a> · <a href="/module/addons">Panel de addons</a></p>
 </body></html>`,
 		htmlQuitar(usuario), htmlQuitar(empresa), htmlQuitar(permisos), mostrarCookies, htmlQuitar(ping),
-		htmlQuitar(aviso), htmlQuitar(resultado))
+		htmlQuitar(aviso), htmlQuitar(resultado), htmlQuitar(r.Header.Get("X-ERP-CSRF")))
 }
 
 func condicional(condicion bool, a, b string) string {
