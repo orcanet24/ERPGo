@@ -1,0 +1,27 @@
+{
+  "id": "memo",
+  "name": "Memo",
+  "version": "0.1.0",
+  "min_core_version": "0.2.0",
+  "description": "Comunicación interna, diario de trabajo y tareas para plantillas grandes de empleados (docs/PLAN-MEMO.md). Fase A: muro de notas con visibilidad privada, de empresa o compartida con personas concretas.",
+  "author": "ERPGo",
+  "routes": ["/memo"],
+  "menu": [
+    {
+      "parent_id": null,
+      "label": "Memo",
+      "url": "/memo",
+      "icon": "fa-sticky-note-o",
+      "perms": ["memo_ver"],
+      "sort_order": 55,
+      "active_prefix": "/memo"
+    }
+  ],
+  "perms": [
+    { "code": "memo_ver", "label": "Ver el muro y el diario" },
+    { "code": "memo_publicar", "label": "Publicar notas y mensajes" }
+  ],
+  "db_read": ["users", "memo_notas", "memo_destinatarios"],
+  "db_write": [{ "verb": "nota.crear", "perm": "memo_publicar" }],
+  "tables_own": ["memo_notas", "memo_destinatarios"]
+}

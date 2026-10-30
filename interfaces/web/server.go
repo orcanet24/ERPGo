@@ -473,6 +473,8 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	// de negocio del ERP; la frontera solo valida contexto y despacha).
 	s.addonDemoVerboRegistrar()
 	s.addonModuloDemoVerbos()
+	// El verbo del módulo Memo (fase A de docs/PLAN-MEMO.md).
+	s.addonModuloMemoVerbos()
 
 	return s
 }
