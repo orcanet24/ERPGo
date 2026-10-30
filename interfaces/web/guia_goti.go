@@ -15,7 +15,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -108,18 +107,19 @@ var (
 	guiaDemoCache   = map[string]bool{} // code -> es demo
 )
 
-// ensureDemoColumn crea la columna tenants.is_demo una sola vez (idempotente:
-// ADD COLUMN IF NOT EXISTS sobre el motor embebido, el mismo patrón que las
-// migraciones mayores del ERP). Si falla, loguea y la pregunta responde false.
+// ensureDemoColumn crea la columna tenants.is_demo una sola vez.
+//
+// SQLite (el motor embebido de las pruebas y de la instalación ligera) no
+// soporta `ADD COLUMN IF NOT EXISTS`. La función es mejor esfuerzo: si la
+// columna ya existe o el motor no deja añadirla, simplemente sigue. El SELECT de
+// tenantEsDemo usa IFNULL(is_demo,0), así que una columna que no existe tampoco
+// deja la guía colgada: responde no-demo.
 func (s *Server) ensureDemoColumn() {
 	ctl, err := s.controlStore()
 	if err != nil {
 		return
 	}
-	if _, err := ctl.Exec(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_demo TINYINT(1) NOT NULL DEFAULT 0`); err != nil {
-		// Si el motor no soporta IF NOT EXISTS, la columna ya existe: no es error.
-		log.Printf("guia: is_demo en tenants: %v", err)
-	}
+	_, _ = ctl.Exec(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_demo TINYINT(1) NOT NULL DEFAULT 0`)
 }
 
 // tenantEsDemo consulta (con caché de 60 s) si una empresa es la demo.
@@ -235,53 +235,61 @@ func ensureGuiaTables(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("sin base")
 	}
-	const esquema = `
-	CREATE TABLE IF NOT EXISTS guia_tour (
-	  id INT AUTO_INCREMENT PRIMARY KEY,
-	  code VARCHAR(64) NOT NULL UNIQUE,
-	  label VARCHAR(160) NOT NULL,
-	  rol VARCHAR(30) NOT NULL DEFAULT '*',
-	  status TINYINT NOT NULL DEFAULT 1
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-	CREATE TABLE IF NOT EXISTS guia_paso (
-	  id INT AUTO_INCREMENT PRIMARY KEY,
-	  tour_id INT NOT NULL,
-	  orden INT NOT NULL,
-	  url VARCHAR(255) NOT NULL,
-	  selector VARCHAR(255) NOT NULL DEFAULT '',
-	  titulo VARCHAR(200) NOT NULL,
-	  mensaje TEXT NOT NULL,
-	  depends_on INT NULL,
-	  check_sql TEXT NULL,
-	  check_msg VARCHAR(255) NULL,
-	  UNIQUE KEY uk_tour_orden (tour_id, orden)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-	CREATE TABLE IF NOT EXISTS guia_progreso (
-	  user_id INT NOT NULL,
-	  paso_id INT NOT NULL,
-	  done TINYINT NOT NULL DEFAULT 0,
-	  skipped TINYINT NOT NULL DEFAULT 0,
-	  hidden TINYINT NOT NULL DEFAULT 0,
-	  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-	  UNIQUE KEY uk_user_paso (user_id, paso_id)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
-	if _, err := db.Exec(esquema); err != nil {
-		return err
+	sentencias := []string{
+		`CREATE TABLE IF NOT EXISTS guia_tour (
+		  id INTEGER PRIMARY KEY AUTOINCREMENT,
+		  code VARCHAR(64) NOT NULL UNIQUE,
+		  label VARCHAR(160) NOT NULL,
+		  rol VARCHAR(30) NOT NULL DEFAULT '*',
+		  status TINYINT NOT NULL DEFAULT 1
+		)`,
+		`CREATE TABLE IF NOT EXISTS guia_paso (
+		  id INTEGER PRIMARY KEY AUTOINCREMENT,
+		  tour_id INT NOT NULL,
+		  orden INT NOT NULL,
+		  url VARCHAR(255) NOT NULL,
+		  selector VARCHAR(255) NOT NULL DEFAULT '',
+		  titulo VARCHAR(200) NOT NULL,
+		  mensaje TEXT NOT NULL,
+		  depends_on INT NULL,
+		  check_sql TEXT NULL,
+		  check_msg VARCHAR(255) NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS guia_progreso (
+		  user_id INT NOT NULL,
+		  paso_id INT NOT NULL,
+		  done TINYINT NOT NULL DEFAULT 0,
+		  skipped TINYINT NOT NULL DEFAULT 0,
+		  hidden TINYINT NOT NULL DEFAULT 0,
+		  updated_at VARCHAR(32) NOT NULL DEFAULT '',
+		  PRIMARY KEY (user_id, paso_id)
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_tour_orden ON guia_paso (tour_id, orden)`,
 	}
-	// Siembra idempotente del contenido (actualiza texto sin romper progreso).
+	for _, q := range sentencias {
+		if _, err := db.Exec(q); err != nil {
+			return err
+		}
+	}
+
+	// Siembra idempotente del contenido. Se borra lo sembrado de cada tour antes
+	// de volver a insertar, para que el texto se pueda actualizar sin romper el
+	// progreso (guia_progreso va por paso_id y no se toca aquí). DELETE+INSERT
+	// es portable en MySQL y en SQLite, que no entiende ON DUPLICATE KEY.
 	for _, t := range guiToursDemo {
+		var tourID int64
+		err := db.QueryRow(`SELECT id FROM guia_tour WHERE code = ?`, t.Code).Scan(&tourID)
+		if err == nil {
+			_, _ = db.Exec(`DELETE FROM guia_paso WHERE tour_id = ?`, tourID)
+			_, _ = db.Exec(`DELETE FROM guia_tour WHERE code = ?`, t.Code)
+		}
 		res, err := db.Exec(`INSERT INTO guia_tour (code, label, rol, status)
-			VALUES (?, ?, ?, 1) ON DUPLICATE KEY UPDATE label=VALUES(label), rol=VALUES(rol), status=1`, t.Code, t.Label, t.Rol)
+			VALUES (?, ?, ?, 1)`, t.Code, t.Label, t.Rol)
 		if err != nil {
 			return err
 		}
-		tourID, err := res.LastInsertId()
-		if err != nil {
-			// Ya existía el tour: leer su id.
-			if e := db.QueryRow(`SELECT id FROM guia_tour WHERE code = ?`, t.Code).Scan(&tourID); e != nil {
-				return e
-			}
-		}
+		tourID, _ = res.LastInsertId()
+
 		for _, p := range t.Pasos {
 			depends := sql.NullInt64{}
 			if p.DependsOnOrden > 0 {
@@ -300,9 +308,7 @@ func ensureGuiaTables(db *sql.DB) error {
 			}
 			if _, err := db.Exec(`INSERT INTO guia_paso
 				(tour_id, orden, url, selector, titulo, mensaje, depends_on, check_sql, check_msg)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-				ON DUPLICATE KEY UPDATE url=VALUES(url), selector=VALUES(selector), titulo=VALUES(titulo),
-				mensaje=VALUES(mensaje), depends_on=VALUES(depends_on), check_sql=VALUES(check_sql), check_msg=VALUES(check_msg)`,
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				tourID, p.Orden, p.Url, p.Selector, p.Titulo, p.Mensaje, depends, check, checkMsg); err != nil {
 				return err
 			}
@@ -508,30 +514,46 @@ func (s *Server) guiaProgress(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if _, err := db.Exec(`INSERT INTO guia_progreso (user_id, paso_id, done, skipped, hidden)
-			VALUES (?, ?, 1, 0, 0)
-			ON DUPLICATE KEY UPDATE done=1, updated_at=CURRENT_TIMESTAMP`, sess.UserID, req.PasoID); err != nil {
+		if err := s.guardarProgreso(db, sess.UserID, req.PasoID, "done"); err != nil {
 			jsonError(w, err.Error(), 500)
 			return
 		}
 	case "skip":
-		if _, err := db.Exec(`INSERT INTO guia_progreso (user_id, paso_id, done, skipped, hidden)
-			VALUES (?, ?, 0, 1, 0)
-			ON DUPLICATE KEY UPDATE skipped=1, updated_at=CURRENT_TIMESTAMP`, sess.UserID, req.PasoID); err != nil {
+		if err := s.guardarProgreso(db, sess.UserID, req.PasoID, "skip"); err != nil {
 			jsonError(w, err.Error(), 500)
 			return
 		}
 	case "hide":
-		if _, err := db.Exec(`INSERT INTO guia_progreso (user_id, paso_id, hidden) VALUES (?, ?, 1)
-			ON DUPLICATE KEY UPDATE hidden=1, updated_at=CURRENT_TIMESTAMP`, sess.UserID, req.PasoID); err != nil {
+		if err := s.guardarProgreso(db, sess.UserID, req.PasoID, "hide"); err != nil {
 			jsonError(w, err.Error(), 500)
 			return
 		}
 	default:
-		jsonError(w, "Acción inválida", 400)
+		jsonError(w, "Acción inválida", http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, map[string]interface{}{"status": 1})
+}
+
+// guardarProgreso inserta o actualiza el estado de un paso. DELETE+INSERT es
+// portable en MySQL y en SQLite, que no entiende ON DUPLICATE KEY.
+func (s *Server) guardarProgreso(db *sql.DB, userID string, pasoID int64, accion string) error {
+	_, _ = db.Exec(`DELETE FROM guia_progreso WHERE user_id = ? AND paso_id = ?`, userID, pasoID)
+	switch accion {
+	case "done":
+		_, err := db.Exec(`INSERT INTO guia_progreso (user_id, paso_id, done, skipped, hidden, updated_at)
+			VALUES (?, ?, 1, 0, 0, ?)`, userID, pasoID, now())
+		return err
+	case "skip":
+		_, err := db.Exec(`INSERT INTO guia_progreso (user_id, paso_id, done, skipped, hidden, updated_at)
+			VALUES (?, ?, 0, 1, 0, ?)`, userID, pasoID, now())
+		return err
+	case "hide":
+		_, err := db.Exec(`INSERT INTO guia_progreso (user_id, paso_id, done, skipped, hidden, updated_at)
+			VALUES (?, ?, 0, 0, 1, ?)`, userID, pasoID, now())
+		return err
+	}
+	return nil
 }
 
 // guiaEjecutarCheck corre el SQL del paso restringido a lectura.
