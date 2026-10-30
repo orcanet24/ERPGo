@@ -1,0 +1,27 @@
+{
+  "id": "demo",
+  "name": "Módulo demo",
+  "version": "1.0.0",
+  "min_core_version": "0.2.0",
+  "description": "El módulo de referencia de la frontera fase 2: pantalla propia con menú y permisos, lectura granular de la empresa activa (empleados y su propia tabla) y escritura de negocio por el canal /__addon/ que baja por el orquestador. Sirve de plantilla: copie esta carpeta para arrancar un módulo nuevo.",
+  "author": "ERPGo",
+  "routes": ["/demo"],
+  "menu": [
+    {
+      "parent_id": null,
+      "label": "Módulo demo",
+      "url": "/demo",
+      "icon": "fa-flask",
+      "perms": ["demo_ver"],
+      "sort_order": 95,
+      "active_prefix": "/demo"
+    }
+  ],
+  "perms": [
+    { "code": "demo_ver", "label": "Ver la pantalla del módulo demo" },
+    { "code": "demo_publicar", "label": "Publicar avisos en el módulo demo" }
+  ],
+  "db_read": ["hr_employee", "demo_avisos"],
+  "db_write": [{ "verb": "aviso.publicar", "perm": "demo_publicar" }],
+  "tables_own": ["demo_avisos"]
+}

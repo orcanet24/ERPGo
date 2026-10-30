@@ -468,9 +468,11 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	// se tocan a mitad de ciclo (comentario en reescanear).
 	s.addonsIniciar()
 	s.registrarRutasAddon()
-	// El verbo de negocio del addon demo (fuera de la frontera: su handler
-	// vive en addon_hola.go, como cualquier módulo de negocio del ERP).
+	// Los verbos de negocio de los módulos demo (fuera de la frontera: sus
+	// handlers viven en addon_hola.go y addon_demo.go, como cualquier módulo
+	// de negocio del ERP; la frontera solo valida contexto y despacha).
 	s.addonDemoVerboRegistrar()
+	s.addonModuloDemoVerbos()
 
 	return s
 }
