@@ -61,7 +61,7 @@ mismo HTML/CSS/JS nativo que ya usa el ERP, dentro del binario del addon.
 
 ## 3. Frontera: qué pide el manifiesto y qué le corresponde
 
-El addon `memo` declara (versión fase A):
+El addon `memo` declara (versión fase B):
 
 ```json
 {
@@ -71,19 +71,35 @@ El addon `memo` declara (versión fase A):
   "perms": [
     { "code": "memo_ver",      "label": "Ver el muro y el diario" },
     { "code": "memo_publicar", "label": "Publicar notas y mensajes" },
+    { "code": "memo_grupos",   "label": "Administrar grupos de trabajo" },
     { "code": "memo_tareas",   "label": "Crear y asignar tareas" }
   ],
-  "db_read":  ["hr_employee", "memo_notas", "memo_destinatarios", ...],
-  "db_write": [{ "verb": "nota.crear",   "perm": "memo_publicar" }, ...],
-  "tables_own": ["memo_notas", "memo_destinatarios", ...]
+  "db_read":  ["users", "memo_notas", "memo_destinatarios", "memo_grupos",
+               "memo_grupo_miembros", "memo_inbox"],
+  "db_write": [{ "verb": "nota.crear",    "perm": "memo_publicar" },
+               { "verb": "grupo.crear",    "perm": "memo_grupos" },
+               { "verb": "grupo.miembros", "perm": "memo_grupos" }],
+  "tables_own": ["memo_notas", "memo_destinatarios", "memo_grupos",
+                 "memo_grupo_miembros", "memo_inbox"]
 }
 ```
 
-- **Lectura granular** (`db_read`): la plantilla de gente de la empresa sale
-  de `hr_employee` (base de la empresa activa, servida con la cabecera
-  `X-ERP-DB`), y las tablas propias del módulo van también en `db_read` para
-  que el addon pueda leer lo que él mismo escribió. Los verbos de escritura
-  son los únicos que tocan la base, y bajan por el orquestador.
+- **Lectura granular** (`db_read`): las tablas propias del módulo van en
+  `db_read` para que el addon pueda leer lo que él mismo escribió, y
+  `users` —la base de identidad, servida con `X-ERP-Auth-DB`— es la fuente de
+  nombres y del selector de gente. Los verbos de escritura son los únicos que
+  tocan la base, y bajan por el orquestador.
+- **`hr_employee` NO alimenta el selector** (decisión de la fase B, contra la
+  letra de §6): la tabla de empleados no tiene enlace a usuarios de login —
+  `migrations/schema_z_hr.sql` lo dice con todas las letras: «un empleado no
+  es necesariamente un usuario del sistema»—, y el id que se comparte tiene
+  que ser el `X-ERP-User` con el que compara la regla de visibilidad. Meter
+  ids de empleado en `memo_destinatarios` sería repartir con quien no puede
+  entrar. Si algún día aparece el enlace, el selector se cambia en un sitio.
+- **Identidad de las notas**: `memo_notas.autor` guarda el `X-ERP-User`
+  (`users.user_id`), nunca el nombre de login. La fase A guardaba el nombre
+  de login «porque queda más legible» y con eso el autor dejaba de ver sus
+  propias notas; la fase B lo corrigió con su prueba.
 - **Sin hooks todavía**: la frontera está en fase 2 (sin `hooks_out`). Las
   notificaciones se generan dentro del propio módulo cuando alguien comenta,
   menciona o asigna. Cuando la fase 3 de la frontera llegue, los eventos del
@@ -125,10 +141,12 @@ Un verbo por operación de negocio, con su permiso y su prueba:
 
 | Verbo | Permiso | Qué hace |
 |---|---|---|
-| `nota.crear` | `memo_publicar` | Crea la nota y sus destinatarios (si la visibilidad es selectiva) |
+| `nota.crear` | `memo_publicar` | Crea la nota y su reparto (personas o grupos) y avisa en la bandeja de cada destinatario |
 | `nota.actualizar` | `memo_publicar` | Editar texto/título; solo el autor |
 | `nota.archivar` | `memo_publicar` | Archiva/restaura; no borra |
 | `nota.comentar` | `memo_publicar` | Comentario sobre una nota |
+| `grupo.crear` | `memo_grupos` | Crea un grupo de trabajo con sus miembros (fase B) |
+| `grupo.miembros` | `memo_grupos` | Reescribe los miembros de un grupo: quien sale, deja de ver (fase B) |
 | `adjunto.registrar` | `memo_publicar` | Registra los metadatos tras guardar el archivo en la carpeta del addon |
 | `mensaje.enviar` | `memo_publicar` | Mensaje de chat en un hilo (fase D) |
 | `tarea.crear` / `tarea.actualizar` | `memo_tareas` | Calendario (fase E) |
@@ -138,17 +156,32 @@ Un verbo por operación de negocio, con su permiso y su prueba:
 
 ## 6. Fases de construcción y criterios de cierre
 
-### Fase A — Notas y visibilidad (la primera; todo lo demás se apoya en ella)
+### Fase A — Notas y visibilidad ✅ construida (la primera; todo lo demás se apoya en ella)
 - `addons/memo/`: manifiesto, `schema.sql` (`memo_notas`, `memo_destinatarios`) y pantalla con línea de tiempo.
 - Verbo `nota.crear` por el orquestador, con visibilidad `privada` / `empresa` / `personas`.
 - El muro muestra lo que el usuario puede ver: suyas, las de la empresa y las que le comparten **de otra persona** (nadie ve notas ajenas privadas).
 - Menú «Memo» con su permiso y toggle en Configuración → Módulos.
 - **Cierre:** pruebas del escáner sobre el bundle real, del registro en `modules`/`menu`, del verbo (validación + escritura por orquestador) y del **aislamiento de visibilidad** (un usuario no ve la nota privada de otro). `go build`, `go vet`, `go test` en verde.
 
-### Fase B — Compartir con grupos y personas
-- Grupos de trabajo (`memo_grupos`, `memo_grupo_miembros`) y selector de destinatarios tomado de `hr_employee`.
-- Al compartir, el destinatario recibe entrada en `memo_inbox`.
-- **Cierre:** una nota compartida con un grupo se ve para sus miembros y no para el resto; dejar de ser miembro quita la vista.
+### Fase B — Compartir con grupos y personas ✅ construida
+- Grupos de trabajo (`memo_grupos`, `memo_grupo_miembros`) con su verbo
+  `grupo.crear` y con `grupo.miembros` para cambiar la plantilla — sin esta
+  segunda puerta, «dejar de ser miembro» solo existiría en las pruebas.
+- `nota.crear` admite `visibilidad = "grupo"`; el destinatario se guarda como
+  `destino_tipo = 'grupo'` y NO se expande a personas, para que la vista se
+  decida en cada lectura.
+- Al compartir, cada destinatario recibe su entrada en `memo_inbox` (los
+  miembros del grupo se expanden en ese momento; el autor no se avisa a sí
+  mismo).
+- **Cierre (probado en `addons/memo/visibilidad_test.go` y
+  `interfaces/web/addon_memo_test.go`):** una nota compartida con un grupo se
+  ve para sus miembros y no para el resto; borrar la fila de miembro quita la
+  vista sin tocar la nota; un grupo sin miembros no reparte nada y se rechaza
+  antes de escribir; los avisos caen en la bandeja de cada persona.
+- **Decisión sobre los grupos:** viven en tablas `memo_*` (como dice §4) y no
+  se derivan todavía de áreas/departamentos del ERP (§2.3). Esas estructuras
+  siguen existiendo; engancharlas a este selector es trabajo de la fase E,
+  cuando el diario muestre el área.
 
 ### Fase C — Adjuntos: fotos, documentos y notas de audio
 - Subida a la carpeta del addon por empresa, con límite de tamaño y tipos admitidos (`image/*`, `audio/*`, `application/pdf`…), nombre aleatorio y extensión validada.
@@ -191,7 +224,9 @@ Un verbo por operación de negocio, con su permiso y su prueba:
 
 ## 8. Estado del proceso
 
-- **Fase A: en construcción** (`addons/memo/`, manifiesto + schema + pantalla
-  + verbo `nota.crear` con sus pruebas).
-- Fases B a F: pendientes, en el orden de arriba.
+- **Fase A ✅** (`addons/memo/`: manifiesto, schema, pantalla y verbo
+  `nota.crear` con sus pruebas de visibilidad).
+- **Fase B ✅** (grupos con miembros, reparto por grupo, bandeja al compartir,
+  y la corrección de `autor` al espacio de id de `X-ERP-User`).
+- Fases C a F: pendientes, en el orden de arriba.
 - Cada fase se cierra con su commit y su empuje, como manda `AGENTS.md`.

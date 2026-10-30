@@ -1,9 +1,9 @@
 {
   "id": "memo",
   "name": "Memo",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "min_core_version": "0.2.0",
-  "description": "Comunicación interna, diario de trabajo y tareas para plantillas grandes de empleados (docs/PLAN-MEMO.md). Fase A: muro de notas con visibilidad privada, de empresa o compartida con personas concretas.",
+  "description": "Comunicación interna, diario de trabajo y tareas para plantillas grandes de empleados (docs/PLAN-MEMO.md). Fase B: grupos de trabajo con sus miembros y reparto de notas por grupo, con aviso en la bandeja de cada destinatario.",
   "author": "ERPGo",
   "routes": ["/memo"],
   "menu": [
@@ -19,9 +19,27 @@
   ],
   "perms": [
     { "code": "memo_ver", "label": "Ver el muro y el diario" },
-    { "code": "memo_publicar", "label": "Publicar notas y mensajes" }
+    { "code": "memo_publicar", "label": "Publicar notas y mensajes" },
+    { "code": "memo_grupos", "label": "Administrar grupos de trabajo" }
   ],
-  "db_read": ["users", "memo_notas", "memo_destinatarios"],
-  "db_write": [{ "verb": "nota.crear", "perm": "memo_publicar" }],
-  "tables_own": ["memo_notas", "memo_destinatarios"]
+  "db_read": [
+    "users",
+    "memo_notas",
+    "memo_destinatarios",
+    "memo_grupos",
+    "memo_grupo_miembros",
+    "memo_inbox"
+  ],
+  "db_write": [
+    { "verb": "nota.crear", "perm": "memo_publicar" },
+    { "verb": "grupo.crear", "perm": "memo_grupos" },
+    { "verb": "grupo.miembros", "perm": "memo_grupos" }
+  ],
+  "tables_own": [
+    "memo_notas",
+    "memo_destinatarios",
+    "memo_grupos",
+    "memo_grupo_miembros",
+    "memo_inbox"
+  ]
 }

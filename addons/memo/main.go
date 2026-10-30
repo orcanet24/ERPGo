@@ -1,10 +1,31 @@
-// addons/memo/main.go — Módulo Memo, fase A (docs/PLAN-MEMO.md).
+// addons/memo/main.go — Módulo Memo, fases A y B (docs/PLAN-MEMO.md).
 //
 // QUÉ HAY AQUÍ HOY. El muro: publicar una nota y ver, en orden, las notas que
 // este usuario tiene derecho a ver — las suyas (sean privadas o no), las de
-// visibilidad «empresa» y las que otra persona le compartió a él en
-// concreto. Nada más: el picker de gente, los comentarios, los adjuntos, el
-// chat y el calendario llegan con las fases B a F del plan.
+// visibilidad «empresa», las que otra persona le compartió a él en concreto y
+// las que le compartió UN GRUPO del que forma parte. Además están los grupos
+// de trabajo: se crean y se rellenan desde esta misma pantalla. Los
+// comentarios, los adjuntos, el chat y el calendario llegan con las fases C a
+// F del plan.
+//
+// CÓMO SE CUMPLE LA VISIBILIDAD. La consulta de lectura es el candado: la
+// filtración no se decide en la pantalla sino en el WHERE, contra la base de
+// la empresa activa que el núcleo indicó en X-ERP-DB. La gente (users) vive
+// en la base de identidad que trae X-ERP-Auth-DB: de ahí salen los nombres
+// para pintar y el listado con el que se comparte. Un grupo NO se expande a
+// filas cuando se comparte: la pertenencia se resuelve en cada lectura, y por
+// eso quien deja el grupo deja de ver las notas sin que nadie las reescriba.
+//
+// CÓMO SE ESCRIBE. Este proceso no hace INSERT: manda el formulario a
+// POST /__addon/memo/{verbo} con el token efímero de la sesión y el contexto
+// X-ERP-* que el proxy ya autenticó; el núcleo valida verbo, sesión, empresa
+// y permiso, y baja por el orquestador (journal + audit_log).
+//
+// El formulario lleva el campo csrf_token con el token que el núcleo entregó
+// en X-ERP-CSRF: enforceCSRF corre ANTES del proxy y sin ese campo el POST
+// sale 403.
+//
+// Compilar: go build -o addons/memo/erp-addon-memo ./addons/memo
 //
 // CÓMO SE CUMPLE LA VISIBILIDAD. La consulta de lectura es el candado: la
 // filtración no se decide en la pantalla sino en el WHERE, contra la base de
@@ -45,9 +66,12 @@ import (
 )
 
 const (
-	tituloPantalla = "Memo"
-	maxTitulo      = 200
-	maxTexto       = 20000
+	tituloPantalla   = "Memo"
+	maxTitulo        = 200
+	maxTexto         = 20000
+	maxNombreGrupo   = 120
+	maxMiembrosGrupo = 100
+	maxGruposNota    = 10
 )
 
 var (
@@ -55,7 +79,7 @@ var (
 	core          string
 	dsnLectura    string
 	reBase        = regexp.MustCompile(`^[A-Za-z0-9_$-]+$`)
-	visibilidades = map[string]bool{"privada": true, "empresa": true, "personas": true}
+	visibilidades = map[string]bool{"privada": true, "empresa": true, "personas": true, "grupo": true}
 )
 
 func main() {
@@ -87,6 +111,8 @@ func main() {
 	})
 	mux.HandleFunc("/memo", muro)
 	mux.HandleFunc("/memo/nota", publicar)
+	mux.HandleFunc("/memo/grupo", crearGrupo)
+	mux.HandleFunc("/memo/grupo/miembros", guardarMiembros)
 
 	srv := &http.Server{Addr: "127.0.0.1:" + porte, Handler: mux}
 	log.Printf("memo: módulo activo en 127.0.0.1:%s", porte)
@@ -176,6 +202,83 @@ func nombresDevuelve(lista []gente) map[string]string {
 	return m
 }
 
+// grupo es un grupo de trabajo de la empresa con sus miembros HOY.
+type grupo struct {
+	ID       string
+	Nombre   string
+	Miembros []string
+}
+
+// leerGrupos trae los grupos de la empresa y sus miembros. Los nombres de las
+// personas no se piden aquí: esta es la base de NEGOCIO y no guarda nombres
+// de usuarios (viven en la de identidad), así que se resuelven con el mapa
+// que ya se armó con `users`.
+func leerGrupos(ctx context.Context, db *sql.DB, empresa string) ([]grupo, error) {
+	filas, err := db.QueryContext(ctx,
+		`SELECT id, nombre FROM memo_grupos WHERE empresa = ? ORDER BY nombre`, empresa)
+	if err != nil {
+		return nil, err
+	}
+	salida := []grupo{}
+	posición := map[string]int{}
+	for filas.Next() {
+		var g grupo
+		if err := filas.Scan(&g.ID, &g.Nombre); err != nil {
+			filas.Close()
+			return nil, err
+		}
+		posición[g.ID] = len(salida)
+		salida = append(salida, g)
+	}
+	if err := filas.Err(); err != nil {
+		filas.Close()
+		return nil, err
+	}
+	_ = filas.Close()
+
+	miembros, err := db.QueryContext(ctx,
+		`SELECT grupo_id, persona_id FROM memo_grupo_miembros WHERE empresa = ?`, empresa)
+	if err != nil {
+		return nil, err
+	}
+	defer miembros.Close()
+	for miembros.Next() {
+		var gid, pid string
+		if err := miembros.Scan(&gid, &pid); err != nil {
+			return nil, err
+		}
+		if i, ok := posición[gid]; ok {
+			salida[i].Miembros = append(salida[i].Miembros, pid)
+		}
+	}
+	return salida, miembros.Err()
+}
+
+// selectorDeGente arma un select de personas. Va SIEMPRE en el formulario,
+// también sin gente cargada ni sin grupos: un campo que desaparece deja al
+// usuario con un formulario a medias y sin saber qué falló. `marcados` deja
+// preseleccionados a los que ya están (al editar miembros de un grupo).
+func selectorDeGente(nombre string, lista []gente, marcados map[string]bool, fallo string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `<select name="%s" multiple size="6">`, e(nombre))
+	switch {
+	case fallo != "":
+		fmt.Fprintf(&b, `<option disabled selected>No se pudo cargar la gente: %s</option>`, e(fallo))
+	case len(lista) == 0:
+		b.WriteString(`<option disabled selected>No hay nadie con sesión en esta empresa</option>`)
+	default:
+		for _, g := range lista {
+			if marcados[g.ID] {
+				fmt.Fprintf(&b, `<option value="%s" selected>%s</option>`, e(g.ID), e(g.Nombre))
+			} else {
+				fmt.Fprintf(&b, `<option value="%s">%s</option>`, e(g.ID), e(g.Nombre))
+			}
+		}
+	}
+	b.WriteString(`</select>`)
+	return b.String()
+}
+
 type nota struct {
 	ID          string
 	Titulo      string
@@ -192,7 +295,12 @@ type nota struct {
 //
 //   - lo propio, sea privada o no (autor = usuario);
 //   - lo de visibilidad «empresa»;
-//   - lo que OTRO le compartió a este usuario en concreto (destinatarios).
+//   - lo que OTRO le compartió a este usuario en concreto (destino «persona»);
+//   - lo que le compartió UN GRUPO del que HOY es miembro (destino «grupo»
+//     cruzado con los miembros actuales).
+//
+// Esa última rama es la razón de que salirse del grupo surta efecto sin
+// tocar ninguna nota: aquí no se guarda quién ve qué, se decide CADA vez.
 //
 // Una nota privada ajena no aparece por ninguna otra vía: no hay orden que la
 // filtre después, se filtra aquí.
@@ -203,12 +311,18 @@ const consultaMuro = `
 		  AND ( n.autor = ?
 		     OR n.visibilidad = 'empresa'
 		     OR EXISTS (SELECT 1 FROM memo_destinatarios d
-		                WHERE d.nota_id = n.id AND d.destino_id = ?) )
+		                WHERE d.nota_id = n.id AND d.destino_tipo = 'persona'
+		                  AND d.destino_id = ?)
+		     OR EXISTS (SELECT 1 FROM memo_destinatarios d
+		                JOIN memo_grupo_miembros m
+		                  ON m.grupo_id = d.destino_id AND m.empresa = d.empresa
+		                WHERE d.nota_id = n.id AND d.destino_tipo = 'grupo'
+		                  AND m.persona_id = ?) )
 		ORDER BY n.creada DESC
 		LIMIT 50`
 
 func leerNotas(ctx context.Context, db *sql.DB, empresa, usuario string) ([]nota, error) {
-	rows, err := db.QueryContext(ctx, consultaMuro, empresa, usuario, usuario)
+	rows, err := db.QueryContext(ctx, consultaMuro, empresa, usuario, usuario, usuario)
 	if err != nil {
 		return nil, err
 	}
@@ -226,6 +340,71 @@ func leerNotas(ctx context.Context, db *sql.DB, empresa, usuario string) ([]nota
 
 // ---------- Escritura por el canal ----------
 
+// respuestaCanal es lo que el núcleo devuelve al aplicar un verbo. Los campos
+// de detalle (compartido, avisados, miembros…) los rellena el handler de
+// negocio; status y error los pone la frontera.
+type respuestaCanal struct {
+	Status     int    `json:"status"`
+	Error      string `json:"error"`
+	Peticion   string `json:"peticion"`
+	RegistroID string `json:"registro_id"`
+	Compartido int    `json:"compartido"`
+	Avisados   int    `json:"avisados"`
+	Miembros   int    `json:"miembros"`
+	Entraron   int    `json:"entraron"`
+	Bajaron    int    `json:"bajaron"`
+	Nombre     string `json:"nombre"`
+}
+
+// enviarAlNucleo manda UN verbo al canal con el contexto de ESTA sesión. Este
+// proceso jamás escribe en la base: pide, y el núcleo aplica. Devuelve la
+// respuesta ya leída y su HTTP, para que quien llama decida qué contarle al
+// usuario.
+func enviarAlNucleo(r *http.Request, verb string, cuerpo map[string]interface{}) (*respuestaCanal, int, error) {
+	if core == "" {
+		return &respuestaCanal{}, 0, fmt.Errorf("este binario lo lanza el ERP: le falta ERP_CORE_URL en el entorno")
+	}
+	buf, err := json.Marshal(cuerpo)
+	if err != nil {
+		return &respuestaCanal{}, 0, fmt.Errorf("no se pudo armar el cuerpo del verbo %s: %w", verb, err)
+	}
+	req, err := http.NewRequest(http.MethodPost, core+"/__addon/memo/"+verb, bytes.NewReader(buf))
+	if err != nil {
+		return &respuestaCanal{}, 0, fmt.Errorf("no se pudo preparar la petición al canal: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	req.Header.Set("X-ERP-Addon-Token", token)
+	req.Header.Set("X-ERP-User", r.Header.Get("X-ERP-User"))
+	req.Header.Set("X-ERP-Tenant", r.Header.Get("X-ERP-Tenant"))
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return &respuestaCanal{}, 0, fmt.Errorf("el núcleo no respondió: %w", err)
+	}
+	defer resp.Body.Close()
+	datos, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return &respuestaCanal{}, resp.StatusCode, fmt.Errorf("no se pudo leer la respuesta del canal: %w", err)
+	}
+	salida := &respuestaCanal{}
+	_ = json.Unmarshal(datos, salida)
+	return salida, resp.StatusCode, nil
+}
+
+// avisoDeCanal traduce una respuesta fallida al mensaje de la pantalla.
+// Devuelve vacío solo cuando el verbo se aplicó de verdad.
+func avisoDeCanal(codigo int, res *respuestaCanal) string {
+	if res == nil {
+		return "El canal no devolvió respuesta."
+	}
+	if codigo != http.StatusOK || res.Status != 1 {
+		if res.Error != "" {
+			return fmt.Sprintf("El canal respondió HTTP %d: %s", codigo, res.Error)
+		}
+		return fmt.Sprintf("El canal respondió HTTP %d sin motivo legible.", codigo)
+	}
+	return ""
+}
+
 // publicar recoge el formulario y lo manda al núcleo. Este proceso jamás
 // escribe en la base: pide que el orquestador lo haga con el verbo declarado.
 func publicar(w http.ResponseWriter, r *http.Request) {
@@ -241,6 +420,7 @@ func publicar(w http.ResponseWriter, r *http.Request) {
 	texto := strings.TrimSpace(r.FormValue("texto"))
 	visibilidad := strings.TrimSpace(r.FormValue("visibilidad"))
 	destinatarios := r.Form["destinatarios"]
+	grupos := r.Form["grupos"]
 
 	if titulo == "" || texto == "" {
 		muroConAviso(w, r, "El título y el texto de la nota son obligatorios.", "")
@@ -251,59 +431,126 @@ func publicar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !visibilidades[visibilidad] {
-		muroConAviso(w, r, "La visibilidad debe ser privada, empresa o personas.", "")
+		muroConAviso(w, r, "La visibilidad debe ser privada, empresa, personas o grupo.", "")
 		return
 	}
 	if visibilidad == "personas" && len(destinatarios) == 0 {
 		muroConAviso(w, r, "Compartir con personas exige elegir al menos a una.", "")
 		return
 	}
-	if core == "" {
-		muroConAviso(w, r, "Este binario lo lanza el ERP: le falta ERP_CORE_URL en el entorno.", "")
+	// Un grupo vacío es la misma mentira que «personas» sin personas: se
+	// publicaría para nadie. El grupo y sus miembros los valida además el
+	// núcleo —el candado no está solo en la pantalla—, pero aquí se corta
+	// antes de hacer un viaje de red inútil.
+	if visibilidad == "grupo" && len(grupos) == 0 {
+		muroConAviso(w, r, "Compartir con un grupo exige elegir al menos uno.", "")
+		return
+	}
+	if visibilidad == "grupo" && len(grupos) > maxGruposNota {
+		muroConAviso(w, r, fmt.Sprintf("Una nota no se reparte con más de %d grupos a la vez (%d elegidos).", maxGruposNota, len(grupos)), "")
 		return
 	}
 
-	cuerpo, _ := json.Marshal(map[string]interface{}{
+	salida, codigo, err := enviarAlNucleo(r, "nota.crear", map[string]interface{}{
 		"titulo": titulo, "texto": texto, "visibilidad": visibilidad,
-		"destinatarios": destinatarios,
+		"destinatarios": destinatarios, "grupos": grupos,
 	})
-	req, err := http.NewRequest(http.MethodPost, core+"/__addon/memo/nota.crear", bytes.NewReader(cuerpo))
 	if err != nil {
-		muroConAviso(w, r, "No se pudo preparar la petición al canal: "+err.Error(), "")
+		muroConAviso(w, r, err.Error(), "")
 		return
 	}
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	req.Header.Set("X-ERP-Addon-Token", token)
-	req.Header.Set("X-ERP-User", r.Header.Get("X-ERP-User"))
-	req.Header.Set("X-ERP-Tenant", r.Header.Get("X-ERP-Tenant"))
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
-	if err != nil {
-		muroConAviso(w, r, "El núcleo no respondió: "+err.Error(), "")
-		return
-	}
-	defer resp.Body.Close()
-	datos, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		muroConAviso(w, r, "No se pudo leer la respuesta del canal: "+err.Error(), "")
-		return
-	}
-	var salida struct {
-		Status     int    `json:"status"`
-		Error      string `json:"error"`
-		Peticion   string `json:"peticion"`
-		RegistroID string `json:"registro_id"`
-		Compartido int    `json:"compartido"`
-	}
-	_ = json.Unmarshal(datos, &salida)
-	if resp.StatusCode != http.StatusOK || salida.Status != 1 {
-		muroConAviso(w, r, fmt.Sprintf("El canal respondió HTTP %d: %s", resp.StatusCode, salida.Error), "")
+	if av := avisoDeCanal(codigo, salida); av != "" {
+		muroConAviso(w, r, av, "")
 		return
 	}
 	detalle := ""
-	if salida.Compartido > 0 {
+	if visibilidad == "grupo" {
+		detalle = fmt.Sprintf(" Repartida en %d grupo(s); %d persona(s) avisada(s).", salida.Compartido, salida.Avisados)
+	} else if salida.Compartido > 0 {
 		detalle = fmt.Sprintf(" Compartida con %d persona(s).", salida.Compartido)
 	}
 	muroConAviso(w, r, "", fmt.Sprintf("Nota publicada (registro %s, petición %s).%s", salida.RegistroID, salida.Peticion, detalle))
+}
+
+// crearGrupo recoge el formulario de grupos y lo manda al verbo grupo.crear.
+func crearGrupo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/memo", http.StatusSeeOther)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		muroConAviso(w, r, "El formulario no se pudo leer: "+err.Error(), "")
+		return
+	}
+	nombre := strings.TrimSpace(r.FormValue("nombre"))
+	miembros := r.Form["miembros"]
+	if nombre == "" {
+		muroConAviso(w, r, "El nombre del grupo es obligatorio.", "")
+		return
+	}
+	if len([]rune(nombre)) > maxNombreGrupo {
+		muroConAviso(w, r, fmt.Sprintf("El nombre del grupo no pasa de %d caracteres.", maxNombreGrupo), "")
+		return
+	}
+	if len(miembros) == 0 {
+		muroConAviso(w, r, "Un grupo sin miembros no comparte nada: elige al menos a una persona.", "")
+		return
+	}
+	if len(miembros) > maxMiembrosGrupo {
+		muroConAviso(w, r, fmt.Sprintf("Un grupo no pasa de %d miembros (%d elegidos).", maxMiembrosGrupo, len(miembros)), "")
+		return
+	}
+
+	salida, codigo, err := enviarAlNucleo(r, "grupo.crear", map[string]interface{}{
+		"nombre": nombre, "miembros": miembros,
+	})
+	if err != nil {
+		muroConAviso(w, r, err.Error(), "")
+		return
+	}
+	if av := avisoDeCanal(codigo, salida); av != "" {
+		muroConAviso(w, r, av, "")
+		return
+	}
+	muroConAviso(w, r, "", fmt.Sprintf("Grupo «%s» creado con %d miembro(s).", nombre, salida.Miembros))
+}
+
+// guardarMiembros reescribe la lista de miembros de un grupo con la del
+// formulario. Puede venir vacía: sacar a todo el mundo es legítimo (el grupo
+// queda dormido y, mientras tanto, no reparte nada).
+func guardarMiembros(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/memo", http.StatusSeeOther)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		muroConAviso(w, r, "El formulario no se pudo leer: "+err.Error(), "")
+		return
+	}
+	grupoID := strings.TrimSpace(r.FormValue("grupo_id"))
+	miembros := r.Form["miembros"]
+	if grupoID == "" {
+		muroConAviso(w, r, "Falta el grupo a actualizar.", "")
+		return
+	}
+	if len(miembros) > maxMiembrosGrupo {
+		muroConAviso(w, r, fmt.Sprintf("Un grupo no pasa de %d miembros (%d elegidos).", maxMiembrosGrupo, len(miembros)), "")
+		return
+	}
+
+	salida, codigo, err := enviarAlNucleo(r, "grupo.miembros", map[string]interface{}{
+		"grupo_id": grupoID, "miembros": miembros,
+	})
+	if err != nil {
+		muroConAviso(w, r, err.Error(), "")
+		return
+	}
+	if av := avisoDeCanal(codigo, salida); av != "" {
+		muroConAviso(w, r, av, "")
+		return
+	}
+	muroConAviso(w, r, "", fmt.Sprintf("Miembros de «%s» guardados: %d en el grupo (%d entraron, %d salieron).",
+		salida.Nombre, salida.Miembros, salida.Entraron, salida.Bajaron))
 }
 
 // ---------- Pantalla ----------
@@ -327,6 +574,8 @@ func muroConAviso(w http.ResponseWriter, r *http.Request, falla, exito string) {
 	var errGente string
 	notas := []nota{}
 	var errNotas string
+	gruposLista := []grupo{}
+	var errGrupos string
 
 	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
 	defer cancel()
@@ -342,32 +591,47 @@ func muroConAviso(w http.ResponseWriter, r *http.Request, falla, exito string) {
 		_ = db.Close()
 	}
 
+	// Las dos lecturas de la EMPRESA salen de la misma conexión: muro y
+	// grupos son la misma base y abrir dos solo para mirar dos tablas propias
+	// es dos pings y dos cierres de más.
 	if db, err := conectarLectura(baseEmpresa, "X-ERP-DB"); err != nil {
 		errNotas = err.Error()
+		errGrupos = err.Error()
 	} else {
 		if ns, err := leerNotas(ctx, db, r.Header.Get("X-ERP-Tenant"), usuario); err != nil {
 			errNotas = err.Error()
 		} else {
 			notas = ns
 		}
+		if gs, err := leerGrupos(ctx, db, r.Header.Get("X-ERP-Tenant")); err != nil {
+			errGrupos = err.Error()
+		} else {
+			gruposLista = gs
+		}
 		_ = db.Close()
 	}
 
 	nombres := nombresDevuelve(genteLista)
 
-	var opciones strings.Builder
-	// El selector va SIEMPRE en el formulario, también sin gente cargada: un
-	// campo que desaparece deja al usuario con un formulario a medias y sin
-	// saber qué falló.
-	opciones.WriteString(`<select name="destinatarios" multiple size="6">`)
-	if errGente != "" {
-		fmt.Fprintf(&opciones, `<option disabled selected>No se pudo cargar la gente: %s</option>`, e(errGente))
-	} else {
-		for _, g := range genteLista {
-			fmt.Fprintf(&opciones, `<option value="%s">%s</option>`, e(g.ID), e(g.Nombre))
+	// Los selectores van SIEMPRE en el formulario, también sin gente ni sin
+	// grupos cargados: un campo que desaparece deja al usuario con un
+	// formulario a medias y sin saber qué falló.
+	opcionesPersonas := selectorDeGente("destinatarios", genteLista, nil, errGente)
+	opcionesMiembros := selectorDeGente("miembros", genteLista, nil, errGente)
+
+	var opcionesGrupos strings.Builder
+	opcionesGrupos.WriteString(`<select name="grupos" multiple size="4">`)
+	switch {
+	case errGrupos != "":
+		fmt.Fprintf(&opcionesGrupos, `<option disabled selected>No se pudieron leer los grupos: %s</option>`, e(errGrupos))
+	case len(gruposLista) == 0:
+		opcionesGrupos.WriteString(`<option disabled selected>Todavía no hay grupos: créalo más abajo</option>`)
+	default:
+		for _, g := range gruposLista {
+			fmt.Fprintf(&opcionesGrupos, `<option value="%s">%s (%d)</option>`, e(g.ID), e(g.Nombre), len(g.Miembros))
 		}
 	}
-	opciones.WriteString(`</select>`)
+	opcionesGrupos.WriteString(`</select>`)
 
 	var muroHTML strings.Builder
 	if errNotas != "" {
@@ -380,13 +644,52 @@ func muroConAviso(w http.ResponseWriter, r *http.Request, falla, exito string) {
 			if quien == "" {
 				quien = n.AutorID
 			}
-			etiqueta := map[string]string{"privada": "privada", "empresa": "empresa", "personas": "compartida"}[n.Visibilidad]
+			etiqueta := map[string]string{"privada": "privada", "empresa": "empresa", "personas": "compartida", "grupo": "compartida con grupo"}[n.Visibilidad]
 			if etiqueta == "" {
 				etiqueta = n.Visibilidad
 			}
 			fmt.Fprintf(&muroHTML, `<article class="nota"><h4>%s</h4><p>%s</p>
 <footer>%s · %s · visibilidad %s</footer></article>`,
 				e(n.Titulo), e(n.Texto), e(quien), e(n.Creada), e(etiqueta))
+		}
+	}
+
+	// La lista de grupos, con sus miembros HOY y un formulario por grupo
+	// para reescribirlos. Los nombres salen del mapa de identidad: en la base
+	// de la empresa no hay nombres de usuarios, solo ids.
+	var gruposHTML strings.Builder
+	switch {
+	case errGrupos != "":
+		fmt.Fprintf(&gruposHTML, `<p class="mal">No se pudieron leer los grupos: %s</p>`, e(errGrupos))
+	case len(gruposLista) == 0:
+		gruposHTML.WriteString(`<p class="soso">Todavía no hay grupos. Crea el primero con el formulario de abajo.</p>`)
+	default:
+		for _, g := range gruposLista {
+			quienes := make([]string, 0, len(g.Miembros))
+			marcados := map[string]bool{}
+			for _, pid := range g.Miembros {
+				marcados[pid] = true
+				quien := nombres[pid]
+				if quien == "" {
+					quien = pid
+				}
+				quienes = append(quienes, quien)
+			}
+			lista := strings.Join(quienes, ", ")
+			if lista == "" {
+				lista = "sin miembros: no reparte nada hasta que alguien entre"
+			}
+			fmt.Fprintf(&gruposHTML, `<article class="nota"><h4>%s</h4><p class="soso">%s</p>
+<details><summary>Editar miembros (%d)</summary>
+<form method="post" action="/memo/grupo/miembros">
+ <input type="hidden" name="csrf_token" value="%s">
+ <input type="hidden" name="grupo_id" value="%s">
+ <label>Miembros del grupo<br>%s</label>
+ <button type="submit">Guardar miembros</button>
+</form></details></article>`,
+				e(g.Nombre), e(lista), len(g.Miembros),
+				e(r.Header.Get("X-ERP-CSRF")), e(g.ID),
+				selectorDeGente("miembros", genteLista, marcados, errGente))
 		}
 	}
 
@@ -435,10 +738,24 @@ func muroConAviso(w http.ResponseWriter, r *http.Request, falla, exito string) {
       <option value="privada">Privada (solo yo)</option>
       <option value="empresa" selected>Toda la empresa</option>
       <option value="personas">Compartir con personas…</option>
+      <option value="grupo">Compartir con un grupo…</option>
      </select></label>
     <label>Compartir con<br>%s</label>
    </div>
+   <label>Compartir con grupos<br>%s</label>
    <button type="submit">Publicar nota</button>
+  </form>
+ </div>
+
+ <div class="caja">
+  <h3>Grupos de trabajo</h3>
+  <p class="soso">Un grupo reparte la nota con su gente de una vez. La regla se resuelve en CADA lectura: quien deja el grupo deja de ver lo que se le compartió con él, sin que se reescriba ninguna nota.</p>
+  %s
+  <form method="post" action="/memo/grupo">
+   <input type="hidden" name="csrf_token" value="%s">
+   <label>Nombre del grupo<br><input type="text" name="nombre" maxlength="%d" required></label>
+   <label>Miembros<br>%s</label>
+   <button type="submit">Crear grupo</button>
   </form>
  </div>
 
@@ -450,12 +767,21 @@ func muroConAviso(w http.ResponseWriter, r *http.Request, falla, exito string) {
  <p><a href="/home">← volver al ERP</a> · <a href="/module/addons">Configuración → Módulos</a></p>
 </main>
 <script>
- // El selector solo aporta cuando la visibilidad es «personas»: el candado
- // está en el núcleo, esto es solo no pedirle a la gente lo que no hace falta.
+ // Solo lleva el formulario el selector que corresponde a la visibilidad
+ // elegida: el candado está en el núcleo, esto es solo no pedirle a la gente
+ // lo que no hace falta ni enviar listas que no significan nada. Los
+ // selectores de los grupos de abajo no se tocan (son de OTRO formulario).
+ var form = document.querySelector('form[action="/memo/nota"]');
  var sel = document.getElementById('visibilidad');
- if (sel) sel.addEventListener('change', function(){
-   this.form.querySelector('select[name=destinatarios]').disabled = (this.value !== 'personas');
- });
+ function aplicarVisibilidad() {
+   if (!form || !sel) return;
+   var personas = form.querySelector('select[name=destinatarios]');
+   var grupos = form.querySelector('select[name=grupos]');
+   if (personas) personas.disabled = (sel.value !== 'personas');
+   if (grupos) grupos.disabled = (sel.value !== 'grupo');
+ }
+ if (sel) sel.addEventListener('change', aplicarVisibilidad);
+ aplicarVisibilidad();
 </script>
 </body></html>`,
 		tituloPantalla, tituloPantalla,
@@ -463,7 +789,11 @@ func muroConAviso(w http.ResponseWriter, r *http.Request, falla, exito string) {
 		e(r.Header.Get("X-ERP-Perms")), mostrarCookies,
 		e(falla), e(exito),
 		e(r.Header.Get("X-ERP-CSRF")), maxTitulo, maxTexto,
-		opciones.String(),
+		opcionesPersonas,
+		opcionesGrupos.String(),
+		gruposHTML.String(),
+		e(r.Header.Get("X-ERP-CSRF")), maxNombreGrupo,
+		opcionesMiembros,
 		muroHTML.String())
 }
 

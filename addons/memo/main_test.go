@@ -40,6 +40,15 @@ func TestLaPantallaDeMemoSePintaSinHuecosDeFormato(t *testing.T) {
 		`name="csrf_token"`, "token-de-prueba",
 		`action="/memo/nota"`,
 		`name="visibilidad"`, `name="destinatarios"`,
+		// Fase B: la nota se puede repartir por grupo y los grupos se crean y
+		// se rellenan desde esta misma pantalla. Los tres selectores van SIEMPRE,
+		// aunque la lectura falle: un campo que desaparece deja el formulario a
+		// medias y sin decir qué falló.
+		`value="grupo"`, `name="grupos"`,
+		`action="/memo/grupo"`, `name="nombre"`, `name="miembros"`,
+		// (el formulario de EDITAR miembros solo aparece cuando hay grupos;
+		// sin DSN esta prueba no los carga, y ese caso lo cubre la lista real)
+		"Grupos de trabajo",
 		"ERP_DB_READ_DSN",
 	}
 	for _, texto := range esperado {
