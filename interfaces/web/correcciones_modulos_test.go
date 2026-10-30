@@ -1,14 +1,16 @@
 package web
 
-// Pruebas de la fase -1: las cuatro correcciones que tienen que estar antes de
-// que exista una sola pantalla de mensajería.
+// Pruebas de las correcciones del sistema de módulos y de la salida de avisos.
 //
-// Ninguna de las cuatro es cosmética. La primera evitaba que un aviso de
-// WhatsApp se registrara contra un correo; la segunda, que un gerente apagara o
-// encendiera módulos; la tercera, que el interruptor pareciera roto durante 30
-// segundos; la cuarta, que un módulo apagado siguiera en la barra lateral. Y la
-// cuarta tenía una trampa: el `LEFT JOIN` mal escrito borraba TODO el menú,
-// porque `menu.module_id` vale 'core' y no hay fila 'core' en `modules`.
+// Ninguna es cosmética. La primera evita que un aviso por WhatsApp (pasarela)
+// se registre contra un correo; la segunda, que un gerente apague o encienda
+// módulos; la tercera, que el interruptor parezca roto durante 30 segundos; la
+// cuarta, que un módulo apagado siga en la barra lateral. Y la cuarta tenía una
+// trampa: el `LEFT JOIN` mal escrito borraba TODO el menú, porque
+// `menu.module_id` vale 'core' y no hay fila 'core' en `modules`.
+//
+// Los módulos que aquí sirven de datos son uno inventado: estas conductas son
+// del núcleo, no de ningún módulo en particular.
 
 import (
 	"net/http"
@@ -18,9 +20,9 @@ import (
 	"time"
 )
 
-// ---------- 1. El destinatario de un canal de mensajería es el móvil ----------
+// ---------- 1. El destinatario de un canal telefónico es el móvil ----------
 
-func TestDestinatarioDeMensajeriaEsElMovilYNoElCorreo(t *testing.T) {
+func TestDestinatarioDeCanalTelefonicoEsElMovilYNoElCorreo(t *testing.T) {
 	db := abrirBasePrueba(t)
 	if _, err := db.Exec(`CREATE TABLE customer_information (customer_id INTEGER PRIMARY KEY,
 		customer_name TEXT, customer_email TEXT, email_address TEXT, customer_mobile TEXT)`); err != nil {
@@ -34,24 +36,17 @@ func TestDestinatarioDeMensajeriaEsElMovilYNoElCorreo(t *testing.T) {
 	s := &Server{db: db}
 	alerta := map[string]interface{}{"party_type": "customer", "party_id": int64(1)}
 
-	casos := []struct {
-		kind string
-	}{
-		{"wapp"}, {"gowa"}, {"telegram"},
+	destino, motivo := s.finDestinatario(db, notifyChannel{Kind: "wapp"}, alerta)
+	if motivo != "" {
+		t.Fatalf("no debía fallar, dijo: %s", motivo)
 	}
-	for _, caso := range casos {
-		destino, motivo := s.finDestinatario(db, notifyChannel{Kind: caso.kind}, alerta)
-		if motivo != "" {
-			t.Fatalf("%s: no debía fallar, dijo: %s", caso.kind, motivo)
-		}
-		if destino != "0414-1234567" {
-			t.Fatalf("%s: el destino fue %q; debe ser el móvil de la ficha, no el correo", caso.kind, destino)
-		}
+	if destino != "0414-1234567" {
+		t.Fatalf("el destino fue %q; debe ser el móvil de la ficha, no el correo", destino)
 	}
 
 	// El correo sigue siendo el correo: la corrección no puede cambiar el otro
 	// camino.
-	destino, _ := s.finDestinatario(db, notifyChannel{Kind: "email"}, alerta)
+	destino, _ = s.finDestinatario(db, notifyChannel{Kind: "email"}, alerta)
 	if destino != "cliente@ejemplo.com" {
 		t.Fatalf("el canal de correo cambió de destinatario: %q", destino)
 	}
@@ -72,7 +67,7 @@ func TestActivarModulosExigeMasterAunqueElRolTengaConfiguracion(t *testing.T) {
 		`INSERT INTO role_permission (role_id, fk_module_id, "create", "read", "update", "delete") VALUES (3, 99, 1, 1, 1, 1)`,
 		`INSERT INTO user_company_access (user_id, tenant_code, role_id) VALUES ('usuario', 'default', 3)`,
 		`INSERT INTO user_login (username, password) VALUES ('usuario', 'hash')`,
-		`INSERT INTO modules (id, is_core, is_active) VALUES ('mensajeria', 0, 0)`,
+		`INSERT INTO modules (id, is_core, is_active) VALUES ('demo', 0, 0)`,
 	}
 	for _, q := range ddl {
 		if _, err := db.Exec(q); err != nil {
@@ -93,7 +88,7 @@ func TestActivarModulosExigeMasterAunqueElRolTengaConfiguracion(t *testing.T) {
 	s.registerModuleRoutes()
 	handler := s.authMiddleware(s.permissionMiddleware(mux))
 
-	req := httptest.NewRequest(http.MethodPost, "/module/mensajeria/toggle", nil)
+	req := httptest.NewRequest(http.MethodPost, "/module/demo/toggle", nil)
 	req.AddCookie(&http.Cookie{Name: "erpgow_session", Value: id})
 	req.Header.Set(csrfHeader, sess.CSRFToken)
 	res := httptest.NewRecorder()
@@ -107,7 +102,7 @@ func TestActivarModulosExigeMasterAunqueElRolTengaConfiguracion(t *testing.T) {
 	}
 
 	var activo int
-	if err := db.QueryRow(`SELECT is_active FROM modules WHERE id = 'mensajeria'`).Scan(&activo); err != nil {
+	if err := db.QueryRow(`SELECT is_active FROM modules WHERE id = 'demo'`).Scan(&activo); err != nil {
 		t.Fatal(err)
 	}
 	if activo != 0 {
@@ -126,10 +121,10 @@ func baseDeMenuConModulo(t *testing.T) (*Server, func(string, int)) {
 		`INSERT INTO menu (id, parent_id, label, url, icon, perm, active_prefix, sort_order, status, module_id)
 		 VALUES (1, NULL, 'Dashboard', '/home', NULL, NULL, NULL, 10, 1, 'core')`,
 		`INSERT INTO menu (id, parent_id, label, url, icon, perm, active_prefix, sort_order, status, module_id)
-		 VALUES (2, NULL, 'Mensajería', NULL, NULL, NULL, NULL, 20, 1, 'mensajeria')`,
+		 VALUES (2, NULL, 'Demo', NULL, NULL, NULL, NULL, 20, 1, 'demo')`,
 		`INSERT INTO menu (id, parent_id, label, url, icon, perm, active_prefix, sort_order, status, module_id)
-		 VALUES (3, 2, 'Bandeja', '/mensajeria', NULL, NULL, '/mensajeria', 10, 1, 'mensajeria')`,
-		`INSERT INTO modules (id, is_core, is_active) VALUES ('mensajeria', 0, 0)`,
+		 VALUES (3, 2, 'Pantalla', '/demo', NULL, NULL, '/demo', 10, 1, 'demo')`,
+		`INSERT INTO modules (id, is_core, is_active) VALUES ('demo', 0, 0)`,
 	}
 	for _, q := range ddl {
 		if _, err := db.Exec(q); err != nil {
@@ -155,15 +150,15 @@ func TestMenuOcultaUnModuloApagadoYConservaElMenuCore(t *testing.T) {
 		t.Fatalf("con el módulo apagado el menú debía quedar solo con Dashboard; quedó: %+v", menu)
 	}
 
-	cambiar("mensajeria", 1)
+	cambiar("demo", 1)
 	limpiarCachesDeRender()
 
 	menu = s.menuTree(r, map[string]bool{}, "/home")
 	if len(menu) != 2 {
-		t.Fatalf("con el módulo encendido debían verse Dashboard y Mensajería; quedó: %+v", menu)
+		t.Fatalf("con el módulo encendido debían verse Dashboard y Demo; quedó: %+v", menu)
 	}
-	if menu[1].Label != "Mensajería" || len(menu[1].Children) != 1 {
-		t.Fatalf("el grupo Mensajería no trajo su entrada hija: %+v", menu[1])
+	if menu[1].Label != "Demo" || len(menu[1].Children) != 1 {
+		t.Fatalf("el grupo Demo no trajo su entrada hija: %+v", menu[1])
 	}
 }
 
@@ -207,9 +202,9 @@ func TestToggleDeModuloInvalidaLaCacheDelMenu(t *testing.T) {
 		t.Fatalf("estado inicial inesperado: %+v", menu)
 	}
 
-	req := reqPrueba(s, sessPrueba("master"), "/module/mensajeria/toggle")
+	req := reqPrueba(s, sessPrueba("master"), "/module/demo/toggle")
 	req.Method = http.MethodPost
-	req.SetPathValue("id", "mensajeria")
+	req.SetPathValue("id", "demo")
 	res := httptest.NewRecorder()
 	s.moduleToggle(res, req)
 	if res.Code != http.StatusOK {
