@@ -28,11 +28,9 @@ func (s *Server) registerNotifyChannelRoutes() {
 
 func (s *Server) notifyChannelsForm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "notify_channels.html", map[string]interface{}{
-		"Title":        "Canales de aviso",
-		"Canales":      s.notifyCanales(s.dbFor(r), false),
-		"Mensajes":     s.finMensajesUltimos(s.dbFor(r), "", 10),
-		"Dispositivos": s.msgDispositivosDeLaEmpresa(r),
-		"Plantillas":   s.msgPlantillasDe(s.dbFor(r)),
+		"Title":    "Canales de aviso",
+		"Canales":  s.notifyCanales(s.dbFor(r), false),
+		"Mensajes": s.finMensajesUltimos(s.dbFor(r), "", 10),
 		"Nota": "Un canal sin configurar no envía nada: los avisos quedan en Mensajes enviados con el motivo del fallo. " +
 			"«Permitir agentes» decide si además de una persona, un agente del sistema puede usar ese canal; " +
 			"mientras esté apagado, ninguna herramienta de IA podrá mandar nada por él. " +
@@ -48,8 +46,8 @@ func (s *Server) notifyChannelSave(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue("id")), 10, 64)
 	kind := strings.ToLower(strings.TrimSpace(r.FormValue("kind")))
 	nombre := strings.TrimSpace(r.FormValue("name"))
-	if kind != "email" && kind != "sms" && kind != "webhook" && kind != "wapp" && kind != "gowa" {
-		jsonError(w, "Elija el tipo de canal: correo, SMS, WhatsApp por pasarela, WhatsApp por GOWA o webhook.", http.StatusBadRequest)
+	if kind != "email" && kind != "sms" && kind != "webhook" && kind != "wapp" {
+		jsonError(w, "Elija el tipo de canal: correo, SMS, WhatsApp por pasarela o webhook.", http.StatusBadRequest)
 		return
 	}
 	if nombre == "" {
@@ -92,8 +90,6 @@ func (s *Server) notifyChannelSave(w http.ResponseWriter, r *http.Request) {
 		"url":               strings.TrimSpace(r.FormValue("url")),
 		"http_method":       metodo,
 		"auth_header":       strings.TrimSpace(r.FormValue("auth_header")),
-		"msg_device_id":     strings.TrimSpace(r.FormValue("msg_device_id")),
-		"msg_template_code": strings.TrimSpace(r.FormValue("msg_template_code")),
 		"notes":             strings.TrimSpace(r.FormValue("notes")),
 	}
 
@@ -111,11 +107,6 @@ func (s *Server) notifyChannelSave(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "Un canal de "+kind+" necesita la URL a la que se entrega el mensaje.", http.StatusBadRequest)
 			return
 		}
-	case "gowa":
-		if campos["msg_device_id"] == "" {
-			jsonError(w, "Un canal de WhatsApp por GOWA necesita el dispositivo que manda los avisos (por ejemplo «default.cxc»).", http.StatusBadRequest)
-			return
-		}
 	}
 
 	if id <= 0 {
@@ -125,11 +116,11 @@ func (s *Server) notifyChannelSave(w http.ResponseWriter, r *http.Request) {
 		firma := r.FormValue("sign_secret")
 		res, err := db.Exec(`INSERT INTO notify_channel (kind, name, is_active, ai_allowed, cooldown_days,
 			host, port, username, password, from_address, from_name, security, url, http_method,
-			auth_header, auth_token, sign_secret, msg_device_id, msg_template_code, notes, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			auth_header, auth_token, sign_secret, notes, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			kind, nombre, activo, aiAllowed, cooldown,
 			campos["host"], port, usuario, clave, campos["from_address"], campos["from_name"], seguridad,
-			campos["url"], metodo, campos["auth_header"], token, firma, campos["msg_device_id"], campos["msg_template_code"], campos["notes"], now(), now())
+			campos["url"], metodo, campos["auth_header"], token, firma, campos["notes"], now(), now())
 		if err != nil {
 			if aiEsClaveDuplicada(err) {
 				jsonError(w, "Ya existe un canal con el nombre «"+nombre+"». Use otro nombre.", http.StatusBadRequest)
@@ -145,10 +136,10 @@ func (s *Server) notifyChannelSave(w http.ResponseWriter, r *http.Request) {
 		// no tenga que volver al navegador para poder editar el resto.
 		sets := []string{"kind=?", "name=?", "is_active=?", "ai_allowed=?", "cooldown_days=?",
 			"host=?", "port=?", "from_address=?", "from_name=?", "security=?", "url=?", "http_method=?",
-			"auth_header=?", "msg_device_id=?", "msg_template_code=?", "notes=?", "updated_at=?"}
+			"auth_header=?", "notes=?", "updated_at=?"}
 		args := []interface{}{kind, nombre, activo, aiAllowed, cooldown,
 			campos["host"], port, campos["from_address"], campos["from_name"], seguridad,
-			campos["url"], metodo, campos["auth_header"], campos["msg_device_id"], campos["msg_template_code"], campos["notes"], now()}
+			campos["url"], metodo, campos["auth_header"], campos["notes"], now()}
 		for _, campo := range []string{"username", "password", "auth_token", "sign_secret"} {
 			if v, ok := r.Form[campo]; ok && strings.TrimSpace(v[0]) != "" {
 				sets = append(sets, campo+"=?")
@@ -252,13 +243,6 @@ func (s *Server) notifyChannelTest(w http.ResponseWriter, r *http.Request) {
 			prov, err = s.envioHTTP(canal, "finance.prueba", map[string]interface{}{
 				"test": true, "channel": canal.Name, "subject": asunto, "body": cuerpo, "recipient": para,
 			})
-		}
-	case "gowa":
-		if strings.TrimSpace(canal.MsgDeviceID) == "" {
-			err = errSinURL
-		} else {
-			prov, err = s.msgEncolarAviso(r, canal, para, asunto+"\n\n"+cuerpo, "prueba", "",
-				sessUserID(s.sessionFromRequest(r)))
 		}
 	default:
 		err = errSinURL

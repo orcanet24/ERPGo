@@ -18,7 +18,7 @@ func TestElMenuApareceAlActivarElModuloEnLaBaseDeLaEmpresa(t *testing.T) {
 	if _, err := empresa.Exec(`CREATE TABLE modules (id TEXT PRIMARY KEY, is_active INTEGER DEFAULT 0)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := empresa.Exec(`INSERT INTO modules (id, is_active) VALUES ('mensajeria', 0)`); err != nil {
+	if _, err := empresa.Exec(`INSERT INTO modules (id, is_active) VALUES ('demo', 0)`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -29,9 +29,9 @@ func TestElMenuApareceAlActivarElModuloEnLaBaseDeLaEmpresa(t *testing.T) {
 		`INSERT INTO menu (id, parent_id, label, url, icon, perm, active_prefix, sort_order, status, module_id)
 		 VALUES (1, NULL, 'Dashboard', '/home', NULL, NULL, NULL, 10, 1, 'core')`,
 		`INSERT INTO menu (id, parent_id, label, url, icon, perm, active_prefix, sort_order, status, module_id)
-		 VALUES (2, NULL, 'Mensajería', NULL, NULL, NULL, NULL, 20, 1, 'mensajeria')`,
+		 VALUES (2, NULL, 'Demo', NULL, NULL, NULL, NULL, 20, 1, 'demo')`,
 		`INSERT INTO menu (id, parent_id, label, url, icon, perm, active_prefix, sort_order, status, module_id)
-		 VALUES (3, 2, 'Bandeja', '/mensajeria', NULL, NULL, '/mensajeria', 10, 1, 'mensajeria')`,
+		 VALUES (3, 2, 'Pantalla', '/demo', NULL, NULL, '/demo', 10, 1, 'demo')`,
 	}
 	for _, q := range ddl {
 		if _, err := control.Exec(q); err != nil {
@@ -47,16 +47,16 @@ func TestElMenuApareceAlActivarElModuloEnLaBaseDeLaEmpresa(t *testing.T) {
 	}
 
 	// El interruptor escribe en la EMPRESA.
-	if _, err := empresa.Exec(`UPDATE modules SET is_active = 1 WHERE id='mensajeria'`); err != nil {
+	if _, err := empresa.Exec(`UPDATE modules SET is_active = 1 WHERE id='demo'`); err != nil {
 		t.Fatal(err)
 	}
 	invalidarCacheMenu()
 
 	menu := s.menuTree(r, map[string]bool{}, "/home")
-	if len(menu) != 2 || menu[1].Label != "Mensajería" {
-		t.Fatalf("al activar el módulo debía aparecer Mensajería; se vio: %+v", menu)
+	if len(menu) != 2 || menu[1].Label != "Demo" {
+		t.Fatalf("al activar el módulo debía aparecer Demo; se vio: %+v", menu)
 	}
-	if len(menu[1].Children) != 1 || menu[1].Children[0].URL != "/mensajeria" {
+	if len(menu[1].Children) != 1 || menu[1].Children[0].URL != "/demo" {
 		t.Fatalf("el grupo no trajo la bandeja: %+v", menu[1])
 	}
 }
@@ -72,7 +72,7 @@ func TestUnModuloSinFilaNoPintaSuMenu(t *testing.T) {
 		`INSERT INTO menu (id, parent_id, label, url, sort_order, status, module_id)
 		 VALUES (1, NULL, 'Dashboard', '/home', 10, 1, 'core')`,
 		`INSERT INTO menu (id, parent_id, label, url, sort_order, status, module_id)
-		 VALUES (2, NULL, 'Mensajería', '/mensajeria', 20, 1, 'mensajeria')`,
+		 VALUES (2, NULL, 'Demo', '/demo', 20, 1, 'demo')`,
 	}
 	for _, q := range ddl {
 		if _, err := db.Exec(q); err != nil {
@@ -95,9 +95,9 @@ func TestElMenuSeRevalidaTrasElInterruptor(t *testing.T) {
 	if menu := s.menuTree(r, map[string]bool{}, "/home"); len(menu) != 1 {
 		t.Fatalf("estado inicial inesperado: %+v", menu)
 	}
-	req := reqPrueba(s, sessPrueba("master"), "/module/mensajeria/toggle")
+	req := reqPrueba(s, sessPrueba("master"), "/module/demo/toggle")
 	req.Method = "POST"
-	req.SetPathValue("id", "mensajeria")
+	req.SetPathValue("id", "demo")
 	res := httptest.NewRecorder()
 	s.moduleToggle(res, req)
 	if res.Code != 200 {

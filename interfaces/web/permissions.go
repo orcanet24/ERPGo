@@ -73,11 +73,6 @@ var routeDepartment = map[string]int{
 	//   /module    → administración de addons (14, configuración).
 	"/reports": 8, "/debitnote": 1, "/accounting": 9,
 	"/data": 14, "/module": 14,
-
-	// Mensajería tiene su propio módulo (25). No comparte id con ninguno, así
-	// que el middleware puede decidir por módulo; el permiso fino de chat,
-	// envío y administración se comprueba en el handler y en routeDirectory.
-	"/mensajeria": 25,
 }
 
 // routeDirectory exige, ADEMÁS del módulo, el permiso concreto de la entrada de
@@ -94,11 +89,6 @@ var routeDepartment = map[string]int{
 var routeDirectory = map[string]string{
 	"/cost": "cost|cost_timesheet|cost_close",
 	"/crm":  "crm",
-	// Mensajería: ver una conversación y mandar un mensaje son permisos
-	// distintos, y administrar los números es un tercero. El módulo (25) solo
-	// dice «esta persona trabaja en mensajería»; la entrada de menú y esta
-	// comprobación deciden qué puede hacer.
-	"/mensajeria": "mensajeria_chat|mensajeria_send|mensajeria_admin",
 }
 
 // Rutas que requieren master (gestión global del sistema)
@@ -416,11 +406,9 @@ func (s *Server) permissionMiddleware(next http.Handler) http.Handler {
 		// addon no tiene sesión de usuario; se autentica con un grant efímero
 		// emitido por el núcleo y solo acepta peticiones desde loopback.
 		public := []string{"/login", "/api/login", "/api/pos/", "/__addon/", "/setup/company", "/static/", "/uploads/", "/favicon",
-			// Los webhooks de mensajería no llevan cookie: quien llama es el
-			// daemon. Se autentican con HMAC del cuerpo y un secreto por
-			// dispositivo (ver mensajeria_webhook.go); sin esa firma no se
-			// escribe nada. Van aquí porque el middleware de sesión no tiene
-			// sentido para ellos.
+			// Los webhooks entrantes no llevan cookie: el que llama es un
+			// sistema externo, no un navegador. Cada endpoint bajo /webhooks/
+			// firmará y validará lo suyo; sin esa validación no se escribe nada.
 			"/webhooks/"}
 		for _, p := range public {
 			if strings.HasPrefix(r.URL.Path, p) {

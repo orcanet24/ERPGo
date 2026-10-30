@@ -25,6 +25,11 @@ type Server struct {
 	sessions  *SessionStore
 	uploadMgr *upload.Manager
 
+	// addons es la frontera de los addons externos (docs/PLAN-ADDONS.md).
+	// nil = este arranque va sin addons (no existe la carpeta): todos los
+	// métodos ligados a addons son nil-safe por esa razón.
+	addons *addonHost
+
 	// httpSrv es el servidor HTTP real que Start pone a escuchar. Se guarda
 	// para poder pedirle un apagado ordenado (Shutdown) desde un servicio de
 	// Windows o al recibir Ctrl+C, en lugar de matar el proceso.
@@ -256,10 +261,6 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	// al proveedor que la empresa tenga activo (digital_invoice_config).
 	s.startDigitalInvoiceRunner()
 
-	// Despachador de mensajería: un solo bucle, un tic cada 5 s. Si el módulo
-	// está apagado no hace nada; la cola se conserva.
-	s.startMensajeriaDispatcher()
-
 	// Static files — served from the disk copy when present (live edits in
 	// development) and from the embedded filesystem otherwise (single binary).
 	staticRoot, err := fs.Sub(erpgo.Static(), "static")
@@ -447,11 +448,6 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	// módulos porque son su tablero, no un módulo aparte.
 	s.registerFinanceAlertRoutes()
 	s.registerNotifyChannelRoutes()
-	s.registerMensajeriaRoutes()
-	s.registerMensajeriaDispositivoRoutes()
-	s.registerMensajeriaPlantillaRoutes()
-	s.registerMensajeriaChatRoutes()
-	s.registerMensajeriaMediaRoutes()
 	s.registerPOSAPIRoutes()
 	s.registerPOSAdminRoutes()
 	s.registerPOSSyncRoutes()
@@ -466,6 +462,12 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	s.registerModuleRoutes()
 	s.registerModuleCore()
 	s.registerPermissionRoutes()
+
+	// Frontera de addons externos: escaneo, registro y lanzamiento.
+	// routers addon y canal están registrados ANTES de servir; las rutas no
+	// se tocan a mitad de ciclo (comentario en reescanear).
+	s.addonsIniciar()
+	s.registrarRutasAddon()
 
 	return s
 }

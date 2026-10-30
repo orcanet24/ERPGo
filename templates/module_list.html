@@ -6,7 +6,8 @@
     <div class="panel-body">
         <p class="text-muted">
             Módulos del sistema. Los módulos <strong>core</strong> vienen con el ERP y no se pueden
-            eliminar ni desactivar; los <strong>addons</strong> se instalan aparte y sí se administran.
+            eliminar ni desactivar; los <strong>addons</strong> se instalan aparte y sí se administran
+            (<a href="/module/addons">panel de Addons externos</a>).
         </p>
         <table class="table table-bordered table-striped" id="moduleTable" style="width:100%">
             <thead>
@@ -52,13 +53,8 @@ $(function () {
                 // Los módulos core no se pueden desactivar ni eliminar.
                 if (row.is_core) { return '<span class="text-muted">—</span>'; }
                 var toggle = row.is_active ? 'Desactivar' : 'Activar';
-                // Mensajería no se borra: se apaga. Borrarla dejaría los
-                // dispositivos y el historial sin dueño.
-                var borrar = row.id === 'mensajeria' ? '' :
+                return '<button class="btn btn-xs btn-default btn-toggle" data-id="' + row.id + '">' + toggle + '</button> ' +
                     '<button class="btn btn-xs btn-danger btn-del" data-id="' + row.id + '"><i class="fa fa-trash"></i></button>';
-                var configurar = row.id === 'mensajeria' ?
-                    '<a class="btn btn-xs btn-info" href="/settings/mensajeria"><i class="fa fa-cog"></i> Configurar</a> ' : '';
-                return configurar + '<button class="btn btn-xs btn-default btn-toggle" data-id="' + row.id + '">' + toggle + '</button> ' + borrar;
             } }
         ],
         order: [[3, 'desc'], [1, 'asc']]

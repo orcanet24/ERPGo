@@ -256,6 +256,10 @@ func (s *Server) Close() error {
 	// escritor se para en orden.
 	stopOrchestrators()
 
+	// La frontera de addons después: los procesos hijos mueren antes de cerrar
+	// las bases; jamás queda un addon apadrinado por un ERP que ya se fue.
+	s.addons.parar()
+
 	// El ciclo de respaldos automáticos apagan antes de cerrar las bases:
 	// no debe quedar escribiendo sobre un MySQL ya desconectado.
 	if s.backupStop != nil {
@@ -266,10 +270,6 @@ func (s *Server) Close() error {
 	// El runner de facturación digital igual: una emisión a medio vuelo no
 	// debe chocar con una base que se cierra. Lo pendiente queda en cola.
 	s.diDesactivarRunner()
-
-	// El despachador de mensajería se para antes de cerrar las bases. Lo que
-	// quedó en `enviando` se recupera al siguiente arranque.
-	s.pararMensajeriaDispatcher()
 
 	s.controlMu.Lock()
 	if s.controlDB != nil {
@@ -626,6 +626,12 @@ func (s *Server) ProvisionTenant(legalName, rif, adminUser, adminPass string) (P
 		fmt.Printf("=== TEMPORARY ADMIN PASSWORD: %s ===\n", adminPass)
 	}
 	PrepareCompanyAs(db, "mysql", legalName, rif, adminUser, adminPass)
+
+	// PASO 4½: los addons ya escaneados existen también en esta empresa nueva.
+	// Sin esto, un addon instalado antes de crear la empresa desaparecería de
+	// su menú y de su pantalla de módulos (y el dueño lo reportaría como un
+	// addon roto, no como un registro faltante).
+	s.addonRegistrarEmpresa(db)
 
 	// PASO 5: Registrar la empresa en el catálogo de control.
 	ctl, err := s.controlStore()

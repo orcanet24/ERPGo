@@ -1,0 +1,100 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>{{.Title}} <small class="text-muted">(fase 1)</small></h4></div>
+        <div class="panel-btns">
+            <button class="btn btn-warning btn-sm" id="btn-rescan"><i class="fa fa-refresh"></i> Re-escanear addons</button>
+        </div>
+    </div>
+    <div class="panel-body">
+        <p class="text-muted">
+            Cada addon es un binario independiente en la carpeta
+            <code id="addons-dir">&lt;raíz&gt;/addons/&lt;id&gt;/</code> con su
+            <code>manifest.json</code>. Nació de
+            <a href="/module/list">Módulos del Sistema</a> y se administra aquí:
+            el núcleo lo lanza, le entrega el token por loopback y sirve sus rutas
+            con la sesión del ERP. Fase 1: sin lectura/escritura de datos ni
+            firma — eso pertenece a fase 2 y 3 (ver docs/PLAN-ADDONS.md).
+        </p>
+        <div id="addons-avisos"></div>
+        <table class="table table-striped table-bordered" id="addonsTable" style="width:100%">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Nombre</th>
+                    <th>Versión</th>
+                    <th>Estado</th>
+                    <th>Ruta</th>
+                    <th>Detalle</th>
+                    <th></th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    function refrescar() {
+        $.getJSON('/module/addons/data', function (st) {
+            $('#addons-dir').html('<code>' + (st.directorio || 'addons') + '/&lt;id&gt;/</code>');
+            var avisos = $('#addons-avisos').empty();
+            (st.avisos || []).forEach(function (a) {
+                avisos.append('<div class="alert alert-warning"><i class="fa fa-exclamation-triangle"></i> ' + a + '</div>');
+            });
+            var dt = $('#addonsTable').DataTable();
+            dt.clear();
+            var filas = (st.addons || []).map(function (a) {
+                var estado;
+                var cls = a.estado === 'activo' ? 'success' : (a.estado === 'sin binario' ? 'warning' : 'danger');
+                estado = '<span class="label label-' + cls + '">' + a.estado + '</span>';
+                var detalle = (a.ultimo_error ? a.ultimo_error : '') ;
+                if (!a.concedido.db_read && (a.db_read || []).length || (a.tables_own || []).length) {
+                    detalle = detalle || 'fase 1: la lectura de datos (' + (a.db_read || []).join(', ') +
+                        ') y sus tablas (' + (a.tables_own || []).join(', ') + ') se conceden en fase 2.';
+                }
+                return [a.id, a.name, a.version, estado, (a.routes || []).join(', '), detalle,
+                    '<button class="btn btn-xs btn-info btn-reiniciar" data-id="' + a.id + '"><i class="fa fa-play"></i> Reiniciar</button>'];
+            });
+            dt.rows.add(filas).draw();
+        }).fail(function () {
+            alert('No se pudo leer el estado de los addons');
+        });
+    }
+
+    // Las columnas se declaran al primer uso; DataTables exige columnas antes
+    // de .clear()/.add() cuando ya está inicializada.
+    var dt = $('#addonsTable').DataTable({
+        columns: [null, null, null, null, null, null, { orderable: false }]
+    });
+
+    $('#btn-rescan').on('click', function () {
+        var btn = $(this).prop('disabled', true);
+        $.post('/module/addons/rescan', {}, function (res) {
+            btn.prop('disabled', false);
+            if (res && res.status === 1) { refrescar(); }
+            else { alert((res && (res.msg || res.error)) || 'No se pudo re-escanear'); }
+        }).fail(function (xhr) {
+            btn.prop('disabled', false);
+            var e = (xhr.responseJSON && xhr.responseJSON.error) || 'Error al re-escanear';
+            alert(e);
+        });
+    });
+
+    $('#addonsTable').on('click', '.btn-reiniciar', function () {
+        var id = $(this).data('id');
+        $.post('/module/addons/' + id + '/restart', {}, function (res) {
+            if (res && res.status === 1) { refrescar(); }
+            else { alert((res && (res.msg || res.error)) || 'No se pudo relanzar el addon'); }
+        }).fail(function (xhr) {
+            var e = (xhr.responseJSON && xhr.responseJSON.error) || 'Error al relanzar el addon';
+            alert(e);
+        });
+    });
+
+    refrescar();
+});
+</script>
+{{end}}

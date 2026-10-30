@@ -1,0 +1,24 @@
+{
+  "id": "hola",
+  "name": "Hola, addon",
+  "version": "1.0.0",
+  "min_core_version": "0.1.0",
+  "description": "Addon demostrativo de la frontera fase 1: una pantalla, una entrada de menú y su tabla propia declarada (la tabla se crea en fase 2).",
+  "author": "ERPGo",
+  "routes": ["/hola"],
+  "menu": [
+    {
+      "parent_id": null,
+      "label": "Hola addon",
+      "url": "/hola",
+      "icon": "fa-smile-o",
+      "perms": ["hola_ver"],
+      "sort_order": 90,
+      "active_prefix": "/hola"
+    }
+  ],
+  "perms": [
+    { "code": "hola_ver", "label": "Ver la pantalla del addon Hola" }
+  ],
+  "tables_own": ["hola_mensajes"]
+}

@@ -42,8 +42,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"erpgo/internal/mensajeria"
 )
 
 // notifyChannel es la configuración de un canal de salida.
@@ -71,11 +69,6 @@ type notifyChannel struct {
 	AuthToken  string
 	SignSecret string
 
-	// Mensajería (canal «gowa»): qué dispositivo de la empresa manda el aviso y,
-	// si se eligió, qué plantilla fija el texto.
-	MsgDeviceID     string
-	MsgTemplateCode string
-
 	Notes string
 }
 
@@ -84,8 +77,7 @@ type notifyChannel struct {
 const notifyCanalesSQL = `SELECT id, IFNULL(kind,''), IFNULL(name,''), is_active, ai_allowed, cooldown_days,
 	IFNULL(host,''), port, IFNULL(username,''), IFNULL(password,''), IFNULL(from_address,''), IFNULL(from_name,''),
 	IFNULL(security,'starttls'), IFNULL(url,''), IFNULL(http_method,'POST'), IFNULL(auth_header,''),
-	IFNULL(auth_token,''), IFNULL(sign_secret,''), IFNULL(msg_device_id,''), IFNULL(msg_template_code,''),
-	IFNULL(notes,'')
+	IFNULL(auth_token,''), IFNULL(sign_secret,''), IFNULL(notes,'')
 	FROM notify_channel`
 
 // notifyCanalEscanear llena una fila del canal.
@@ -96,7 +88,7 @@ func notifyCanalEscanear(s interface {
 	err := s.Scan(&c.ID, &c.Kind, &c.Name, &c.IsActive, &c.AIAllowed, &c.CooldownDays,
 		&c.Host, &c.Port, &c.Username, &c.Password, &c.FromAddress, &c.FromName,
 		&c.Security, &c.URL, &c.Method, &c.AuthHeader, &c.AuthToken, &c.SignSecret,
-		&c.MsgDeviceID, &c.MsgTemplateCode, &c.Notes)
+		&c.Notes)
 	return c, err
 }
 
@@ -236,14 +228,10 @@ func etiquetaContraparte(partyType string) string {
 // EXISTE PORQUE EL `default` DE finDestinatario ERA EL CORREO. Un canal `wapp`
 // caía ahí y el ERP le entregaba a la pasarela de WhatsApp el email de la ficha
 // como «to»: el aviso salía (o fallaba) contra una dirección que no es un
-// teléfono. Los tipos nuevos de mensajería (gowa, telegram) tienen el mismo
-// problema, así que la decisión se toma en un solo sitio y no en cada `switch`.
+// teléfono. La decisión de «teléfono o correo» se toma en un solo sitio y no en
+// cada `switch`.
 func canalUsaMovil(kind string) bool {
-	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case "wapp", "gowa", "telegram":
-		return true
-	}
-	return false
+	return strings.ToLower(strings.TrimSpace(kind)) == "wapp"
 }
 
 // finUltimoAviso dice cuándo se le mandó a esta referencia por este canal, para
@@ -348,29 +336,6 @@ func (s *Server) financeEnviarAviso(r *http.Request, db *sql.DB, canal notifyCha
 				"subject": asunto,
 			})
 		}
-	case "gowa":
-		// El aviso no se manda aquí: se encola. El despachador decide cuándo,
-		// con el ritmo y el cupo del número. «Enviado» en este punto sería una
-		// mentira: solo está aceptado por la cola.
-		if strings.TrimSpace(canal.MsgDeviceID) == "" {
-			envioErr = fmt.Errorf("el canal de WhatsApp «%s» no tiene un dispositivo asignado", canal.Name)
-		} else {
-			texto := asunto + "\n\n" + cuerpo
-			if strings.TrimSpace(canal.MsgTemplateCode) != "" {
-				plantilla, perr := s.msgPlantillaPorCodigo(db, canal.MsgTemplateCode)
-				if perr != nil {
-					envioErr = perr
-				} else {
-					texto, envioErr = mensajeria.Render(plantilla.Body, s.msgVariablesDeAviso(db, alerta, refID))
-					if envioErr != nil {
-						envioErr = fmt.Errorf("plantilla «%s»: %w", plantilla.Code, envioErr)
-					}
-				}
-			}
-			if envioErr == nil {
-				prov, envioErr = s.msgEncolarAviso(r, canal, destino, texto, refType, refID, usuario)
-			}
-		}
 	case "webhook":
 		if strings.TrimSpace(canal.URL) == "" {
 			envioErr = fmt.Errorf("el canal webhook «%s» no tiene URL configurada", canal.Name)
@@ -395,57 +360,10 @@ func (s *Server) financeEnviarAviso(r *http.Request, db *sql.DB, canal notifyCha
 
 	_, _ = db.Exec(`UPDATE finance_message SET status = 'enviado', sent_at = ?, provider_ref = ? WHERE id = ?`,
 		now(), prov, msgID)
-	if canal.Kind == "gowa" {
-		// La cola es la verdad: el aviso está aceptado, no entregado. El
-		// historial lo dice así y el estado real llegará con el acuse.
-		_, _ = db.Exec(`UPDATE finance_message SET status = 'en_cola' WHERE id = ?`, msgID)
-		return map[string]interface{}{
-			"enviado": true, "encolado": true, "id": msgID, "destino": destino, "canal": canal.Name, "kind": canal.Kind,
-			"msg": "Aviso en cola para " + destino + " por " + canal.Name + ". Se enviará con el ritmo del número; el historial dirá «en cola» hasta que salga.",
-		}, nil
-	}
 	return map[string]interface{}{
 		"enviado": true, "id": msgID, "destino": destino, "canal": canal.Name, "kind": canal.Kind,
 		"msg": "Aviso enviado a " + destino + " por " + canal.Name + ".",
 	}, nil
-}
-
-// msgVariablesDeAviso arma los datos que una plantilla puede usar. Si un dato no
-// existe, se devuelve vacío y el render falla: el aviso no sale con un hueco.
-func (s *Server) msgVariablesDeAviso(db *sql.DB, alerta map[string]interface{}, refID string) map[string]string {
-	partyType := fmt.Sprintf("%v", alerta["party_type"])
-	var id int64
-	switch v := alerta["party_id"].(type) {
-	case int64:
-		id = v
-	case float64:
-		id = int64(v)
-	}
-	nombre := ""
-	if id > 0 {
-		if partyType == "supplier" {
-			nombre, _, _ = s.finContactoProveedor(db, id)
-		} else {
-			nombre, _, _ = s.finContactoCliente(db, id)
-		}
-	}
-	monto := ""
-	switch v := alerta["amount"].(type) {
-	case float64:
-		monto = fmt.Sprintf("%.2f", v)
-	case int64:
-		monto = fmt.Sprintf("%.2f", float64(v))
-	case string:
-		monto = v
-	}
-	return map[string]string{
-		"cliente":    nombre,
-		"monto":      monto,
-		"fecha":      time.Now().Format("02/01/2006"),
-		"empresa":    s.finEmpresa(db),
-		"referencia": refID,
-		"enlace":     "",
-	}
 }
 
 // ---------- Entrega: correo ----------
