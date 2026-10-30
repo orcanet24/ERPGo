@@ -310,13 +310,48 @@ $('#ai_go').on('click', function () {
         btn.prop('disabled', false).text('Generar borrador');
         if (r.status === 1) {
             $('#ai_out').show().text(r.report);
-            var m = r.report.match(/\{[\s\S]*"sql"[\s\S]*\}/);
-            if (m && !$('#tpl_def').val().trim()) { $('#tpl_def').val(m[0]).trigger('input'); }
+            // El escáner empareja llaves (como el servidor en aiExtraerDefinicion)
+            // en vez del regex /\{[\s\S]*"sql"[\s\S]*\}/, que es greedy y se come
+            // desde el primer { de la prosa hasta el último }. Con el escáner, el
+            // primer objeto que tenga "sql" se extrae sin comerse la prosa ajena.
+            var extr = extraerDefinicionJS(r.report);
+            if (extr && !$('#tpl_def').val().trim()) { $('#tpl_def').val(extr).trigger('input'); }
         } else { alert(r.error || 'La IA no pudo responder'); }
     }).fail(function (xhr) {
         btn.prop('disabled', false).text('Generar borrador');
         alert('No hay agentes IA disponibles o el proveedor falló.');
     });
 });
+
+// extraerDefinicionJS replica en JS el algoritmo de aiExtraerDefinicion (server):
+// devuelve el primer objeto JSON {…} que decodifique y tenga clave "sql". Respetan
+// comillas y escapes, así las llaves dentro del SQL no desalinean el emparejado.
+function extraerDefinicionJS(texto) {
+    for (var i = 0; i < texto.length; i++) {
+        if (texto[i] !== '{') { continue; }
+        var depth = 0, enCadena = false, esc = false;
+        for (var j = i; j < texto.length; j++) {
+            var c = texto[j];
+            if (enCadena) {
+                if (esc) { esc = false; }
+                else if (c === '\\') { esc = true; }
+                else if (c === '"') { enCadena = false; }
+                continue;
+            }
+            if (c === '"') { enCadena = true; }
+            else if (c === '{') { depth++; }
+            else if (c === '}') {
+                depth--;
+                if (depth === 0) {
+                    var cand = texto.slice(i, j + 1);
+                    try { var o = JSON.parse(cand); if (o && o.sql) { return cand; } }
+                    catch (e) { /* no es JSON válido: probar siguiente '{' */ }
+                    break; // cerró un objeto sin sql: seguir con el próximo '{'
+                }
+            }
+        }
+    }
+    return null;
+}
 </script>
 {{end}}

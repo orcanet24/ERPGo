@@ -13,15 +13,20 @@ import (
 // registerPriceListRoutes registra las rutas del módulo de precios.
 func (s *Server) registerPriceListRoutes() {
 	s.mux.HandleFunc("GET /price_list/list", s.priceListList)
-	s.mux.HandleFunc("GET /price_list/data", s.priceListData)
+	// Las rutas /data se registran SIN método: las tablas DataTables de las
+	// vistas hacen sus peticiones ajax con type: 'POST', y el ServeMux
+	// rechazaría con 405 todo verbo no declarado (así lo hacen los listados
+	// que sí cargan: customer, invoice, product, purchase, return).
+	s.mux.HandleFunc("/price_list/data", s.priceListData)
 	s.mux.HandleFunc("POST /price_list/save", s.priceListSave)
 	s.mux.HandleFunc("GET /price_list/activate/{id}", s.priceListActivate)
 	s.mux.HandleFunc("POST /price_list/delete/{id}", s.priceListDelete)
 	s.mux.HandleFunc("GET /product_price/list", s.productPriceList)
-	s.mux.HandleFunc("GET /product_price/data", s.productPriceData)
+	s.mux.HandleFunc("/product_price/data", s.productPriceData)
 	s.mux.HandleFunc("POST /product_price/save", s.productPriceSave)
 	s.mux.HandleFunc("GET /product_price/discount/list", s.discountList)
-	s.mux.HandleFunc("GET /product_price/discount/data", s.discountData)
+	s.mux.HandleFunc("GET /product_price/discount/form", s.discountForm)
+	s.mux.HandleFunc("/product_price/discount/data", s.discountData)
 	s.mux.HandleFunc("POST /product_price/discount/save", s.discountSave)
 	s.mux.HandleFunc("POST /product_price/discount/delete/{id}", s.discountDelete)
 }
@@ -227,6 +232,73 @@ func (s *Server) productPriceSave(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) discountList(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "discount_list.html", map[string]interface{}{"Title": "Descuentos por Cliente"})
+}
+
+// discountForm sirve la pantalla de alta/edición de descuentos. Antes era una
+// plantilla huérfana: los enlaces de discount_list.html apuntaban a
+// /product_price/discount/form, que no estaba registrada y caía en 404, así que
+// "Nuevo descuento" no se podía abrir.
+func (s *Server) discountForm(w http.ResponseWriter, r *http.Request) {
+	data := map[string]interface{}{
+		"Title":         "Nuevo Descuento",
+		"DiscountID":    "",
+		"DiscountPct":   "0.00",
+		"DiscountMinQty": "0",
+	}
+	if idStr := r.FormValue("id"); idStr != "" {
+		id, _ := strconv.Atoi(idStr)
+		if id > 0 {
+			// Carga el registro paraEditar; si no existe, se crea en blanco
+			// (mejor UX que un 404: el técnico vino a escribir, no a leer).
+			var prodID, custID, priceListID, minQty int
+			var custClass, vFrom, vUntil, reason, status string
+			var discPct float64
+			err := s.dbFor(r).QueryRow(`SELECT product_id, customer_id, customer_class, price_list_id,
+				discount_pct, min_qty, valid_from, valid_until, reason, status
+				FROM product_price_discount WHERE id = ?`, id).
+				Scan(&prodID, &custID, &custClass, &priceListID, &discPct, &minQty, &vFrom, &vUntil, &reason, &status)
+			if err == nil {
+				data["Title"] = "Editar Descuento"
+				data["DiscountID"] = id
+				data["DiscountProductID"] = prodID
+				data["DiscountCustomerID"] = custID
+				data["DiscountClass"] = custClass
+				data["DiscountPriceList"] = priceListID
+				data["DiscountPct"] = strconv.FormatFloat(discPct, 'f', 2, 64)
+				data["DiscountMinQty"] = strconv.Itoa(minQty)
+				data["ValidFrom"] = vFrom
+				data["ValidUntil"] = vUntil
+				data["Reason"] = reason
+				data["DiscountStatus"] = status
+			}
+		}
+	}
+	// Catálogos para los <select>: productos activos y clientes. Si la tabla no
+	// existe la query tira error y los listados quedan vacíos (no se rompe la
+	// página).
+	if rows, err := s.dbFor(r).Query(`SELECT product_id, product_name FROM product_information WHERE status=1 ORDER BY product_name`); err == nil {
+		var prods []map[string]interface{}
+		for rows.Next() {
+			var id, name string
+			if err := rows.Scan(&id, &name); err == nil {
+				prods = append(prods, map[string]interface{}{"id": id, "name": name})
+			}
+		}
+		_ = rows.Close()
+		data["Products"] = prods
+	}
+	if rows, err := s.dbFor(r).Query(`SELECT customer_id, customer_name FROM customer_information ORDER BY customer_name`); err == nil {
+		var custs []map[string]interface{}
+		for rows.Next() {
+			var id, name string
+			if err := rows.Scan(&id, &name); err == nil {
+				custs = append(custs, map[string]interface{}{"id": id, "name": name})
+			}
+		}
+		_ = rows.Close()
+		data["Customers"] = custs
+	}
+	s.render(w, r, "discount.html", data)
 }
 
 func (s *Server) discountData(w http.ResponseWriter, r *http.Request) {

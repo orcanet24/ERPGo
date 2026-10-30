@@ -11,7 +11,11 @@ import (
 
 func (s *Server) registerDeliveryOrderRoutes() {
 	s.mux.HandleFunc("GET /delivery_order/list", s.deliveryOrderList)
-	s.mux.HandleFunc("GET /delivery_order/data", s.deliveryOrderData)
+	// Las rutas /data se registran SIN método: las tablas DataTables de las
+	// vistas hacen sus peticiones ajax con type: 'POST', y el ServeMux
+	// rechazaría con 405 todo verbo no declarado (así lo hacen los listados
+	// que sí cargan: customer, invoice, product, purchase, return).
+	s.mux.HandleFunc("/delivery_order/data", s.deliveryOrderData)
 	s.mux.HandleFunc("GET /delivery_order/add", s.deliveryOrderForm)
 	s.mux.HandleFunc("GET /delivery_order/edit/{id}", s.deliveryOrderForm)
 	s.mux.HandleFunc("POST /delivery_order/save", s.deliveryOrderSave)

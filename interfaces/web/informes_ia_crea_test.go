@@ -102,7 +102,7 @@ func TestLaIACreaElInformeEnElSistema(t *testing.T) {
 	crearTablaReportTemplatePrueba(t, db)
 	sess := sessPrueba("admin")
 	r := reqPrueba(s, sess, "/reports/custom/ai-create")
-	respuesta := respuestaIAIndependiente(`{"title":"Ventas por cliente","sql":"SELECT c.customer_name AS cliente FROM invoice i JOIN customer_information c ON c.customer_id = i.customer_id","columns":[{"key":"cliente","label":"Cliente"}],"totals":[]}`)
+	respuesta := respuestaIAIndependiente(`{"title":"Ventas por cliente","sql":"SELECT 'Cliente Demo' AS cliente","columns":[{"key":"cliente","label":"Cliente"}],"totals":[]}`)
 
 	id, nombre, err := s.crearInformeDesdeRespuestaIA(r, sess, "informe de ventas de este mes por cliente", respuesta)
 	if err != nil {
@@ -161,5 +161,116 @@ func TestElPedidoVacioNoLLegaAlAgente(t *testing.T) {
 	s.reportTemplateAICreate(w, reqConCuerpo(req, `{"request":""}`))
 	if w.Code != 400 {
 		t.Errorf("un pedido vacío responde 400, llegó %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestElGuardarSeHaceSobreElPreview: un informe con SQL de escritura no se guarda
+// (regla del guardián — TestElGuardianSeComeElSQLDeEscritura) y TAMPOCO se guarda
+// uno que pase el guardián pero no pueda ejecutarse (tabla inexistente, alias
+// errado). El preview actúa como el técnico que prueba antes de dejarlo en el
+// sistema: un SELECT contra una tabla que no existe tira 400 en la prueba y no
+// deja fila huérfana.
+func TestElGuardarSeHaceSobreElPreview(t *testing.T) {
+	s, db := basePrueba(t)
+	crearTablaReportTemplatePrueba(t, db)
+	r := reqPrueba(s, sessPrueba("admin"), "/reports/custom/ai-create")
+	// El SQL pasa aiValidateSQLSelect (es un SELECT) pero no existe la tabla: el
+	// preview lo rechaza y no se inserta nada.
+	respuesta := respuestaIAIndependiente(`{"title":"Venta por factura chuta","sql":"SELECT f.numero FROM factura_que_no_existe f","columns":[{"key":"numero","label":"Factura"}],"totals":[]}`)
+
+	id, _, err := s.crearInformeDesdeRespuestaIA(r, sessPrueba("admin"), "ventas", respuesta)
+	if err == nil {
+		t.Fatal("el preview fallido debía impedir el guardado, pero se guardó id=", id)
+	}
+	if !strings.Contains(err.Error(), "prueba de ejecución") {
+		t.Errorf("el error debe decir que falló la prueba de ejecución; salió: %v", err)
+	}
+	var filas int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM report_template`).Scan(&filas); err != nil || filas != 0 {
+		t.Errorf("no debe quedar fila del informe que falló el preview: err=%v filas=%d", err, filas)
+	}
+}
+
+// TestElPreviewRechazaTotalesQueNoSePuedenCalcular: un total apuntando a una
+// columna que no devuelve el SELECT pasa el guardián estático pero el preview
+// advierte y el informe no se guarda —evita la peor de las fallas: un informe que
+// parece tener cifra y no la tiene.
+func TestElPreviewRechazaTotalesQueNoSePuedenCalcular(t *testing.T) {
+	s, db := basePrueba(t)
+	crearTablaReportTemplatePrueba(t, db)
+	r := reqPrueba(s, sessPrueba("admin"), "/reports/custom/ai-create")
+	// "cliente" está en totals (pasa el guardián estático: totals ⊆ columns),
+	// pero el SELECT devuelve un texto no numérico en esa posición: el preview
+	// no puede calcularlo y advierte. Un regex estático no lo vería; el preview sí.
+	respuesta := respuestaIAIndependiente(`{"title":"Ventas","sql":"SELECT 'foo' AS cliente","columns":[{"key":"cliente","label":"Cliente"}],"totals":["cliente"]}`)
+
+	if _, _, err := s.crearInformeDesdeRespuestaIA(r, sessPrueba("admin"), "ventas", respuesta); err == nil {
+		t.Fatal("un informe con total imposible debía rechazarse en el preview")
+	} else if !strings.Contains(err.Error(), "prueba de ejecución") {
+		t.Errorf("el error debe señalar el preview; salió: %v", err)
+	}
+	var filas int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM report_template`).Scan(&filas); err != nil || filas != 0 {
+		t.Errorf("no debe quedar fila del informe rechazado por el preview: err=%v filas=%d", err, filas)
+	}
+}
+
+// TestReglaFinalCambiaParaSalidaJSON: la regla 6 del sistema pide Markdown, y la
+// variante para salida JSON la sustituye. Sin esto el modelo recibía "entrega en
+// Markdown" y el extractor no hallaba el objeto JSON → 502 con tokens gastados y
+// el informe no se creaba.
+func TestReglaFinalCambiaParaSalidaJSON(t *testing.T) {
+	core := aiReglasDelSistema(false)
+	if !strings.Contains(core, "informe final claro en Markdown") {
+		t.Fatal("la regla normal debe pedir Markdown")
+	}
+	porJSON := aiReglasDelSistema(true)
+	if strings.Contains(porJSON, "informe final claro en Markdown") {
+		t.Fatalf("la variante JSON no debe pedir Markdown; salió: %s", porJSON)
+	}
+	if !strings.Contains(porJSON, "ÚNICO objeto JSON válido") {
+		t.Fatalf("la variante JSON debe pedir el objeto; salió: %s", porJSON)
+	}
+}
+
+// TestCatalogoExcluyeHerramienta: aiToolsJSONExcluyendo quita las herramientas de
+// la lista (p.ej. report.save_template en la creación por IA) y, sin exclusión,
+// coincide con aiToolsJSON.
+func TestCatalogoExcluyeHerramienta(t *testing.T) {
+	// Un rol con el permiso concreto ve report.save_template en el catálogo; así
+	// podemos probar que EXCLUIRLA la quita de verdad.
+	conPermiso := gateDePrueba("user", map[string]string{"custom_reports": "create"})
+	sinExcl := aiToolsJSON(false, conPermiso)
+	conExcl := aiToolsJSONExcluyendo(false, conPermiso, []string{"report.save_template"})
+
+	if !strings.Contains(sinExcl, "report_save_template") {
+		t.Fatal("el catálogo con permiso debe anunciar report.save_template; no se pudo probar la exclusión")
+	}
+	if strings.Contains(conExcl, "report_save_template") {
+		t.Error("el catálogo excluido no debe contener report.save_template (wire: report_save_template)")
+	}
+	// Sin exclusión explícita, el helper nuevo coincide con el anterior: no se
+	// rompe ningún otro llamador.
+	if aiToolsJSONExcluyendo(false, conPermiso, nil) != sinExcl {
+		t.Error("sin exclusión, aiToolsJSONExcluyendo debe ser idéntico a aiToolsJSON")
+	}
+}
+
+// TestParametrosDesdeHastaSeSustituyen: un SQL con :desde/:hasta pasa a literales
+// de fecha validados, y fechas malas se rechazan antes de tocar el SQL.
+func TestParametrosDesdeHastaSeSustituyen(t *testing.T) {
+	if out, err := substituteReportParams("SELECT * FROM a WHERE f BETWEEN :desde AND :hasta",
+		"2026-01-01", "2026-01-31"); err != nil {
+		t.Fatalf("no debería fallar con fechas válidas: %v", err)
+	} else if !strings.Contains(out, "'2026-01-01'") || !strings.Contains(out, "'2026-01-31'") {
+		t.Errorf("no se sustituyeron los marcadores: %s", out)
+	}
+	if out, err := substituteReportParams("SELECT * FROM a", "2026-01-01", "2026-01-31"); err != nil {
+		t.Fatalf("sin placeholders no debe tocar el SQL: %v", err)
+	} else if out != "SELECT * FROM a" {
+		t.Errorf("sin placeholders no debe modificar nada: %s", out)
+	}
+	if _, err := substituteReportParams("SELECT * FROM a WHERE f >= :desde", "", "2026-01-31"); err == nil {
+		t.Fatal("una fecha :desde vacía debe rechazarse")
 	}
 }

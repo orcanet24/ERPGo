@@ -16,6 +16,36 @@ func (s *Server) registerReturnRoutes() {
 	s.mux.HandleFunc("GET /return/new", s.returnForm)
 	s.mux.HandleFunc("POST /return/customer/save", s.returnCustomerSave)
 	s.mux.HandleFunc("POST /return/supplier/save", s.returnSupplierSave)
+	// El formulario real (return_form.html) postea a /return/save y su campo
+	// return_type elige entre venta (cliente) y compra (proveedor). Antes no
+	// había despachador: el técnico tenía que reescribir el action del form a
+	// mano para que el guardado no diera 404. La vista manda, el servidor se
+	// adapta.
+	s.mux.HandleFunc("POST /return/save", s.returnSave)
+}
+
+// returnSave despacha /return/save al handler de venta o compra según el campo
+// return_type del formulario (return_form.html). Ver el comentario de arriba.
+func (s *Server) returnSave(w http.ResponseWriter, r *http.Request) {
+	if s.sessionFromRequest(r) == nil {
+		jsonError(w, "Sesión requerida", 401)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		jsonError(w, "Formulario inválido", 400)
+		return
+	}
+	// El <select> de la vista envía "sale"/"purchase"; si falta o es otro valor,
+	// no se adivina: se pide al usuario que elija, en vez de asumir venta por
+	// defecto y hacer una entrada contable en el lado equivocado.
+	switch r.FormValue("return_type") {
+	case "sale":
+		s.returnCustomerSave(w, r)
+	case "purchase":
+		s.returnSupplierSave(w, r)
+	default:
+		jsonError(w, "Tipo de devolución no reconocido: use 'sale' o 'purchase'", 400)
+	}
 }
 
 // returnCustomerSave devolución de cliente - reversa stock_movement de venta.

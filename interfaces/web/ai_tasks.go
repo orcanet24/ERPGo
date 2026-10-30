@@ -28,6 +28,22 @@ type aiTask struct {
 	Enabled       int
 	CreatedBy     string
 	CreatedAt     string
+
+	// RespuestaJSON fuerza una salida JSON en el modelo en vez de Markdown: se
+	// pide al runner que el «informe final» SEA el objeto que las instrucciones
+	// solicitan (para informes creados por IA) y que no haya texto extra que el
+	// extractor tenga que adivinar. Las tareas normales del scheduler dejanlo
+	// en false: su salida es para leer un humano, no para parsearla.
+	RespuestaJSON bool
+
+	// HerramientasExcluidas quita herramientas del catálogo que esa corrida no
+	// debe usar. Se usa donde el SERVIDOR, no el agente, hace el guardado al
+	// final (p.ej. crear el informe con la IA): si el agente pudiera usar
+	// report.save_template, dejaría la fila y el servidor volvería a insertarla
+	// al recibir la respuesta → duplicados. Las herramientas que sí se usan
+	// para validar (report.run_preview) no se excluyen: el agente necesita
+	// consultar antes de proponer.
+	HerramientasExcluidas []string
 }
 
 // loadAITasks lista todas las tareas.
@@ -515,10 +531,23 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 	// dice su nombre de rol (ver aiDeptDelAgente). Ese mismo departamento es el
 	// que usa el guardián de SQL en db_query, así que el prompt y el candado
 	// dicen lo mismo por construcción.
-	system := s.buildAgentPrompt(sess, agent, roleName)
+	//
+	// reglas varía solo con RespuestaJSON: la regla 6 del sistema pide Markdown,
+	// y para una salida JSON la regla hay que cambiarla para que no contradiga el
+	// contrato de la tarea (la regla y la instrucción dicen lo mismo).
+	reglas := aiReglasDelSistema(task.RespuestaJSON)
+	system := s.buildAgentPrompt(sess, agent, roleName, reglas)
+	// El sufijo final del prompt cambia con la misma bandera: para salida JSON el
+	// «informe final» que pide la regla es el objeto JSON, no prosa. Antes se
+	// añadía siempre "responde en Markdown" y contradecía el contrato de la
+	// tarea → el extractor no hallaba el objeto → 502 con los tokens gastados.
 	userMsg := "TAREA: " + task.Name + "\n\nINSTRUCCIONES:\n" + task.Instructions +
-		"\n\nUsa las herramientas disponibles para consultar datos" + aiOperatorHint(agent) +
-		". Cuando tengas todo, responde ÚNICAMENTE con el informe final en Markdown, sin llamadas a herramientas."
+		"\n\nUsa las herramientas disponibles para consultar datos" + aiOperatorHint(agent) + "."
+	if task.RespuestaJSON {
+		userMsg += " Cuando tengas todo, responde ÚNICAMENTE con el objeto JSON solicitado en las instrucciones, sin markdown, sin vallado de código y sin texto fuera del objeto; no hagas llamadas a herramientas."
+	} else {
+		userMsg += " Cuando tengas todo, responde ÚNICAMENTE con el informe final en Markdown, sin llamadas a herramientas."
+	}
 
 	messages := []map[string]string{
 		{"role": "system", "content": system},
@@ -539,7 +568,7 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 	// Una fila por llamada al modelo. Un agente da hasta maxSteps llamadas y cada
 	// una se cobra, así que el registro va justo después de cada respuesta.
 	for step := 1; step <= maxSteps; step++ {
-		content, toolCalls, usage, err := aiCallChatWithTools(p, model, messages, aiToolsJSON(agent.OperatorEnabled == 1, gate))
+		content, toolCalls, usage, err := aiCallChatWithTools(p, model, messages, aiToolsJSONExcluyendo(agent.OperatorEnabled == 1, gate, task.HerramientasExcluidas))
 		// Se registra aunque este paso falle: los tokens gastados hasta el
 		// fallo también son consumo facturable.
 		s.recordAIUsage(s.dbForSession(sess), aiUsageEvent{

@@ -727,7 +727,37 @@ func aiToolsJSON(operator bool, gate aiRoleGate) string {
 	return string(b)
 }
 
-// aiRunJournal es el registro de acciones revertibles de una corrida.
+// aiToolsJSONExcluyendo serializa el catálogo para la petición al proveedor,
+// quitando las herramientas cuyo nombre interno esté en `excluir`.
+//
+// POR QUÉ EXISTE: en las corridas de una sola pasada cuyo guardado lo hace el
+// SERVIDOR al final (p.ej. «Crear el informe con la IA») el agente no debe
+// disponer de `report.save_template`: si la usara, dejaría la fila Y el servidor
+// volvería a insertar al recibir la respuesta → duplicados. Quitarla del
+// catálogo es más fuerte que confiar en que el modelo obedezca: no puede pedirla.
+func aiToolsJSONExcluyendo(operator bool, gate aiRoleGate, excluir []string) string {
+	if len(excluir) == 0 {
+		return aiToolsJSON(operator, gate)
+	}
+	lista := aiCatalogForPhase(operator, gate)
+	wire := make([]aiToolWire, 0, len(lista))
+	salto := make(map[string]bool, len(excluir))
+	for _, n := range excluir {
+		salto[n] = true
+	}
+	for _, t := range lista {
+		if salto[t.Name] {
+			continue
+		}
+		w := aiToolWire{Type: "function"}
+		w.Function.Name = aiNombreDeHerramientaParaAPI(t.Name)
+		w.Function.Description = t.Description
+		w.Function.Parameters = t.Parameters
+		wire = append(wire, w)
+	}
+	b, _ := json.Marshal(wire)
+	return string(b)
+}
 type aiRunJournal struct {
 	Actions []aiJournalAction `json:"actions"`
 

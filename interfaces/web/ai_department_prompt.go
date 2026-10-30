@@ -157,12 +157,15 @@ func (s *Server) agentConfigPrompt(agent aiAgent) string {
 
 // buildAgentPrompt arma el system prompt completo de un agente: reglas ocultas +
 // departamento + configuración del agente + rol + mapa técnico.
-func (s *Server) buildAgentPrompt(sess *SessionData, agent aiAgent, roleName string) string {
+func (s *Server) buildAgentPrompt(sess *SessionData, agent aiAgent, roleName, reglas string) string {
 	dept := aiDeptDelAgente(agent)
 	if roleName == "" {
 		roleName = "operador"
 	}
-	system := aiSystemPrompt(roleName, "")
+	// `reglas` viene ya variada por el llamador (aiReglasDelSistema) porque la
+	// variante depende de la TAREA (salida JSON vs. Markdown), no del agente:
+	// aquí se decide qué reglas ocultas se usan, no qué agente las recibe.
+	system := aiSystemPrompt(roleName, "", reglas)
 
 	var extra strings.Builder
 
@@ -178,7 +181,7 @@ func (s *Server) buildAgentPrompt(sess *SessionData, agent aiAgent, roleName str
 
 	// El mapa técnico va al final, que es lo más grande y lo menos prioritario.
 	if mapa := s.aiEsquemaParaAgente(sess, dept); mapa != "" {
-		system = aiSystemPrompt(roleName, mapa)
+		system = aiSystemPrompt(roleName, mapa, reglas)
 		if extra.Len() > 0 {
 			system = insertAgentPrompt(system, extra.String())
 		}

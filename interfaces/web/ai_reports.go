@@ -125,6 +125,16 @@ func (s *Server) executeReportDefinition(sess *SessionData, definition, from, to
 	if err != nil {
 		return nil, err
 	}
+	// Sustitución de :desde/:hasta para las definiciones legadas (contracto viejo
+	// de informes clásicos). La versión tipada (RunReportDefinition) ya lo hace con
+	// reportLiteral; aquí no hay esquema de parámetros, así que solo se resuelven
+	// las dos fechas del rango. Validar ANTES de concatenar: desde/hasta vienen de
+	// r.FormValue en el run clásico, y un valor malo no puede convertirse en inyección
+	// porque se comprueba el formato de fecha antes de tocar el SQL.
+	sqlText, err = substituteReportParams(sqlText, from, to)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.dbForSession(sess).Query(sqlText)
 	if err != nil {
 		return nil, fmt.Errorf("error de SQL: %v", err)
@@ -312,7 +322,21 @@ func (s *Server) reportTemplateAICreate(w http.ResponseWriter, r *http.Request) 
 	// se va a GUARDAR, no a leer una persona. Prosa fuera del objeto entorpece;
 	// la extracción lo tolera, pero el contrato la reduce.
 	instruccion := req.Request + "\n\nCONTRATO DE RESPUESTA: responde ÚNICAMENTE con la definición del informe como objeto JSON con las claves \"title\" (nombre corto), \"sql\" (un único SELECT de lectura sobre las tablas del mapa), \"columns\" ([{\"key\":...,\"label\":...}...]) y \"totals\" (solo claves declaradas en columns). Sin markdown, sin vallado de código, sin texto fuera del objeto."
-	task := aiTask{AgentID: agent.ID, Name: "Creación de informe", Instructions: instruccion}
+	// RespuestaJSON=true hace que el runner varíe la regla 6 del sistema y el
+	// sufijo del prompt para pedir JSON (ver aiReglasDelSistema). Sin esto el
+	// modelo recibía "entrega un informe en Markdown" y la definición nunca se
+	// extraía: la corrida se gastaba en tokens y no quedaba el informe.
+	//
+	// HerramientasExcluidas quita report.save_template DE ESTA corrida: el
+	// guardado lo hace el servidor al final, y si el agente guardara por su
+	// cuenta se duplicaría la fila.
+	task := aiTask{
+		AgentID:             agent.ID,
+		Name:                "Creación de informe",
+		Instructions:        instruccion,
+		RespuestaJSON:       true,
+		HerramientasExcluidas: []string{"report.save_template"},
+	}
 	// Ámbito propio por invocación, por el mismo motivo de reportTemplateAIHelp:
 	// es interactiva y de una sola pasada.
 	journal := &aiRunJournal{scope: "adhoc:" + now()}
@@ -350,6 +374,17 @@ func (s *Server) crearInformeDesdeRespuestaIA(r *http.Request, sess *SessionData
 	}
 	if err := s.validateReportDefinition(def); err != nil {
 		return 0, "", fmt.Errorf("la definición de la IA no pasa el guardián: %v", err)
+	}
+	// Antes de GUARDAR, el informe se ejecuta una vez como lo haría un técnico:
+	// el guardián estático valida sintaxis, pero no que el SQL devuelva las
+	// columnas declaradas, que los totales tengan sentido, o que la tabla
+	// exista. Un SELECT contra una tabla que no ve el agente (departamento mal
+	// elegido) aquí tira 400 y no guarda una plantilla que explota al abrirse.
+	if res, preErr := s.executeReportDefinition(sess, def, "", ""); preErr != nil {
+		return 0, "", fmt.Errorf("la definición de la IA no pasa la prueba de ejecución: %v", preErr)
+	} else if len(res.Warnings) > 0 {
+		return 0, "", fmt.Errorf("la definición de la IA no pasa la prueba de ejecución: %s. Corrígela antes de guardar",
+			strings.Join(res.Warnings, "; "))
 	}
 	id, err := s.insertarInforme(r, sess, nombre, strings.TrimSpace(pedido), def, "ia:"+sessUserID(sess))
 	return id, nombre, err
@@ -720,7 +755,13 @@ func (s *Server) reportTemplateAIHelp(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "No hay agentes IA activos. Crea uno en Agentes IA.", 503)
 		return
 	}
-	task := aiTask{AgentID: agent.ID, Name: "Ayuda de diseño de informe", Instructions: req.Request}
+	task := aiTask{AgentID: agent.ID, Name: "Ayuda de diseño de informe", Instructions: req.Request,
+		// La ayuda también pide JSON: el borrador se parsea del texto para
+		// rellenar el textarea, y el mismo contrato de extracción del create
+		// aplica. Se excluye report.save_template: "Ayúdame" no debe guardar.
+		RespuestaJSON:       true,
+		HerramientasExcluidas: []string{"report.save_template"},
+	}
 	// Ámbito propio por invocación: esta acción es interactiva y de una sola
 	// pasada, no una corrida programada. Sin él, todas estas peticiones
 	// compartirían el ámbito vacío y la segunda persona que pidiera guardar la
@@ -737,7 +778,19 @@ func (s *Server) reportTemplateAIHelp(w http.ResponseWriter, r *http.Request) {
 
 // aiDefaultITAgent devuelve el agente de TI estándar (por defecto).
 func (s *Server) aiDefaultITAgent(sess *SessionData) (aiAgent, bool) {
-	for _, g := range s.loadAIAgents(sess) {
+	agentes := s.loadAIAgents(sess)
+	// IT (DeptIT) es el ÚNICO agente con el mapa COMPLETO de tablas (ver
+	// ai_schema_introspect.go). Un agente de otro departamento solo ve su área, y
+	// un informe de ventas/cuentas puede necesitar tablas de varios ámbites: si el
+	// agente no conoce la tabla, el SQL queda cojo o falla al ejecutar. Preferimos
+	// uno de IT; si no hay ninguno activo, caemos al primero activo —la vista ya
+	// avisa de que no hay agentes activos—, antes que dejar la creación imposible.
+	for _, g := range agentes {
+		if g.Enabled == 1 && aiDeptDelAgente(g) == DeptIT {
+			return g, true
+		}
+	}
+	for _, g := range agentes {
 		if g.Enabled == 1 {
 			return g, true
 		}
@@ -763,3 +816,28 @@ func (s *Server) reportTemplateFirst(sess *SessionData) (reportTemplate, bool) {
 }
 
 var _ = sql.NullString{}
+
+// substituteReportParams reemplaza :desde/:hasta en el SQL de una definición
+// de informe legado. El motor tipado (RunReportDefinition) valida cada parámetro
+// contra su tipo declarado; aquí no hay esquema, solo el par de fechas, así que se
+// sustituyen SOLO estos dos. Cualquier otro :param se deja sin tocar y el Query
+// lo rechazará (comportamiento seguro: no se concatena texto no validado).
+//
+// Las fechas se citan como literales y se validan con aiValidDate ANTES de
+// concatenar, de modo que un valor de formulario no puede convertirse en inyección
+// —el guardián de solo-SELECT ya corrió, pero él no valida valores.
+func substituteReportParams(sqlText, from, to string) (string, error) {
+	necesita := strings.Contains(sqlText, ":desde") || strings.Contains(sqlText, ":hasta")
+	if !necesita {
+		return sqlText, nil
+	}
+	if !aiValidDate(from) {
+		return "", fmt.Errorf("el informe usa :desde pero la fecha %q no es válida (use AAAA-MM-DD)", from)
+	}
+	if !aiValidDate(to) {
+		return "", fmt.Errorf("el informe usa :hasta pero la fecha %q no es válida (use AAAA-MM-DD)", to)
+	}
+	sqlText = replaceParam(sqlText, "desde", "'"+from+"'")
+	sqlText = replaceParam(sqlText, "hasta", "'"+to+"'")
+	return sqlText, nil
+}

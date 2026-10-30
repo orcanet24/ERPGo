@@ -4,6 +4,14 @@
 // fallar en el chequeo), y un falso positivo en el chequeo es la forma
 // segura de ignorar la herramienta entera.
 //
+// Hace dos comprobaciones:
+//  1. Sintaxis + render con datos de muestra: detecta {{template "x"}} indefinido,
+//     campos inexistentes, etc.
+//  2. Enlaces vivos y verbos: un href/action/JS que apunte a una ruta que nadie
+//     registró en s.mux → 404 en producción; y un POST sobre una ruta registrada
+//     solo GET → 405. Antes de esta fase, el "sin fin de 404/405" solo se veía
+//     navegando.
+//
 // Vive en internal/webcheck y no en un script suelto porque forma parte de la
 // garantía de calidad: se ejecuta igual que los tests.
 package main
@@ -18,59 +26,12 @@ import (
 	"strings"
 )
 
-// templateFuncsReplica replica interfaces/web.templateFuncs. Se mantiene aquí
-// por diseño: el comprobador es una herramienta independiente y no debe importar
-// el paquete web (que arrastra el servidor entero solo para leer una lista).
-// Si algún día divergen, el fallo aparece como "function not defined", que es
-// exactamente la señal que se busca.
-func templateFuncs() template.FuncMap {
-	return template.FuncMap{
-		"add":   func(a, b int) int { return a + b },
-		"sub":   func(a, b int) int { return a - b },
-		"money": func(v float64) string { return fmt.Sprintf("%.2f", v) },
-		"divf":  func(a, b float64) float64 { return a / b },
-		"query": func(string) string { return "" },
-		"today": func() string { return "" },
-		"now":   func() string { return "" },
-		// assetVer es la huella POR ARCHIVO de los recursos estáticos (el ?v= de
-		// cada <link>/<script> del layout). Se replica aquí con una constante no
-		// vacía: el chequeo sólo comprueba sintaxis y estructura, y un valor
-		// estable es lo que permite ejecutar el layout entero sin fingir un
-		// cambio de versión.
-		"assetVer": func(ruta string) string { return "deadbeef" },
-		// Debe replicarse aquí también: si el comprobador no conoce una función
-		// que la aplicación sí, da "function not defined" en una plantilla que
-		// funciona, y ese falso positivo es la forma segura de que la herramienta
-		// deje de usarse.
-		"catalogLabel": func(catalog string) string {
-			if catalog == "conasev" {
-				return "Catálogo CONASEV (SENIAT)"
-			}
-			return "Codificación propia de la empresa"
-		},
-		// kindLabel: la clase del documento de compra en la bandeja de
-		// recepción. Los literales son los de los valores de compra_hash.go
-		// (factura, nota_entrega, orden, sin_documento).
-		"kindLabel": func(kind string) string {
-			switch kind {
-			case "factura":
-				return "Factura"
-			case "nota_entrega":
-				return "Nota de entrega"
-			case "orden":
-				return "Orden de compra"
-			case "sin_documento":
-				return "Sin documento"
-			}
-			return "Sin clasificar"
-		},
-	}
-}
-
 func main() {
 	dir := flag.String("dir", "templates", "directorio de plantillas")
+	gocode := flag.String("gocode-dir", "interfaces/web", "directorio .go donde se registran las rutas (s.mux.HandleFunc/Handle)")
 	flag.Parse()
 
+	// ---------- Fase 1: sintaxis + render ----------
 	entries, err := os.ReadDir(*dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "no se pudo leer %s: %v\n", *dir, err)
@@ -103,10 +64,11 @@ func main() {
 		if err != nil {
 			continue
 		}
-		// Hay dos familias de plantillas y se distinguishen por si definen
-		// "content". Las que lo hacen se pintan DENTRO del layout; las otras son
-		// páginas completas (login, asistente, selector de empresa) que se
-		// renderizan solas.
+		// Hay dos familias de plantillas y se distinguen por si definen "content".
+		// Las que lo hacen se pintan DENTRO del layout; las otras son páginas
+		// completas (login, asistente, selector de empresa) que se renderizan
+		// solas y no deben someterse al layout (no definen content → 404 de
+		// template al render).
 		if !strings.Contains(string(page), `{{define "content"}}`) {
 			continue
 		}
@@ -156,8 +118,89 @@ func main() {
 	} else {
 		fmt.Println()
 	}
+
+	// ---------- Fase 2: enlaces vivos y verbos ----------
+	if rutas, rerr := inventarioRutas(*gocode); rerr != nil {
+		fmt.Fprintf(os.Stderr, "aviso: no se pudieron inventariar las rutas de %s: %v\n", *gocode, rerr)
+	} else {
+		usos, uerr := inventarioUsos(*dir)
+		if uerr != nil {
+			fmt.Fprintf(os.Stderr, "aviso: no se pudieron inventariar los usos de %s: %v\n", *dir, uerr)
+		} else {
+			errazados := 0
+			for _, u := range usos {
+				encontro, metodoOK := casaYMetodo(u.URL, u.Metodo, rutas)
+				switch {
+				case !encontro:
+					fmt.Printf("ENLACE MUERTO %s:%d  %s  no registrada en el router (→ 404)\n", u.Archivo, u.Linea, u.URL)
+					errazados++
+				case u.Metodo != "" && !metodoOK:
+					fmt.Printf("VERBO INCORRECTO %s:%d  %s %s  la ruta existe pero no acepta ese verbo (→ 405)\n", u.Archivo, u.Linea, u.Metodo, u.URL)
+					errazados++
+				}
+			}
+			if errazados == 0 {
+				fmt.Printf("enlaces vivos: 0 rotos entre %d referencias revisadas\n", len(usos))
+			} else {
+				fmt.Printf("enlaces vivos: %d rotos entre %d referencias revisadas\n", errazados, len(usos))
+			}
+			if errazados > 0 {
+				fallidos += errazados
+			}
+		}
+	}
+
 	if fallidos > 0 {
 		os.Exit(1)
+	}
+}
+
+// templateFuncs replica interfaces/web.templateFuncs. Se mantiene aquí por
+// diseño: el comprobador es una herramienta independiente y no debe importar
+// el paquete web (que arrastra el servidor entero solo para leer una lista).
+// Si algún día divergen, el fallo aparece como "function not defined", que es
+// exactamente la señal que se busca.
+func templateFuncs() template.FuncMap {
+	return template.FuncMap{
+		"add":   func(a, b int) int { return a + b },
+		"sub":   func(a, b int) int { return a - b },
+		"money": func(v float64) string { return fmt.Sprintf("%.2f", v) },
+		"divf":  func(a, b float64) float64 { return a / b },
+		"query": func(string) string { return "" },
+		"today": func() string { return "" },
+		"now":   func() string { return "" },
+		// assetVer es la huella POR ARCHIVO de los recursos estáticos (el ?v= de
+		// cada <link>/<script> del layout). Se replica aquí con una constante no
+		// vacía: el chequeo sólo comprueba sintaxis y estructura, y un valor
+		// estable es lo que permite ejecutar el layout entero sin fingir un
+		// cambio de versión.
+		"assetVer": func(ruta string) string { return "deadbeef" },
+		// Debe replicarse aquí también: si el comprobador no conoce una función
+		// que la aplicación sí, da "function not defined" en una plantilla que
+		// funciona, y ese falso positivo es la forma segura de que la herramienta
+		// deje de usarse.
+		"catalogLabel": func(catalog string) string {
+			if catalog == "conasev" {
+				return "Catálogo CONASEV (SENIAT)"
+			}
+			return "Codificación propia de la empresa"
+		},
+		// kindLabel: la clase del documento de compra en la bandeja de
+		// recepción. Los literales son los de los valores de compra_hash.go
+		// (factura, nota_entrega, orden, sin_documento).
+		"kindLabel": func(kind string) string {
+			switch kind {
+			case "factura":
+				return "Factura"
+			case "nota_entrega":
+				return "Nota de entrega"
+			case "orden":
+				return "Orden de compra"
+			case "sin_documento":
+				return "Sin documento"
+			}
+			return "Sin clasificar"
+		},
 	}
 }
 
@@ -167,6 +210,22 @@ func isStructural(err error) bool {
 	return strings.Contains(err.Error(), "no such template") ||
 		strings.Contains(err.Error(), "can't evaluate field") ||
 		strings.Contains(err.Error(), "undefined variable")
+}
+
+// casaYMetodo dice, para un uso concreto, si alguna ruta registrada lo cubre y si
+// al menos una de esas rutas acepta el verbo del uso.
+func casaYMetodo(uso, metodo string, rutas []Ruta) (encontro, metodoOK bool) {
+	for _, r := range rutas {
+		if !casaRuta(uso, r) {
+			continue
+		}
+		encontro = true
+		// Una ruta sin prefijo de verbo acepta cualquier cosa (aceptaMetodo("")).
+		if r.aceptaMetodo(metodo) {
+			metodoOK = true
+		}
+	}
+	return encontro, metodoOK
 }
 
 // sampleData es el contexto mínimo para ejecutar el layout. No busca replicar

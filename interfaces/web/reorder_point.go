@@ -513,12 +513,26 @@ func (s *Server) CambiarEstadoSugerencia(r *http.Request, id int64, estado, moti
 // ---------------------------------------------------------------------------
 
 func (s *Server) registerReorderRoutes() {
+	// /inventory era el hub de inventario; al borrarse la página los tres
+	// "Volver a Inventario" de las pantallas de inventario (reorder/expiry/
+	// cycle_count) caían en 404. Se registra de nuevo como redirección al módulo
+	// principal de inventario existente, de modo que el enlace vuelva a existir
+	// sin tener que decidir aquí en el código qué pantalla era "la principal".
+	s.mux.HandleFunc("GET /inventory", s.inventarioHub)
 	s.mux.HandleFunc("GET /inventory/reorder", s.reorderPage)
 	s.mux.HandleFunc("GET /inventory/reorder/data", s.reorderData)
 	s.mux.HandleFunc("POST /inventory/reorder/policy", s.reorderPolicySave)
 	s.mux.HandleFunc("POST /inventory/reorder/recalc", s.reorderRecalc)
 	s.mux.HandleFunc("POST /inventory/reorder/suggestions", s.reorderSaveSuggestions)
 	s.mux.HandleFunc("POST /inventory/reorder/suggestion/status", s.reorderSuggestionStatus)
+}
+
+// inventarioHub responde a GET /inventory (la antigua página de inventario).
+// Redirige 302 a /inventory/reorder, que es el módulo principal de inventario
+// que reemplazó al hub: así los enlaces "Volver a Inventario" dejan de dar 404
+// sin forzar un destino que no es el adecuado.
+func (s *Server) inventarioHub(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/inventory/reorder", http.StatusFound)
 }
 
 func (s *Server) reorderPage(w http.ResponseWriter, r *http.Request) {
