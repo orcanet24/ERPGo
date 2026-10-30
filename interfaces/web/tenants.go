@@ -523,6 +523,27 @@ var controlSchema = []string{
 	// El índice cubre el barrido de expiradas, que es la única consulta
 	// frecuente sobre sesiones y de lo contrario sería un escaneo completo.
 	`CREATE INDEX idx_web_sessions_expires ON web_sessions(expires_at)`,
+	// Cola persistente de hooks_out (fase de addons 3, addon_hooks.go): cada
+	// evento de negocio va aquí primero y un runner lo entrega después del
+	// commit, con reintentos — el patrón del runner de facturación digital.
+	// La tienda lleva LA empresa del evento dentro: un aviso de la empresa A
+	// jamás se entrega con el contexto de la B.
+	`CREATE TABLE IF NOT EXISTS addon_hook_out (
+		id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+		addon_id VARCHAR(64) NOT NULL,
+		evento VARCHAR(100) NOT NULL,
+		empresa VARCHAR(64) NOT NULL DEFAULT '',
+		payload_json TEXT,
+		intentos INTEGER NOT NULL DEFAULT 0,
+		status VARCHAR(12) NOT NULL DEFAULT 'pending',
+		ultimo_error VARCHAR(500) NOT NULL DEFAULT '',
+		proximo VARCHAR(32) NOT NULL DEFAULT '',
+		creado VARCHAR(32) NOT NULL DEFAULT '',
+		enviado VARCHAR(32) NOT NULL DEFAULT ''
+	)`,
+	// El barrido del runner es SIEMPRE por status + proximo: sin índice sería
+	// un escaneo completo por tick en instalaciones con historia larga.
+	`CREATE INDEX idx_addon_hooks_pend ON addon_hook_out (status, proximo)`,
 }
 
 // ---------- Aprovisionamiento ----------

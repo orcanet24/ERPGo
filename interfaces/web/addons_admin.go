@@ -19,6 +19,7 @@ func (s *Server) registerAddonAdminRoutes() {
 	s.mux.HandleFunc("GET /module/addons/data", s.addonPanelData)
 	s.mux.HandleFunc("POST /module/addons/rescan", s.addonPanelReescanear)
 	s.mux.HandleFunc("POST /module/addons/{id}/restart", s.addonPanelReiniciar)
+	s.mux.HandleFunc("POST /module/addons/puertos", s.addonPanelPuertos)
 }
 
 // addonPanel muestra el estado de la frontera de addons.
@@ -75,4 +76,32 @@ func (s *Server) addonPanelReiniciar(w http.ResponseWriter, r *http.Request) {
 	s.addons.mu.Unlock()
 	s.addons.lanzarOReanudar(p)
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Addon relanzado.", "estado": s.addonsEstado()})
+}
+
+// addonPanelPuertos reasigna puertos: mata CADA addon vivo y lo relanza, y el
+// lanzamiento reserva puerto loopback nuevo (lanzarBajoCandado). Sirve cuando
+// un puerto quedó enredado (proceso huérfano, proxy atascado): el dueño no
+// tiene que matar procesos a mano ni reiniciar el ERP. El addon que ya estaba
+// caído recibe otro intento de lanzamiento.
+func (s *Server) addonPanelPuertos(w http.ResponseWriter, r *http.Request) {
+	if s.addons == nil {
+		jsonError(w, "No hay carpeta de addons en este arranque.", http.StatusNotFound)
+		return
+	}
+	s.addons.mu.Lock()
+	var lista []*addonProc
+	for _, p := range s.addons.progs {
+		lista = append(lista, p)
+	}
+	s.addons.mu.Unlock()
+	for _, p := range lista {
+		s.addons.mu.Lock()
+		if p.cmd != nil && p.cmd.Process != nil {
+			_ = p.cmd.Process.Kill()
+			p.cmd = nil
+		}
+		s.addons.mu.Unlock()
+		s.addons.lanzarOReanudar(p)
+	}
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Puertos reasignados: cada addon relanzado en un puerto loopback nuevo.", "estado": s.addonsEstado()})
 }

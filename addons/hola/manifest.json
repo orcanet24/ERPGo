@@ -1,9 +1,9 @@
 {
   "id": "hola",
   "name": "Hola, addon",
-  "version": "2.0.0",
-  "min_core_version": "0.2.0",
-  "description": "Addon demostrativo de la frontera fase 2: pantalla propia, tabla propia (migración), y una escritura de negocio por el canal /__addon/ que baja por el orquestador.",
+  "version": "3.0.0",
+  "min_core_version": "0.3.0",
+  "description": "Addon demostrativo de la frontera fase 3: pantalla propia, tabla propia (migración), escritura de negocio por el canal /__addon/ que baja por el orquestador, y hooks: recibe el aviso factura.emitida por la cola del núcleo.",
   "author": "ERPGo",
   "routes": ["/hola"],
   "menu": [
@@ -23,5 +23,6 @@
   "tables_own": ["hola_mensajes"],
   "db_write": [
     { "verb": "mensaje.registrar", "perm": "hola_ver" }
-  ]
+  ],
+  "hooks_out": ["factura.emitida"]
 }

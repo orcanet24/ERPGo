@@ -301,14 +301,38 @@ tablas son suyas, y el núcleo ni recuerda que existieron.
   handler de negocio y su prueba.
 - Migraciones de tablas propias en el arranque, nombres prefijados por `id`.
 
-### Fase 3 — Confianza y reactividad
-- Firma ed25519 del manifiesto y verificación en el arranque; modo
-  `ADDONS_UNSIGNED` solo para desarrollo, con la clara indicación «sin
-  verificar» en la pantalla Módulos.
-- `hooks_out` con cola persistente y reintentos; `hooks_in` con timeout y
-  otro camino si el addon no responde.
-- Pantalla Módulos: historia de hooks entregados, versión instalada de cada
-  addon y botón de reasignación de puertos.
+### Fase 3 — Confianza y reactividad (la frontera ya corre con ella)
+- Firma ed25519 del manifiesto y verificación en el arranque. La clave
+  pública del dueño vive en `addons/pubkey.ed25519`; con ella configurada la
+  firma es obligatoria, `ADDONS_UNSIGNED=1` es el modo SOLO de desarrollo
+  (los sin firma cargan con la marca «sin verificar»), y una firma presente
+  e inválida no carga en NINGÚN modo: significa que el manifiesto cambió
+  después de firmar. La pareja se genera y se usan con `tools/firmaraddon`
+  (`clave` / `firmar addons/<id>` / `verificar`); la privada jamás al repo.
+- `hooks_out` con cola persistente (`addon_hook_out` en la BD de control,
+  esquema portable) y reintentos: el núcleo encola tras el commit (hoy el
+  punto real es `factura.emitida`, en el registro de factura definitiva) y un
+  runner cada 30 s entrega `POST /hooks/<evento>` con el token de ESTA sesión
+  y `X-ERP-Tenant`. Backoff 1m→30m, tope 8 intentos; la fila queda 'sent',
+  'failed' (con su motivo) o 'descartado' si el addon ya no está — jamás un
+  martilleo infinito y jamás se frena la factura que originó el aviso.
+- `hooks_in` con timeout de 3 s y otro camino: `Server.addonHookPedir(id,
+  hook, empresa, payload, tope)` exige el hook declarado en `hooks_in`, y si
+  el addon cae o tarda, el error va explicado y el flujo de negocio sigue sin
+  él. Los puntos de negocio reales que lo llaman llegan con los addons que
+  piden (p. ej. el regreso de WhatsApp como addon).
+- Pantalla Módulos (fase 3): estado de firma por addon (con aviso global si
+  falta la clave pública), suscripciones hooks_out / ofertas hooks_in,
+  historia de hooks entregados con intentos y motivos, versión instalada de
+  cada addon y botón «Reasignar puertos» (relanza cada addon en puerto
+  loopback nuevo sin reiniciar el ERP).
+- Criterios de cierre: pruebas nuevas `TestElManifiestoFase3ValidaHooks`,
+  `TestLaFirmaDelManifiestoDecideQuienCarga`,
+  `TestLosHooksOutSeEncolanYSeEntreganConReintentos`,
+  `TestElHookInPideConPlazoYSigueSinElAddon`,
+  `TestElPanelFase3MuestraFirmaHooksYHistoria` y
+  `TestElBotonDePuertosRelanzaCadaAddon`; el demo `addons/hola` (v3.0.0)
+  suscribe `factura.emitida` y la recibe de verdad a través del binario real.
 
 ---
 

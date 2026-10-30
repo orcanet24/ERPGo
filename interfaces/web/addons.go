@@ -12,13 +12,15 @@ package web
 // sesión del ERP. El núcleo ES este archivo y la administración de una vez;
 // los addons ya no tocan el resto del código.
 //
-// Qué es fase 1 y qué no. Aquí está: escáner, validación del manifiesto,
-// registro en modules/menu (la pantalla Módulos que ya existe), lanzamiento con
-// token efímero y puerto reservado, proxy inverso de las rutas declaradas,
-// estado de salud, reinicio, y el canal de negocio /__addon/ autenticado (sin
-// verbs de escritura: llegan en fase 2). NO hay: conexión de lectura (fase 2),
-// creación de tablas propias (fase 2), firma del manifiesto (fase 3) ni hooks
-// (fase 3). Lo declarado y no concedido se ve en el panel con esa indicación.
+// Qué es fase 3. Fase 1 (frontera viva: escáner, manifiesto, lanzamiento,
+// proxy, canal) y fase 2 (lectura granular, escritura por el orquestador, tablas
+// propias) ya respiran. La fase 3 añade confianza y reactividad: el manifiesto
+// se verifica con ed25519 (clave pública del dueño en addons/ + manifest.sig;
+// ADDONS_UNSIGNED=1 solo para desarrollo, y hasta una firma INCORRECTA se
+// rechaza en cualquier modo), y los hooks: hooks_out con cola persistente en la
+// BD de control y reintentos (patrón del runner de facturación digital),
+// hooks_in con timeout y camino de retorno si el addon no responde. El detalle
+// vive en addon_hooks.go; aquí está el candado del manifiesto y la firma.
 //
 // LO QUE NO SE NEGOCIA: un addon muerto jamás derriba al ERP (solo su ruta da
 // 502 con mensaje claro), las cookies del ERP jamás llegan al addon, y las
@@ -26,6 +28,7 @@ package web
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/rand"
 	"database/sql"
 	"erpgo/infrastructure/persistence"
@@ -49,13 +52,14 @@ import (
 
 // addonCoreVersion es lo que un manifiesto puede exigir como mínimo.
 // Sube cuando la frontera gana capacidades nuevas (fase 1: la frontera viva;
-// fase 2: lectura granular, escritura por el orquestador y tablas propias).
-const addonCoreVersion = "0.2.0"
+// fase 2: lectura granular, escritura por el orquestador y tablas propias;
+// fase 3: firma del manifiesto y hooks).
+const addonCoreVersion = "0.3.0"
 
 // addonFase marca la fase de la frontera que corre este binario, para que el
-// panel diga la verdad («fase 2: lectura, escritura por el canal y tablas
-// propias; firma y hooks llegan en fase 3»).
-const addonFase = 2
+// panel diga la verdad («fase 3: firma, lectura, escritura por el canal, tablas
+// propias y hooks»).
+const addonFase = 3
 
 // reservaDePrefijosCore son los prefijos de ruta que el núcleo ya usa. Un
 // manifiesto que pida una de estas rutas no se instala: si le diéramos el
@@ -67,10 +71,16 @@ var reservaDePrefijosCore = []string{
 }
 
 var (
-	addonReID    = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{1,38}$`)
-	addonReRuta  = regexp.MustCompile(`^/[a-z0-9][a-z0-9_-]{0,60}(/[a-z0-9_-]{1,60})*$`)
-	addonReTabla = regexp.MustCompile(`^[a-z][a-z0-9_]{0,60}$`)
-	addonRePerm  = regexp.MustCompile(`^[a-z0-9][a-z0-9_]{0,60}$`)
+	addonReID     = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{1,38}$`)
+	addonReRuta   = regexp.MustCompile(`^/[a-z0-9][a-z0-9_-]{0,60}(/[a-z0-9_-]{1,60})*$`)
+	addonReTabla  = regexp.MustCompile(`^[a-z][a-z0-9_]{0,60}$`)
+	addonRePerm   = regexp.MustCompile(`^[a-z0-9][a-z0-9_]{0,60}$`)
+
+	// Los hooks se nombran igual que los verbs: dominio.accion para los
+	// eventos que el núcleo emite (factura.emitida) y nombre con guiones bajos
+	// para lo que el addon ofrece (send_whatsapp). Un nombre sin forma no va a
+	// ningún lado y solo traería confusión al leer la historia de hooks.
+	addonReHook = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)
 
 	// Los verbs de db_write son operaciones de negocio CON NOMBRE y en dos
 	// partes (dominio.accion, como invoice.send): no es SQL libre, es la
@@ -119,6 +129,13 @@ type addonVerbo struct {
 	Verb string `json:"verb"`
 	Perm string `json:"perm"`
 }
+
+// eventosHooksCore es el catálogo de eventos que el NÚCLEO emite por hooks_out.
+// Un addon solo puede SUSCRIBIRSE a uno de estos: si declarara un evento que el
+// núcleo nunca dispara, el panel vendería una suscripción que nunca suena. El
+// catálogo crece junto con los puntos de negocio (hoy: la factura que se
+// registra como definitiva en invoice.go).
+var eventosHooksCore = []string{"factura.emitida", "compra.registrada", "retencion.emitida"}
 
 // addonManifest es el permiso de trabajo del addon: lo que declara, existe.
 type addonManifest struct {
@@ -236,6 +253,41 @@ func validarManifiesto(m *addonManifest) error {
 		if t == m.ID || !strings.HasPrefix(t, m.ID+"_") {
 			return fmt.Errorf("la tabla %q debe empezar por el prefijo del id (%s_…): las tablas del ERP no son suyas", t, m.ID)
 		}
+	}
+
+	// Hooks (fase 3): hooks_out solo suscribe eventos que el núcleo emite de
+	// verdad (el catálogo eventosHooksCore); hooks_in declara lo que el addon
+	// OFRECE, con nombre bien formado. En ambos casos, un hook declarado dos
+	// veces es una declaración mentirosa: se recibe o se pide doble.
+	vistosOut := map[string]bool{}
+	for _, h := range m.HooksOut {
+		if !addonReHook.MatchString(h) {
+			return fmt.Errorf("el hook de salida %q es inválido: usa dominio.accion (ej. factura.emitida)", h)
+		}
+		if vistosOut[h] {
+			return fmt.Errorf("el hook de salida %q está declarado dos veces", h)
+		}
+		conocido := false
+		for _, ev := range eventosHooksCore {
+			if ev == h {
+				conocido = true
+				break
+			}
+		}
+		if !conocido {
+			return fmt.Errorf("el hook de salida %q no es un evento que este núcleo emita (emite: %v)", h, eventosHooksCore)
+		}
+		vistosOut[h] = true
+	}
+	vistosIn := map[string]bool{}
+	for _, h := range m.HooksIn {
+		if !addonReHook.MatchString(h) {
+			return fmt.Errorf("el hook de entrada %q es inválido: usa un nombre con guiones bajos (ej. send_whatsapp)", h)
+		}
+		if vistosIn[h] {
+			return fmt.Errorf("el hook de entrada %q está declarado dos veces", h)
+		}
+		vistosIn[h] = true
 	}
 
 	// Menú: cada URL cae bajo una ruta declarada y cada permiso citado está
@@ -361,6 +413,11 @@ type addonProc struct {
 	lecturaOK    bool
 	lecturaAviso string
 
+	// Fase 3: estado de la firma del manifiesto (verificada, sin verificar,
+	// sin firma). El panel lo muestra tal cual: el dueño decide con qué
+	// confianza corre su ERP.
+	firma string
+
 	proxy *httputil.ReverseProxy
 }
 
@@ -384,6 +441,18 @@ type addonHost struct {
 	// Inyectable para pruebas; por defecto es s.crearUsuarioLectorAddon.
 	crearLectura func(m addonManifest) (string, error)
 
+	// Fase 3 (confianza): la clave pública ed25519 del dueño (addons/
+	// pubkey.ed25519) y el modo de desarrollo ADDONS_UNSIGNED. Con clave
+	// configurada, un addon sin manifest.sig no carga salvo modo desarrollo;
+	// una firma PRESENTE e inválida no carga en ningún modo: significa
+	// manifiesto TOCADO después de firmar, y el modo dev es para iterar sin
+	// infraestructura de firma, no para aceptar daño activo.
+	clavePub ed25519.PublicKey
+	unsigned bool
+
+	// entrega REAL de un hook_out, inyectable para pruebas (a un servidor
+	// catapulta que registra la llamada); por defecto es entregarReal.
+	entregar func(p *addonProc, evento string, payload []byte, empresa, token string, puerto int) error
 	// inyectables para pruebas
 	lanzar func(p *addonProc, binario string, env []string) error
 	ahora  func() time.Time
@@ -428,13 +497,29 @@ func (s *Server) addonsIniciar() {
 		ahora:        time.Now,
 		parado:       make(chan struct{}),
 	}
+	h.entregar = h.entregarReal
 	h.lanzar = h.lanzarReal
 	s.addons = h
+
+	// Fase 3: la clave pública con la que el dueño firma, si la puso en addons/
+	// pubkey.ed25519 (hex ed25519). Sin clave, todo corre «sin verificar» y el
+	// panel lo dice; con clave, la firma es obligatoria.
+	if pub, ok := addonClavePublica(dir); ok {
+		h.clavePub = pub
+	} else {
+		log.Printf("AVISO addons: sin addons/pubkey.ed25519: los manifiestos NO se verifican en este arranque")
+	}
+	h.unsigned = os.Getenv("ADDONS_UNSIGNED") == "1"
+	if h.unsigned {
+		log.Printf("AVISO addons: modo ADDONS_UNSIGNED con verificación en firme; los manifiestos SIN firma cargan con marca «sin verificar»")
+	}
 
 	if err := h.reescanear(); err != nil {
 		log.Printf("AVISO addons: no se pudo iniciar el host de addons: %v (el ERP sigue funcionando sin addons)", err)
 		return
 	}
+	h.crearTablaHooks()
+	go h.vigilarHooks()
 	go h.vigilarSalud()
 }
 
@@ -501,9 +586,64 @@ func (h *addonHost) escanear() (map[string]*addonProc, []string) {
 			}
 			migraciones = sentencias
 		}
-		fila[m.ID] = &addonProc{manifiesto: m, dir: dir, migraciones: migraciones}
+		// Fase 3: firma del manifiesto, ANTES de que la carpeta toque el ERP.
+		estadoFirma, err := h.verificarFirmaAddon(dir, contenido)
+		if err != nil {
+			avisos = append(avisos, fmt.Sprintf("%s: %v", e.Name(), err))
+			continue
+		}
+		fila[m.ID] = &addonProc{manifiesto: m, dir: dir, migraciones: migraciones, firma: estadoFirma}
 	}
 	return fila, avisos
+}
+
+// addonClavePublica lee la clave pública ed25519 del dueño (hex) en
+// <directorio>/pubkey.ed25519. La PRIVADA jamás vive aquí: el dueño firma con
+// tools/firmaraddon y solo deposita la pública junto a los addons.
+func addonClavePublica(directorio string) (ed25519.PublicKey, bool) {
+	crudo, err := os.ReadFile(filepath.Join(directorio, "pubkey.ed25519"))
+	if err != nil {
+		return nil, false
+	}
+	claves, err := hex.DecodeString(strings.TrimSpace(string(crudo)))
+	if err != nil || len(claves) != ed25519.PublicKeySize {
+		return nil, false
+	}
+	return ed25519.PublicKey(claves), true
+}
+
+// verificarFirmaAddon decide el estado de la firma de UN addon y, de paso,
+// rechaza lo que no entra por política:
+//
+//   - Sin clave pública configurada: no hay verificación posible, todo corre
+//     «sin verificar» (la pantalla del panel lo dice con claridad).
+//   - Con clave: la firma es obligatoria. Un addon sin manifest.sig carga SOLO
+//     en modo de desarrollo (ADDONS_UNSIGNED=1), marcado «sin verificar». Una
+//     firma presente e inválida NO carga en ningún modo: significa que el
+//     manifiesto cambió después de firmar, y eso no es iteración, es daño.
+
+func (h *addonHost) verificarFirmaAddon(dir string, contenido []byte) (string, error) {
+	if h.clavePub == nil {
+		return "sin verificar", nil
+	}
+	sig, err := os.ReadFile(filepath.Join(dir, "manifest.sig"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			if h.unsigned {
+				return "sin verificar", nil
+			}
+			return "", fmt.Errorf("la clave pública del dueño está configurada y el addon NO trae manifest.sig: fírmelo con tools/firmaraddon, o pongo ADDONS_UNSIGNED=1 para desarrollo")
+		}
+		return "", fmt.Errorf("leyendo manifest.sig: %w", err)
+	}
+	firma, err := hex.DecodeString(strings.TrimSpace(string(sig)))
+	if err != nil || len(firma) != ed25519.SignatureSize {
+		return "", fmt.Errorf("manifest.sig no es una firma ed25519 en hex (%d bytes decodificados de %d esperados)", len(firma), ed25519.SignatureSize)
+	}
+	if !ed25519.Verify(h.clavePub, contenido, firma) {
+		return "", fmt.Errorf("la firma de manifest.sig NO corresponde al manifest.json actual: el manifiesto cambió después de firmar y no se carga")
+	}
+	return "verificada", nil
 }
 
 // reescanear aplica el estado de la carpeta addons/ al ERP: manifiestos →
@@ -1572,11 +1712,15 @@ func (s *Server) addonsEstado() map[string]interface{} {
 			"db_read":      m.DBRead, "db_write": verbos,
 			"tables_own": m.TablesOwn, "perms": m.Perms,
 			"lectura_aviso": p.lecturaAviso,
+			// Fase 3: firma del manifiesto y suscripciones de hooks.
+			"firma": p.firma,
+			"hooks_out": m.HooksOut, "hooks_in": m.HooksIn,
 			"concedido": map[string]bool{
 				"db_read": len(m.DBRead) > 0 && p.lecturaOK,
 				"db_write": len(m.DBWrite) > 0,
 				"tables": len(m.TablesOwn) > 0,
-				"hooks": false,
+				"hooks": len(m.HooksOut) > 0 || len(m.HooksIn) > 0,
+				"firma": p.firma == "verificada",
 			},
 		})
 	}
@@ -1584,12 +1728,22 @@ func (s *Server) addonsEstado() map[string]interface{} {
 	if avisos == nil {
 		avisos = []string{}
 	}
+	claveConfigurada := h.clavePub != nil
+	unsigned := h.unsigned
+	h.mu.Unlock()
+	historia := s.addonsHooksHistoria(30)
+	h.mu.Lock()
 	return map[string]interface{}{
 		"fase":    addonFase,
 		"core":    addonCoreVersion,
 		"addons":  limpio,
 		"avisos":  avisos,
 		"directorio": h.directorio,
+		// Fase 3: confianza. Si la clave pública del dueño no está en addons/
+		// pubkey.ed25519, NADA se verifica y el panel lo dice de frente.
+		"firma_publica": claveConfigurada,
+		"unsigned_mode": unsigned && claveConfigurada,
+		"historia_hooks": historia,
 	}
 }
 

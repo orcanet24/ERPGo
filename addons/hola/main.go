@@ -75,6 +75,11 @@ func main() {
 	})
 	mux.HandleFunc("/hola", pantalla)
 	mux.HandleFunc("/hola/mensaje", mensaje)
+	// hooks_out (fase 3): el núcleo entrega el aviso factura.emitida con el
+	// token de ESTA sesión y la empresa del evento. El demo solo lo registra:
+	// aquí es donde un addon real dispararía su fluxo de negocio (WhatsApp,
+	// reporte, lo que sea) SIN frenar la factura que lo originó.
+	mux.HandleFunc("/hooks/factura.emitida", hookFactura)
 
 	srv := &http.Server{Addr: "127.0.0.1:" + porte, Handler: mux}
 	log.Printf("hola: addon activo en 127.0.0.1:%s", porte)
@@ -91,6 +96,30 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil {
 		log.Printf("hola: servidor terminado: %v", err)
 	}
+}
+
+// hookFactura recibe el aviso de la cola de hooks del núcleo: badge del
+// token (mismo contrato que el canal y /shutdown) y JSON en el cuerpo. No
+// escribir nada: la entrega ya quedó marcada 'sent' o reintentará.
+func hookFactura(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "El hook va por POST.", http.StatusMethodNotAllowed)
+		return
+	}
+	if r.Header.Get("X-ERP-Addon-Token") != token {
+		http.Error(w, "Sin el token de esta sesión no hay hook.", http.StatusForbidden)
+		return
+	}
+	var aviso struct {
+		InvoiceID int64  `json:"invoice_id"`
+		ControlNo string `json:"control_no"`
+		Empresa   string `json:"empresa"`
+	}
+	_ = json.NewDecoder(io.LimitReader(r.Body, 256*1024)).Decode(&aviso)
+	log.Printf("hola: hook factura.emitida recibido: factura %d (%s) empresa %q", aviso.InvoiceID, aviso.ControlNo, r.Header.Get("X-ERP-Tenant"))
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":1}`))
 }
 
 // pantalla es la página del addon. Muestra el contexto que le entrega el ERP

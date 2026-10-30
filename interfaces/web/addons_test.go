@@ -1,12 +1,13 @@
 package web
 
-// addons_test.go — Pruebas de la frontera (docs/PLAN-ADDONS.md, fase 2).
+// addons_test.go — Pruebas de la frontera (docs/PLAN-ADDONS.md, fases 1-3).
 //
 // Lo que cada prueba protege, sin adornos:
 //
 //   - El candado del manifiesto: nada entra a correr si su declaratoria tiene
 //     escaleras que escalar (id raro, ruta del núcleo, permiso con prefijo ajeno,
-//     tabla sin prefijo del id, menú que cita permisos no declarados).
+//     tabla sin prefijo del id, menú que cita permisos no declarados; en fase 3,
+//     hooks_out a eventos que el núcleo no emite).
 //   - El registro: addons → filas de modules/menu en la base de empresa, y el
 //     desinstalado queda «no instalado» con filas inactivas, jamás borradas.
 //   - El proxy: reenvía con X-ERP-* y SIN cookies del ERP.
@@ -17,6 +18,11 @@ package web
 //     exige schema.sql con CREATE TABLE IF NOT EXISTS (solo sus tablas);
 //     el DSN de lectura granular llega por entorno o se explica en el panel;
 //     la escritura exige POST, JSON, sesión viva, empresa y permiso.
+//   - Fase 3: firma ed25519 (sin clave: «sin verificar»; con clave: sin firma
+//     no carga salvo ADDONS_UNSIGNED, y una firma inválida no carga NUNCA);
+//     hooks_out con cola persistente, entrega con token y reintentos con
+//     backoff al tope; hooks_in con plazo y camino de retorno; el panel con
+//     firma, hooks y la historia de entregas; el botón de puertos.
 //   - El ciclo completo con el addon REAL del repo (addons/hola): se compila,
 //     se lanza, sirve su página, y matarlo no derriba al ERP.
 //
@@ -24,10 +30,15 @@ package web
 // el binario del demo; nunca se dá por buena una pieza que solo vive en RAM.
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -830,6 +841,507 @@ func TestElCicloCompletoDelAddonDemo(t *testing.T) {
 
 	// Cierre ordenado del host: nada queda al aire.
 	h.parar()
+}
+
+// ---------- Fase 3: firma, hooks y panel ----------
+
+const manifiestoHolaHooks = `{
+  "id": "hola", "name": "Hola, addon", "version": "3.0.0", "min_core_version": "0.3.0",
+  "description": "demo", "author": "ERPGo",
+  "routes": ["/hola"],
+  "menu": [{"parent_id": null, "label": "Hola addon", "url": "/hola", "icon": "fa-smile-o", "perms": ["hola_ver"], "sort_order": 90}],
+  "perms": [{"code": "hola_ver", "label": "Ver la pantalla"}],
+  "hooks_out": ["factura.emitida"]
+}`
+
+func TestElManifiestoFase3ValidaHooks(t *testing.T) {
+	// Los hooks bien declarados caben.
+	valido := manifiestoValido()
+	valido.HooksOut = []string{"factura.emitida"}
+	valido.HooksIn = []string{"send_whatsapp"}
+	if err := validarManifiesto(valido); err != nil {
+		t.Fatalf("los hooks bien declarados debían caber: %v", err)
+	}
+	// Cada daño posible con su aviso esperado.
+	bases := []struct {
+		nombre string
+		hatNew func() *addonManifest
+		quota string
+	}{
+		{"hook_out a un evento que el núcleo no emite", func() *addonManifest {
+			m := manifiestoValido()
+			m.HooksOut = []string{"alien.landing"}
+			return m
+		}, "no es un evento que este núcleo emita"},
+		{"hook_out con nombre mal formado", func() *addonManifest {
+			m := manifiestoValido()
+			m.HooksOut = []string{"Factura!"}
+			return m
+		}, "es inválido"},
+		{"hook_out duplicado", func() *addonManifest {
+			m := manifiestoValido()
+			m.HooksOut = []string{"factura.emitida", "factura.emitida"}
+			return m
+		}, "dos veces"},
+		{"hook_in con nombre mal formado", func() *addonManifest {
+			m := manifiestoValido()
+			m.HooksIn = []string{"Send WhatsApp!"}
+			return m
+		}, "es inválido"},
+		{"hook_in duplicado", func() *addonManifest {
+			m := manifiestoValido()
+			m.HooksIn = []string{"send_whatsapp", "send_whatsapp"}
+			return m
+		}, "dos veces"},
+	}
+	for _, b := range bases {
+		if err := validarManifiesto(b.hatNew()); err == nil {
+			t.Fatalf("%s debía rechazarse", b.nombre)
+		} else if !strings.Contains(err.Error(), b.quota) {
+			t.Fatalf("%s debía explicar %q, explicó: %v", b.nombre, b.quota, err)
+		}
+	}
+}
+
+// parejaDePrueba genera una pareja ed25519 y deja la PÚBLICA en la raíz de
+// addons (pubkey.ed25519), tal como lo dejaría tools/firmaraddon clave. En las
+// pruebas la clave pública se instala a mano en el host (h.clavePub): quien
+// la lee del disco es addonsIniciar, y la prueba monta el host de una pieza.
+func parejaDePrueba(t *testing.T, raiz string) (ed25519.PublicKey, ed25519.PrivateKey) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(raiz, "pubkey.ed25519"), []byte(hex.EncodeToString(pub)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return pub, priv
+}
+
+// escribirFirma firma los bytes que llegan (el manifest.json tal cual está en
+// disco) con la privada de la prueba y deja manifest.sig al lado del addon.
+func escribirFirma(t *testing.T, raiz string, priv ed25519.PrivateKey, contenido string) {
+	t.Helper()
+	firma := ed25519.Sign(priv, []byte(contenido))
+	if err := os.WriteFile(filepath.Join(raiz, "hola", "manifest.sig"), []byte(hex.EncodeToString(firma)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func firmaDe(t *testing.T, h *addonHost) (string, bool) {
+	t.Helper()
+	h.mu.Lock()
+	p := h.progs["hola"]
+	h.mu.Unlock()
+	if p == nil {
+		return "", false
+	}
+	return p.firma, true
+}
+
+func TestLaFirmaDelManifiestoDecideQuienCarga(t *testing.T) {
+	// a) Sin clave pública en addons/: nada se verifica y todo corre, con la
+	// marca «sin verificar» que la pantalla explicará.
+	raiz := addonDirPrueba(t, manifiestoHola)
+	_, h := hostDeAddon(t, raiz)
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	if firma, _ := firmaDe(t, h); firma != "sin verificar" {
+		t.Fatalf("sin clave pública el estado debía ser «sin verificar», fue %q", firma)
+	}
+
+	// Con la clave del dueño puesta, la política manda. La pública va al host
+	// tal como addonsIniciar la pondría leyendo pubkey.ed25519.
+	raiz2 := addonDirPrueba(t, manifiestoHola)
+	pub, priv := parejaDePrueba(t, raiz2)
+
+	// b) Con clave y SIN manifest.sig, sin modo desarrollo: NO carga, y el
+	// aviso dice qué hacer (firmar o modo de desarrollo).
+	_, h2 := hostDeAddon(t, raiz2)
+	h2.clavePub = pub
+	if err := h2.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	if _, cargada := firmaDe(t, h2); cargada {
+		t.Fatal("un addon sin firma, con clave pública configurada, debía quedar fuera")
+	}
+	var avisoFirma string
+	for _, a := range h2.avisos {
+		if strings.Contains(a, "manifest.sig") {
+			avisoFirma = a
+		}
+	}
+	if avisoFirma == "" {
+		t.Fatalf("la negación debía explicar la firma; avisos: %v", h2.avisos)
+	}
+
+	// c) El mismo, en modo de desarrollo (ADDONS_UNSIGNED=1): carga, pero con
+	// la marca «sin verificar» bien puesta.
+	_, h3 := hostDeAddon(t, raiz2)
+	h3.clavePub = pub
+	h3.unsigned = true
+	if err := h3.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	if firma, cargada := firmaDe(t, h3); !cargada || firma != "sin verificar" {
+		t.Fatalf("en modo desarrollo el addon debía cargar «sin verificar»; quedó %q (cargada=%v)", firma, cargada)
+	}
+
+	// d) Firma VÁLIDA del manifiesto tal cual está en disco: carga «verificada».
+	contenido, err := os.ReadFile(filepath.Join(raiz2, "hola", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	escribirFirma(t, raiz2, priv, string(contenido))
+	_, h4 := hostDeAddon(t, raiz2)
+	h4.clavePub = pub
+	if err := h4.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	if firma, cargada := firmaDe(t, h4); !cargada || firma != "verificada" {
+		t.Fatalf("la firma correcta debía cargar «verificada»; quedó %q (cargada=%v)", firma, cargada)
+	}
+
+	// e) Firma válida de la versión VIEJA y manifiesto tocado después: NO
+	// carga en NINGÚN modo (el modo desarrollo es para iterar SIN firma, no
+	// para acepta un manifiesto que cambió después de firmar).
+	if err := os.WriteFile(filepath.Join(raiz2, "hola", "manifest.json"), []byte(string(contenido)+" "), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, h5 := hostDeAddon(t, raiz2)
+	h5.clavePub = pub
+	h5.unsigned = true
+	if err := h5.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	if _, cargada5 := firmaDe(t, h5); cargada5 {
+		t.Fatal("un manifiesto tocado después de firmar debía quedar fuera en CUALQUIER modo")
+	}
+}
+
+// baseHooks monta el host con la cola de hooks en la base de prueba, listo
+// para encolar y entregar.
+func baseHooks(t *testing.T) (*Server, *addonHost) {
+	s, db := basePrueba(t)
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS addon_hook_out (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, addon_id TEXT, evento TEXT, empresa TEXT,
+		payload_json TEXT, intentos INTEGER DEFAULT 0, status TEXT DEFAULT 'pending',
+		ultimo_error TEXT DEFAULT '', proximo TEXT DEFAULT '', creado TEXT DEFAULT '',
+		enviado TEXT DEFAULT '')`); err != nil {
+		t.Fatal(err)
+	}
+	h := &addonHost{
+		s: s, directorio: addonDirPorDefecto,
+		progs:       map[string]*addonProc{},
+		rutasDelMux: map[string]bool{},
+		ahora:       time.Now,
+		parado:      make(chan struct{}),
+	}
+	s.addons = h
+	return s, h
+}
+
+func TestLosHooksOutSeEncolanYSeEntreganConReintentos(t *testing.T) {
+	s, h := baseHooks(t)
+
+	// El receptor: un httptest real en loopback con el contrato del addon
+	// (POST /hooks/<evento>, token, empresa, JSON).
+	var recibidas []map[string]interface{}
+	var empresaRecibida, tokenRecibido string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/hooks/factura.emitida" || r.Method != http.MethodPost {
+			http.Error(w, "no", http.StatusNotFound)
+			return
+		}
+		tokenRecibido = r.Header.Get("X-ERP-Addon-Token")
+		empresaRecibida = r.Header.Get("X-ERP-Tenant")
+		var cuerpo map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&cuerpo)
+		recibidas = append(recibidas, cuerpo)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":1}`))
+	}))
+	defer srv.Close()
+	puerto := srv.Listener.Addr().(*net.TCPAddr).Port
+	proceso := addonProc{
+		manifiesto: addonManifest{ID: "hola", HooksOut: []string{"factura.emitida"}},
+		estado:     estadoActivo, token: "token-de-esta-sesion", puerto: puerto,
+	}
+	h.mu.Lock()
+	h.progs["hola"] = &proceso
+	h.mu.Unlock()
+
+	// El evento nace pendiente y ya vencido (el próximo tick lo toma).
+	h.hookEncolar("factura.emitida", "acme", map[string]interface{}{"invoice_id": 123})
+	ctl, err := s.controlStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cantidad int
+	if err := ctl.QueryRow(`SELECT COUNT(*) FROM addon_hook_out WHERE status='pending'`).Scan(&cantidad); err != nil {
+		t.Fatal(err)
+	}
+	if cantidad != 1 {
+		t.Fatalf("el evento debía nacer pendiente; filas=%d", cantidad)
+	}
+
+	// Una pasada del runner lo entrega con el token de ESTA sesión y la empresa
+	// del evento; la fila queda 'sent' con su sello.
+	h.entregarPendientes()
+	if tokenRecibido != "token-de-esta-sesion" || empresaRecibida != "acme" {
+		t.Fatalf("la entrega debía llevar token y empresa; token=%q empresa=%q", tokenRecibido, empresaRecibida)
+	}
+	if len(recibidas) != 1 || recibidas[0]["invoice_id"] != 123.0 {
+		t.Fatalf("el cuerpo del aviso llegó mal: %+v", recibidas)
+	}
+	var status string
+	if err := ctl.QueryRow(`SELECT status FROM addon_hook_out`).Scan(&status); err != nil || status != "sent" {
+		t.Fatalf("la fila entregada debía quedar sent; quedó %q (%v)", status, err)
+	}
+
+	// Un evento que NADIE suscribe no llega ni a la cola.
+	h.hookEncolar("compra.registrada", "acme", map[string]string{})
+	if err := ctl.QueryRow(`SELECT COUNT(*) FROM addon_hook_out WHERE evento='compra.registrada'`).Scan(&cantidad); err != nil {
+		t.Fatal(err)
+	}
+	if cantidad != 0 {
+		t.Fatal("un evento sin suscriptor no debía tocar la cola")
+	}
+
+	// El addon que la fila espera ya no está cargado: queda 'descartado' con
+	// su motivo, no un martilleo hacia nada.
+	h.hookEncolar("factura.emitida", "otra", map[string]string{})
+	h.mu.Lock()
+	delete(h.progs, "hola")
+	h.mu.Unlock()
+	h.entregarPendientes()
+	h.mu.Lock()
+	h.progs["hola"] = &proceso
+	h.mu.Unlock()
+	if err := ctl.QueryRow(`SELECT status FROM addon_hook_out WHERE id=(SELECT MAX(id) FROM addon_hook_out)`).Scan(&status); err != nil || status != "descartado" {
+		t.Fatalf("la fila de un addon retirado debía quedar descartada; quedó %q (%v)", status, err)
+	}
+
+	// La entrega falla: intento 1 con backoff; al agotar, 'failed' con motivo,
+	// jamás un reintentoo infinito.
+	h.mu.Lock()
+	h.entregar = func(p *addonProc, evento string, payload []byte, empresa, token string, puerto int) error {
+		return fmt.Errorf("el addon respondió 500 al hook")
+	}
+	h.mu.Unlock()
+	h.hookEncolar("factura.emitida", "acme2", map[string]string{})
+	h.entregarPendientes()
+	var intentos int
+	var proximo string
+	if err := ctl.QueryRow(`SELECT intentos, proximo FROM addon_hook_out WHERE id=(SELECT MAX(id) FROM addon_hook_out)`).Scan(&intentos, &proximo); err != nil {
+		t.Fatal(err)
+	}
+	if intentos != 1 {
+		t.Fatalf("la primera falla debía registrar intento 1, quedó %d", intentos)
+	}
+	if proximo == h.sello() {
+		t.Fatal("tras una falla el próximo intento debía ir más tarde (backoff)")
+	}
+	for i := 0; i < hookMaxIntentos-1; i++ {
+		if _, err := ctl.Exec(`UPDATE addon_hook_out SET proximo = ? WHERE status='pending'`, h.sello()); err != nil {
+			t.Fatal(err)
+		}
+		h.entregarPendientes()
+	}
+	if err := ctl.QueryRow(`SELECT status FROM addon_hook_out WHERE id=(SELECT MAX(id) FROM addon_hook_out)`).Scan(&status); err != nil || status != "failed" {
+		t.Fatalf("tras agotar los intentos la fila debía quedar failed; quedó %q (%v)", status, err)
+	}
+	var motivo string
+	if err := ctl.QueryRow(`SELECT ultimo_error FROM addon_hook_out WHERE id=(SELECT MAX(id) FROM addon_hook_out)`).Scan(&motivo); err != nil || motivo == "" {
+		t.Fatalf("la fila fallida debía llevar su motivo; quedó %q (%v)", motivo, err)
+	}
+}
+
+func TestElHookInPideConPlazoYSigueSinElAddon(t *testing.T) {
+	_, h := hostDeAddon(t, addonDirPrueba(t, manifiestoHola))
+
+	// El addon activo con un hook_in declarado: servidor httptest que responde
+	// listo (rápido, lento o con error, según el caso).
+	var respuesta func(w http.ResponseWriter, r *http.Request)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		respuesta(w, r)
+	}))
+	defer srv.Close()
+	proceso := addonProc{
+		manifiesto: addonManifest{ID: "hola", HooksIn: []string{"send_whatsapp"}},
+		estado:     estadoActivo, token: "token-de-esta-sesion",
+		puerto: srv.Listener.Addr().(*net.TCPAddr).Port,
+	}
+
+	// a) Respuesta rápida: el cuerpo va al negocio tal cual.
+	respuesta = func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/hooks/send_whatsapp" || r.Header.Get("X-ERP-Addon-Token") != "token-de-esta-sesion" {
+			http.Error(w, "no", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"mensaje_id":"wa-42"}`))
+	}
+	h.mu.Lock()
+	h.progs["hola"] = &proceso
+	h.mu.Unlock()
+	salida, err := (&Server{addons: h}).addonHookPedir("hola", "send_whatsapp", "acme", map[string]string{"texto": "su factura"}, 3*time.Second)
+	if err != nil {
+		t.Fatalf("el hook rápido debía salir bueno: %v", err)
+	}
+	var dump map[string]interface{}
+	_ = json.Unmarshal(salida, &dump)
+	if dump["mensaje_id"] != "wa-42" {
+		t.Fatalf("la respuesta del addon llegó mal: %v", dump)
+	}
+
+	// b) El addon tarda más del plazo: error EN EL PLAZO, con el camino de
+	// retorno expuesto (el negocio sigue sin el addon).
+	respuesta = func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"status":1}`))
+	}
+	inicio := time.Now()
+	_, err = (&Server{addons: h}).addonHookPedir("hola", "send_whatsapp", "acme", map[string]string{}, 50*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "50ms") {
+		t.Fatalf("el vencimiento debía explicar el plazo; dio: %v", err)
+	}
+	if dur := time.Since(inicio); dur > 5*time.Second {
+		t.Fatalf("el vencimiento debía cortar en plazo, tardó %v", dur)
+	}
+
+	// c) El addon está caído: error claro, sin intento HTTP.
+	h.mu.Lock()
+	proceso.estado = estadoCaydo
+	h.mu.Unlock()
+	if _, err = (&Server{addons: h}).addonHookPedir("hola", "send_whatsapp", "acme", map[string]string{}, 0); err == nil || !strings.Contains(err.Error(), "caído") {
+		t.Fatalf("el addon caído debía dar error claro; dio: %v", err)
+	}
+
+	// d) El hook no lo ofrece nadie: el manifiesto es el candado también para
+	// el núcleo que pide.
+	h.mu.Lock()
+	proceso.estado = estadoActivo
+	h.mu.Unlock()
+	if _, err = (&Server{addons: h}).addonHookPedir("hola", "cobrar_extra", "acme", map[string]string{}, 0); err == nil || !strings.Contains(err.Error(), "el manifiesto es el candado") {
+		t.Fatalf("un hook no declarado debía rechazarse; dio: %v", err)
+	}
+}
+
+func TestElPanelFase3MuestraFirmaHooksYHistoria(t *testing.T) {
+	s, h := hostDeAddon(t, addonDirPrueba(t, manifiestoHolaHooks))
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	// La cola de la base de control de prueba, tal como baseHooks la monta en
+	// las demás pruebas del motor.
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS addon_hook_out (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, addon_id TEXT, evento TEXT, empresa TEXT,
+		payload_json TEXT, intentos INTEGER DEFAULT 0, status TEXT DEFAULT 'pending',
+		ultimo_error TEXT DEFAULT '', proximo TEXT DEFAULT '', creado TEXT DEFAULT '',
+		enviado TEXT DEFAULT '')`); err != nil {
+		t.Fatal(err)
+	}
+	// Dos filas en la historia: una entregada y una fallida.
+	ctl, err := s.controlStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctl.Exec(`INSERT INTO addon_hook_out (addon_id, evento, empresa, status, creado) VALUES ('hola','factura.emitida','acme','sent','2026-10-30 10:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctl.Exec(`INSERT INTO addon_hook_out (addon_id, evento, empresa, status, intentos, ultimo_error, creado) VALUES ('hola','factura.emitida','acme','failed',8,'el addon respondió 500 al hook','2026-10-30 10:01:00')`); err != nil {
+		t.Fatal(err)
+	}
+	st := s.addonsEstado()
+	if st["firma_publica"] != false {
+		t.Fatal("sin pubkey.ed25519 el panel debe trebuie decir firma_publica=false")
+	}
+	lista, ok := st["addons"].([]map[string]interface{})
+	if !ok || len(lista) != 1 {
+		t.Fatalf("el panel debía traer un addon; trajo %v", st["addons"])
+	}
+	a := lista[0]
+	if a["firma"] != "sin verificar" {
+		t.Fatalf("la firma del panel quedó %v", a["firma"])
+	}
+	if hooks, _ := a["hooks_out"].([]string); len(hooks) != 1 || hooks[0] != "factura.emitida" {
+		t.Fatalf("hooks_out del panel quedó %v", a["hooks_out"])
+	}
+	concedido := a["concedido"].(map[string]bool)
+	if !concedido["hooks"] {
+		t.Fatal("el addon con hooks debía marcar hooks concedido")
+	}
+	historia, ok := st["historia_hooks"].([]map[string]interface{})
+	if !ok || len(historia) != 2 {
+		t.Fatalf("la historia debía traer las dos filas; trajo %v", st["historia_hooks"])
+	}
+	if historia[0]["status"] != "failed" || historia[0]["error"] == "" {
+		t.Fatalf("la fila más reciente debía ir primero con su error: %+v", historia[0])
+	}
+}
+
+func TestElBotonDePuertosRelanzaCadaAddon(t *testing.T) {
+	// Con base de control (como la dejaría baseHooks): el botón responde con
+	// el estado del panel, que necesita leer la historia de hooks.
+	s, h := baseHooks(t)
+	// El binario EN LA CARPETA es la puerta del lanzamiento real: lanzarBajoCandado
+	// solo sigue mientras exista un erp-addon-hola ejecutable en p.dir, y su
+	// healthz real servido por el lanzamiento de este caso de prueba.
+	carpeta := t.TempDir()
+	if err := os.WriteFile(filepath.Join(carpeta, "erp-addon-hola"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	proceso := addonProc{
+		manifiesto: addonManifest{ID: "hola", Routes: []string{"/hola"}},
+		dir:        carpeta,
+		estado:     estadoActivo, token: "token-viejo", puerto: 11111,
+	}
+	h.mu.Lock()
+	h.progs["hola"] = &proceso
+	h.mu.Unlock()
+	// El lanzamiento de la prueba ES REAL: recibe por entorno el puerto que la
+	// frontera reservó, sirve healthz en él (como cualquier addon) y deja el
+	// estado activo con su token nuevo. El aserto de puertos NO es un número
+	// fijo: la reasignación es un puerto NUEVO, distinto del que el addon ya
+	// tenía (11111), y el token de la sesión anterior queda reemplazado.
+	h.lanzar = func(p *addonProc, binario string, env []string) error {
+		puertoReservado := 0
+		for _, e := range env {
+			if strings.HasPrefix(e, "ERP_ADDON_PORT=") {
+				puertoReservado, _ = strconv.Atoi(strings.TrimPrefix(e, "ERP_ADDON_PORT="))
+			}
+		}
+		if puertoReservado == 0 {
+			return fmt.Errorf("el lanzamiento no trajo ERP_ADDON_PORT")
+		}
+		escucha, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", puertoReservado))
+		if err != nil {
+			return err
+		}
+		servidor := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})}
+		go servidor.Serve(escucha)
+		p.puerto = puertoReservado
+		p.token = "token-nuevo"
+		p.estado = estadoActivo
+		return nil
+	}
+	req := httptest.NewRequest(http.MethodPost, "/module/addons/puertos", nil)
+	rr := httptest.NewRecorder()
+	s.addonPanelPuertos(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("el botón de puertos debía responder 200, dio %d", rr.Code)
+	}
+	h.mu.Lock()
+	nuevoPuerto, nuevoToken := proceso.puerto, proceso.token
+	h.mu.Unlock()
+	if nuevoPuerto == 11111 || nuevoToken == "token-viejo" || nuevoToken == "" {
+		t.Fatalf("el relanzamiento debía reasignar puerto y token; quedó %d/%q", nuevoPuerto, nuevoToken)
+	}
 }
 
 func makeProxy(destino string) *httputil.ReverseProxy {

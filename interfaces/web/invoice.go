@@ -785,6 +785,12 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 	// hechas desde el ERP nunca llegaban a la imprenta digital.
 	if isDraft != "yes" {
 		go s.diEnqueueVenta(s.dbFor(r), s.tenantOf(r), fmt.Sprintf("%d", invoiceNo))
+		// hooks_out: los addons que suscriben factura.emitida se enteran por
+		// la cola de la frontera (addon_hooks.go), DESPUÉS del commit: un addon
+		// caído o lento jamás frena la emisión de la factura.
+		go s.addonHookDisparar("factura.emitida", s.tenantOf(r), map[string]interface{}{
+			"invoice_id": invoiceNo, "control_no": doc.ControlNo,
+		})
 	}
 
 	writeJSON(w, map[string]interface{}{
