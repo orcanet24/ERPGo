@@ -378,6 +378,7 @@ func renderizar(w http.ResponseWriter, r *http.Request, falla, exito string) {
  <div class="caja">
   <h3>Publicar un aviso (escritura por el orquestador)</h3>
   <form method="post" action="/demo/aviso">
+   <input type="hidden" name="csrf_token" value="%s">
    <label>Título<br><input name="titulo" maxlength="%d" required></label>
    <label>Aviso<br><textarea name="mensaje" rows="4" maxlength="%d" required></textarea></label>
    <button type="submit">Publicar por el canal</button>
@@ -393,6 +394,7 @@ func renderizar(w http.ResponseWriter, r *http.Request, falla, exito string) {
 		e(r.Header.Get("X-ERP-User")), e(r.Header.Get("X-ERP-Tenant")), e(base),
 		e(r.Header.Get("X-ERP-Perms")), mostrarCookies, e(ping),
 		e(falla), e(exito),
+		e(r.Header.Get("X-ERP-CSRF")),
 		maxTitulo, maxMensaje,
 		cuadro.String(), muro.String())
 }

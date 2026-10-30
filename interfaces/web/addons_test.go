@@ -271,7 +271,7 @@ func TestElEscaneoInformaAvisoPorCarpetaDefectuosa(t *testing.T) {
 // ---------- El proxy inverso ----------
 
 func TestElProxyReenviaConContextoYNoConCookies(t *testing.T) {
-	var vistasDe, vistasTenant, vistasPerms, vistasCookies, vistasBase []string
+	var vistasDe, vistasTenant, vistasPerms, vistasCookies, vistasBase, vistasAuth, vistasCSRF []string
 	fin := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		vistasDe = append(vistasDe, r.Header.Get("X-ERP-User"))
@@ -279,6 +279,8 @@ func TestElProxyReenviaConContextoYNoConCookies(t *testing.T) {
 		vistasPerms = append(vistasPerms, r.Header.Get("X-ERP-Perms"))
 		vistasCookies = append(vistasCookies, r.Header.Get("Cookie"))
 		vistasBase = append(vistasBase, r.Header.Get("X-ERP-DB"))
+		vistasAuth = append(vistasAuth, r.Header.Get("X-ERP-Auth-DB"))
+		vistasCSRF = append(vistasCSRF, r.Header.Get("X-ERP-CSRF"))
 		_, _ = w.Write([]byte("pantalla del addon"))
 		close(fin)
 	}))
@@ -286,8 +288,11 @@ func TestElProxyReenviaConContextoYNoConCookies(t *testing.T) {
 
 	s, h := hostDeAddon(t, addonDirPrueba(t, manifiestoHola))
 	// Toda instalación real trae DB_NAME: sin él la cabecera de base saldría
-	// vacía y la prueba estaría midiendo un arranque a medias.
+	// vacía y la prueba estaría midiendo un arranque a medias. El código de
+	// empresa maestra se separa del de control para que las dos cabeceras de
+	// base sean distinguibles y no se cuelen la una por la otra.
 	s.config.DBName = "erpgo_prueba"
+	s.config.DBMasterTenantCode = "empresa_maestra"
 	h.reescanear()
 	h.mu.Lock()
 	p := h.progs["hola"]
@@ -295,7 +300,9 @@ func TestElProxyReenviaConContextoYNoConCookies(t *testing.T) {
 	p.proxy = makeProxy(upstream.URL)
 	h.mu.Unlock()
 
-	r := reqPrueba(s, sessPrueba("master"), "/hola")
+	ses := sessPrueba("master")
+	ses.CSRFToken = "token-csrf-de-prueba"
+	r := reqPrueba(s, ses, "/hola")
 	r.Header.Set("Cookie", "erpgow_session=secreta-del-ERP")
 	rr := httptest.NewRecorder()
 	s.addonRouter(rr, r)
@@ -322,8 +329,19 @@ func TestElProxyReenviaConContextoYNoConCookies(t *testing.T) {
 	}
 	// La lectura granular solo sirve si el addon sabe EN QUÉ base consultar:
 	// sin esta cabecera, el grant y el DSN no se encuentran.
-	if vistasBase[0] != "erpgo_prueba" {
-		t.Fatalf("X-ERP-DB debía ser la base de la empresa activa (\"erpgo_prueba\"), dio %q", vistasBase[0])
+	if vistasBase[0] != s.tenantDBName(defaultTenantCode) {
+		t.Fatalf("X-ERP-DB debía ser la base de la empresa activa (%q), dio %q", s.tenantDBName(defaultTenantCode), vistasBase[0])
+	}
+	if vistasAuth[0] != "erpgo_prueba" {
+		t.Fatalf("X-ERP-Auth-DB debía ser la base de identidad (\"erpgo_prueba\"), dio %q", vistasAuth[0])
+	}
+	if vistasAuth[0] == vistasBase[0] {
+		t.Fatal("las dos cabeceras de base salieron iguales: el addon no podría distinguir empresa de identidad")
+	}
+	// El token CSRF va para que el formulario del addon lo adjunte: el candado
+	// lo aplica el núcleo antes de reenviar.
+	if vistasCSRF[0] != "token-csrf-de-prueba" {
+		t.Fatalf("X-ERP-CSRF debía traer el token de la sesión, dio %q", vistasCSRF[0])
 	}
 	if !strings.Contains(rr.Body.String(), "pantalla del addon") {
 		t.Fatalf("el cuerpo del addon no llegó al usuario: %s", rr.Body.String())

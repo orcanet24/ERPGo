@@ -167,6 +167,17 @@ con el token efímero del arranque. Son dos canales distintos:
     grants pero no sabe en qué base están las filas de ESTA sesión, y el
     mismo addon atiende a varias empresas. El nombre de base no es un
     secreto: sin el `SELECT` concedido, entrar en ella no deja leer nada.
+  - `X-ERP-Auth-DB`: nombre de la **base de identidad** (la de control), donde
+    viven `users` y `user_login`. Los grants del lector ya la cubren
+    (`crearUsuarioLectorAddon` empieza por `DB_NAME`); lo que faltaba era el
+    nombre. Sin él, un módulo no puede mostrar a la gente de la empresa ni
+    compartir con alguien: su propia tabla no guarda el nombre de nadie.
+  - `X-ERP-CSRF`: el token CSRF de la sesión, para que la página del addon lo
+    ponga en su formulario (`<input name="csrf_token">`). **El candado lo
+    aplica el núcleo**, antes de reenviar: `enforceCSRF` exige token en todo
+    POST que tenga sesión, y las pantallas de addon no llevan el layout que
+    inyecta el token. El addon no valida CSRF, solo recibe la petición ya
+    pasada por el filtro.
   - `X-ERP-Perms`: los códigos del manifiesto que ese usuario tiene, en CSV
     (`__master` para el super administrador).
 

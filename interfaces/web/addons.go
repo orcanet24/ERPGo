@@ -1336,6 +1336,20 @@ func (s *Server) addonProxyRequest(w http.ResponseWriter, r *http.Request, sess 
 	// no deja leer nada.
 	if s.config != nil {
 		req.Header.Set("X-ERP-DB", s.tenantDBName(s.tenantOf(r)))
+		// La base de IDENTIDAD (control): aquí viven users y user_login, y los
+		// grants del lector ya la cubren —crearUsuarioLectorAddon empieza por
+		// DB_NAME—, pero sin su nombre el addon no puede usarlas. Un módulo que
+		// quiera enseñar a la gente de la empresa o compartir con alguien no
+		// tiene otra puerta: su propia tabla no guarda el nombre de nadie.
+		req.Header.Set("X-ERP-Auth-DB", s.config.DBName)
+	}
+	// El token CSRF de la sesión, para que la página del addon pueda ponerlo en
+	// su formulario. El candado lo aplica EL NÚCLEO antes de reenviar
+	// (enforceCSRF): el addon no valida CSRF, solo recibe la petición ya
+	// pasado por el filtro. Sin esta cabecera, todo POST desde una pantalla de
+	// addon saldría 403 — la plantilla no tendría cómo adjuntar el token.
+	if sess.CSRFToken != "" {
+		req.Header.Set("X-ERP-CSRF", sess.CSRFToken)
 	}
 	p.proxy.ServeHTTP(w, req)
 }
