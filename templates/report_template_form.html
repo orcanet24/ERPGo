@@ -70,6 +70,7 @@
                         <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
                         <button type="button" class="btn btn-info" id="btnHelpModal"><i class="fa fa-book"></i> Guía de informes</button>
                         <button type="button" class="btn btn-warning" onclick="aiHelp()"><i class="fa fa-magic"></i> Ayúdame con la IA</button>
+                    <button type="button" class="btn btn-success" id="ai_crear"><i class="fa fa-check"></i> Crear el informe con la IA (lo guarda)</button>
                         <a class="btn btn-default" href="/reports/custom">Cancelar</a>
                     </div>
                 </form>
@@ -283,6 +284,24 @@ $(function () {
     });
 });
 function aiHelp() { $('#aiModal').modal('show'); }
+// crearConIA guarda el informe DE VERDAD: el servidor extrae la definición,
+// la valida con el guardián y la deja en report_template; aquí solo ya se
+// navega a la pantalla de edición del informe creado.
+$('#ai_crear').on('click', function () {
+    var req = $('#ai_req').val().trim();
+    if (!req) { alert('Describe el informe primero'); return; }
+    var btn = $(this).prop('disabled', true).text('Creando el informe…');
+    $.post('/reports/custom/ai-create', JSON.stringify({ request: req }), function (r) {
+        btn.prop('disabled', false).text('Crear el informe con la IA (lo guarda)');
+        if (r.status === 1 && r.redirect) { window.location = r.redirect; }
+        else { btn.prop('disabled', false); alert(r.error || 'La IA no pudo crear el informe'); }
+    }).fail(function (xhr) {
+        btn.prop('disabled', false).text('Crear el informe con la IA (lo guarda)');
+        var msg = 'No hay agentes IA disponibles o el proveedor falló.';
+        try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
+        alert(msg);
+    });
+});
 $('#ai_go').on('click', function () {
     var req = $('#ai_req').val().trim();
     if (!req) { alert('Describe el informe primero'); return; }

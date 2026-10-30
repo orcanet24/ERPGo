@@ -277,6 +277,147 @@ func (s *Server) registerAIReportRoutes() {
 	s.mux.HandleFunc("POST /reports/custom/delete/{id}", s.reportTemplateDelete)
 	s.mux.HandleFunc("GET /reports/custom/run/{id}", s.reportTemplateRun)
 	s.mux.HandleFunc("POST /reports/custom/ai-help", s.reportTemplateAIHelp)
+	s.mux.HandleFunc("POST /reports/custom/ai-create", s.reportTemplateAICreate)
+}
+
+// reportTemplateAICreate convierte el pedido en un informe REAL: el agente
+// redacta la definición y el servidor —no la IA— la pasa por el guardián SQL y
+// guarda la fila en report_template. El botón anterior («Ayúdame con la IA»)
+// solo mostraba un borrador y rellenaba el textarea si estaba vacío: el informe
+// «creado por la IA» quedaba a mitad de camino porque nada lo guardaba.
+func (s *Server) reportTemplateAICreate(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionFromRequest(r)
+	if sess == nil {
+		jsonError(w, "Sesión no iniciada", 401)
+		return
+	}
+	var req struct {
+		Request string `json:"request"`
+	}
+	body, err := readAllLimit(r, 1<<20)
+	if err != nil {
+		jsonError(w, "Cuerpo inválido", 400)
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Request) == "" {
+		jsonError(w, "Describe el informe que necesitas", 400)
+		return
+	}
+	agent, ok := s.aiDefaultITAgent(s.sessionFromRequest(r))
+	if !ok {
+		jsonError(w, "No hay agentes IA activos. Crea uno en Agentes IA.", 503)
+		return
+	}
+	// El encargo de una sola pasada: el contrato es cerrado porque la respuesta
+	// se va a GUARDAR, no a leer una persona. Prosa fuera del objeto entorpece;
+	// la extracción lo tolera, pero el contrato la reduce.
+	instruccion := req.Request + "\n\nCONTRATO DE RESPUESTA: responde ÚNICAMENTE con la definición del informe como objeto JSON con las claves \"title\" (nombre corto), \"sql\" (un único SELECT de lectura sobre las tablas del mapa), \"columns\" ([{\"key\":...,\"label\":...}...]) y \"totals\" (solo claves declaradas en columns). Sin markdown, sin vallado de código, sin texto fuera del objeto."
+	task := aiTask{AgentID: agent.ID, Name: "Creación de informe", Instructions: instruccion}
+	// Ámbito propio por invocación, por el mismo motivo de reportTemplateAIHelp:
+	// es interactiva y de una sola pasada.
+	journal := &aiRunJournal{scope: "adhoc:" + now()}
+	steps := []aiStep{}
+	resp, runErr := s.aiRunLoop(s.sessionFromRequest(r), agent, task, &steps, journal)
+	if runErr != nil {
+		jsonError(w, runErr.Error(), 502)
+		return
+	}
+	id, nombre, crearErr := s.crearInformeDesdeRespuestaIA(r, sess, req.Request, resp)
+	if crearErr != nil {
+		jsonError(w, crearErr.Error(), 502)
+		return
+	}
+	writeJSON(w, map[string]interface{}{"status": 1, "id": id, "name": nombre,
+		"redirect": "/reports/custom/edit/" + strconv.FormatInt(id, 10)})
+}
+
+// crearInformeDesdeRespuestaIA extrae la definición del texto del agente, la
+// valida con el mismo guardián que un guardado manual y guarda la fila con la
+// marca ia: en created_by, para que la auditoría diga quién escribió de verdad.
+func (s *Server) crearInformeDesdeRespuestaIA(r *http.Request, sess *SessionData, pedido, respuesta string) (int64, string, error) {
+	def, ok := aiExtraerDefinicion(respuesta)
+	if !ok {
+		return 0, "", fmt.Errorf("la respuesta de la IA no contiene una definición JSON con «sql»")
+	}
+	var d reportDefShape
+	_ = json.Unmarshal([]byte(def), &d) // aiExtraerDefinicion ya garantizó que decodifica
+	nombre := strings.TrimSpace(d.Title)
+	if nombre == "" {
+		nombre = strings.TrimSpace(pedido)
+	}
+	if cortado := []rune(nombre); len(cortado) > 80 {
+		nombre = string(cortado[:80])
+	}
+	if err := s.validateReportDefinition(def); err != nil {
+		return 0, "", fmt.Errorf("la definición de la IA no pasa el guardián: %v", err)
+	}
+	id, err := s.insertarInforme(r, sess, nombre, strings.TrimSpace(pedido), def, "ia:"+sessUserID(sess))
+	return id, nombre, err
+}
+
+// insertarInforme guarda la fila y escribe la auditoría. El guardado manual y
+// la creación por IA comparten ESTE camino: así ninguna de las dos puede crear
+// un informe por debajo del guardián o sin dejar rastro en la auditoría.
+func (s *Server) insertarInforme(r *http.Request, sess *SessionData, name, desc, definition, creator string) (int64, error) {
+	res, err := s.dbFor(r).Exec(`INSERT INTO report_template (name, description, definition, created_by, status, created_at, updated_at)
+		VALUES (?,?,?,?,1,?,?)`, name, desc, definition, creator, now(), now())
+	if err != nil {
+		return 0, err
+	}
+	newID, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	s.appendAudit(r, sessUserID(sess), "ia", "create", "custom_reports", "report_template", fmt.Sprintf("%d", newID), nil, map[string]interface{}{"name": name})
+	return newID, nil
+}
+
+// aiExtraerDefinicion encuentra la definición JSON del informe dentro del texto
+// del agente. Un regex goloso (como el de la pantalla del borrador) se come
+// desde el primer '{' de la prosa hasta el último '}' del texto; este escaneo
+// recorre los objetos con llaves emparejadas respetando comillas y escapes,
+// y devuelve el primero que decodifica como plantilla con «sql».
+func aiExtraerDefinicion(texto string) (string, bool) {
+	for i := 0; i < len(texto); i++ {
+		if texto[i] != '{' {
+			continue
+		}
+		profundidad, enCadena, escapado := 0, false, false
+	bucleObjeto:
+		for j := i; j < len(texto); j++ {
+			c := texto[j]
+			if enCadena {
+				switch {
+				case escapado:
+					escapado = false
+				case c == '\\':
+					escapado = true
+				case c == '"':
+					enCadena = false
+				}
+				continue
+			}
+			switch c {
+			case '"':
+				enCadena = true
+			case '{':
+				profundidad++
+			case '}':
+				profundidad--
+				if profundidad == 0 {
+					candidato := texto[i : j+1]
+					var sondeo struct {
+						SQL string `json:"sql"`
+					}
+					if json.Unmarshal([]byte(candidato), &sondeo) == nil && strings.TrimSpace(sondeo.SQL) != "" {
+						return candidato, true
+					}
+					break bucleObjeto // objeto cerrado sin «sql»: se sigue con el próximo
+				}
+			}
+		}
+	}
+	return "", false
 }
 
 func (s *Server) reportTemplateList(w http.ResponseWriter, r *http.Request) {
@@ -493,18 +634,11 @@ func (s *Server) reportTemplateSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]interface{}{"status": 1, "msg": "Informe actualizado", "redirect": redirect})
 		return
 	}
-	res, err := s.dbFor(r).Exec(`INSERT INTO report_template (name, description, definition, created_by, status, created_at, updated_at)
-		VALUES (?,?,?,?,1,?,?)`, name, desc, definition, creator, now(), now())
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	newID, err := res.LastInsertId()
+	newID, err := s.insertarInforme(r, sess, name, desc, definition, creator)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.appendAudit(r, sessUserID(sess), "ia", "create", "custom_reports", "report_template", fmt.Sprintf("%d", newID), nil, map[string]interface{}{"name": name})
 	redirect := "/reports/custom"
 	if r.FormValue("action") == "save" {
 		redirect = "/reports/custom/edit/" + strconv.FormatInt(newID, 10)
