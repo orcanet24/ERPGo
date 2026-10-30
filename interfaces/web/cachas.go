@@ -257,6 +257,14 @@ func (s *Server) permisosDelRol(r *http.Request, sess *SessionData) map[string]b
 				perm[d] = true
 			}
 		}
+		// `__master` no es un permiso de negocio: es la marca de las entradas de
+		// menú que solo debe ver el super administrador (Módulos, por ejemplo).
+		// El admin de empresa ve todo lo suyo, pero no la administración del
+		// sistema; sin esta distinción, la entrada aparecía y al pulsarla daba
+		// 403.
+		if sess.UserLevel == "master" {
+			perm["__master"] = true
+		}
 		perm["_all"] = true
 		return perm
 	}

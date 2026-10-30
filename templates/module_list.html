@@ -52,8 +52,13 @@ $(function () {
                 // Los módulos core no se pueden desactivar ni eliminar.
                 if (row.is_core) { return '<span class="text-muted">—</span>'; }
                 var toggle = row.is_active ? 'Desactivar' : 'Activar';
-                return '<button class="btn btn-xs btn-default btn-toggle" data-id="' + row.id + '">' + toggle + '</button> ' +
-                       '<button class="btn btn-xs btn-danger btn-del" data-id="' + row.id + '"><i class="fa fa-trash"></i></button>';
+                // Mensajería no se borra: se apaga. Borrarla dejaría los
+                // dispositivos y el historial sin dueño.
+                var borrar = row.id === 'mensajeria' ? '' :
+                    '<button class="btn btn-xs btn-danger btn-del" data-id="' + row.id + '"><i class="fa fa-trash"></i></button>';
+                var configurar = row.id === 'mensajeria' ?
+                    '<a class="btn btn-xs btn-info" href="/settings/mensajeria"><i class="fa fa-cog"></i> Configurar</a> ' : '';
+                return configurar + '<button class="btn btn-xs btn-default btn-toggle" data-id="' + row.id + '">' + toggle + '</button> ' + borrar;
             } }
         ],
         order: [[3, 'desc'], [1, 'asc']]

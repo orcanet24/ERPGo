@@ -54,13 +54,38 @@ func (s *Server) registerModuleRoutes() {
 	// Envío pedido por una persona desde un módulo del ERP.
 }
 func (s *Server) moduleList(w http.ResponseWriter, r *http.Request) {
+	s.asegurarModuloMensajeria(r)
 	s.render(w, r, "module_list.html", map[string]interface{}{
 		"Title": "Módulos del Sistema",
 	})
 }
 
+// asegurarModuloMensajeria crea la fila del módulo si la migración no la dejó.
+//
+// POR QUÉ HACE FALTA. Una instalación que actualiza el binario pero arranca con
+// una base donde la migración no llegó (o llegó a medias) no ve el módulo en la
+// lista y no puede encenderlo. La fila es barata de recrear y no pisa nada: si
+// ya existe, no se toca.
+func (s *Server) asegurarModuloMensajeria(r *http.Request) {
+	db := s.dbFor(r)
+	if db == nil {
+		return
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM modules WHERE id = 'mensajeria'`).Scan(&n); err != nil {
+		return // no hay tabla `modules`: la migración general tampoco corrió
+	}
+	if n > 0 {
+		return
+	}
+	_, _ = db.Exec(`INSERT INTO modules (id, name, version, description, is_core, is_active, path, author, license_type)
+		VALUES ('mensajeria', 'Mensajería', '1.0', 'WhatsApp, Telegram, correo y SMS', 0, 0, '/mensajeria', 'ERPGo', 'MIT')`)
+	invalidarCacheMenu()
+}
+
 // moduleListData devuelve los módulos en formato JSON
 func (s *Server) moduleListData(w http.ResponseWriter, r *http.Request) {
+	s.asegurarModuloMensajeria(r)
 	rows, err := s.dbFor(r).Query(`
 		SELECT m.id, m.name, m.version, m.description, m.is_core, m.is_active, 
 		       m.path, m.author, m.license_type, m.created_at, m.updated_at,
@@ -198,6 +223,14 @@ func (s *Server) moduleToggle(w http.ResponseWriter, r *http.Request) {
 // moduleDelete elimina un módulo (solo no-core)
 func (s *Server) moduleDelete(w http.ResponseWriter, r *http.Request) {
 	moduleID := r.PathValue("id")
+
+	// Mensajería no se borra: se apaga. Borrar la fila dejaría los dispositivos,
+	// la cola y el historial sin dueño, y el módulo desaparecería de la lista
+	// sin forma de volver a encenderlo.
+	if moduleID == "mensajeria" {
+		jsonError(w, "El módulo de mensajería no se elimina: se apaga con el interruptor. Los datos y los números se conservan.", http.StatusForbidden)
+		return
+	}
 
 	var isCore int
 	err := s.dbFor(r).QueryRow("SELECT is_core FROM modules WHERE id = ?", moduleID).Scan(&isCore)

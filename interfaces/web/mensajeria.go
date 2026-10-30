@@ -204,6 +204,25 @@ func (s *Server) mensajeriaSettingsForm(w http.ResponseWriter, r *http.Request) 
 // encendido; los dispositivos y el chat llegan en la fase siguiente.
 func (s *Server) mensajeriaHome(w http.ResponseWriter, r *http.Request) {
 	if !s.mensajeriaActiva(r) {
+		// 404 a propósito: el módulo apagado no existe para los usuarios. Pero
+		// el master necesita saber POR QUÉ y cómo encenderlo; un «Not Found»
+		// seco fue justo lo que hizo pensar que la instalación estaba rota.
+		if sess := s.sessionFromRequest(r); sess != nil && sess.UserLevel == "master" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`<!doctype html><html lang="es"><head><meta charset="utf-8">
+<title>Mensajería apagada</title></head>
+<body style="font-family:system-ui,sans-serif;max-width:720px;margin:60px auto;line-height:1.5">
+<h1>Mensajería está apagada</h1>
+<p>El módulo existe, pero falta al menos una de las tres llaves: el módulo visible,
+el servicio de la instalación o la empresa. Por eso esta ruta responde 404 para
+el resto de usuarios.</p>
+<p><a href="/settings/mensajeria">Configuración de mensajería</a> ·
+<a href="/module/list">Módulos</a> ·
+<a href="/settings/mensajeria/dispositivos">Dispositivos</a></p>
+</body></html>`))
+			return
+		}
 		notFoundOrJSON(w, r, "mensajería no disponible")
 		return
 	}
