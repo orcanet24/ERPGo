@@ -348,6 +348,14 @@ func (s *Server) cargarMenuFilas(r *http.Request) ([]menuFila, error) {
 		// intentarlo y el menú vacío que se pinta hoy sigue pintándose hoy.
 		return nil, err
 	}
+	// El estado del módulo se lee de la base de la EMPRESA, que es donde lo
+	// escribe el interruptor. La estructura del menú viene de control.
+	activos := s.modulosActivos(r)
+	for i := range filas {
+		// `core` (y vacío) no es un módulo apagable: es la estructura base.
+		// Cualquier otro module_id solo se pinta si su fila existe y está en 1.
+		filas[i].moduleOff = filas[i].moduleID != "" && filas[i].moduleID != "core" && !activos[filas[i].moduleID]
+	}
 	if len(filas) == 0 {
 		// Tampoco se cachea el vacío: una base a medio migrar debe recogerse en
 		// la siguiente petición en vez de memorizar «sin menú» 30 segundos.
@@ -370,6 +378,36 @@ func invalidarCacheMenu() {
 	menuFilas.mu.Lock()
 	menuFilas.datos = map[string]entradaCache[[]menuFila]{}
 	menuFilas.mu.Unlock()
+}
+
+// modulosActivos devuelve los módulos encendidos en la EMPRESA de la petición.
+//
+// Es una consulta aparte del menú y no un JOIN: `menu` vive en control y
+// `modules` en la base de la empresa. Un JOIN entre bases distintas no existe, y
+// leer el estado de control era el fallo que hacía que el menú no apareciera al
+// activar el módulo.
+//
+// Si la tabla no existe (base antigua), devuelve un mapa vacío: los menús de
+// módulos no se pintan, que es preferible a enseñar una entrada que no lleva a
+// nada. El menú core no depende de esto.
+func (s *Server) modulosActivos(r *http.Request) map[string]bool {
+	out := map[string]bool{}
+	db := s.dbFor(r)
+	if db == nil {
+		return out
+	}
+	rows, err := db.Query(`SELECT id FROM modules WHERE is_active = 1`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			out[id] = true
+		}
+	}
+	return out
 }
 
 // limpiarCachesDeRender vacía las tres cachés de pintado. Sólo la usan las

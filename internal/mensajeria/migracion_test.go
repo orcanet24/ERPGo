@@ -127,14 +127,15 @@ func TestMigracionDeMensajeriaEsIdempotenteYDejaElModuloApagado(t *testing.T) {
 		t.Fatalf("proveedores = %d; deben ser 4", n)
 	}
 
-	// La configuración tiene que seguir visible con el módulo apagado, o el
-	// master no tendría forma de volver a encenderlo.
+	// La entrada de configuración pertenece al módulo: cuando está apagado no
+	// se anuncia en el menú. El master llega a ella desde Configuración →
+	// Módulos → Configurar, que sí es core.
 	var moduloDeConfig string
 	if err := db.QueryRow(`SELECT module_id FROM menu WHERE url = '/settings/mensajeria'`).Scan(&moduloDeConfig); err != nil {
 		t.Fatal(err)
 	}
-	if moduloDeConfig != "core" {
-		t.Fatalf("la entrada de configuración quedó atada a %q y desaparecería al apagar el módulo", moduloDeConfig)
+	if moduloDeConfig != "mensajeria" {
+		t.Fatalf("la entrada de configuración quedó en %q y debería pertenecer al módulo", moduloDeConfig)
 	}
 
 	// Los permisos tienen que colgar del módulo correcto, o la matriz de Roles

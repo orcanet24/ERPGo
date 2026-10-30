@@ -257,7 +257,7 @@ FROM (SELECT COUNT(*) AS n FROM `menu` WHERE `url` = '/mensajeria') AS existente
 WHERE existente.n = 0;
 
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`)
-SELECT 284, 21, 'Mensajería', '/settings/mensajeria', NULL, 'setting', '/settings/mensajeria', 67, 1, 'core', 0
+SELECT 284, 21, 'Mensajería', '/settings/mensajeria', NULL, 'setting', '/settings/mensajeria', 67, 1, 'mensajeria', 0
 FROM (SELECT COUNT(*) AS n FROM `menu` WHERE `url` = '/settings/mensajeria') AS existente
 WHERE existente.n = 0;
 

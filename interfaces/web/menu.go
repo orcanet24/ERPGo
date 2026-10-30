@@ -67,6 +67,7 @@ type menuFila struct {
 	icon      string
 	perm      string
 	active    string
+	moduleID  string
 	moduleOff bool
 }
 
@@ -112,36 +113,34 @@ func (s *Server) loadMenu(r *http.Request) ([]*menuNode, error) {
 
 // leerMenuFilas es la consulta, sin caché: es la fuente que llena la caché.
 //
-// LA CONSULTA LLEVA EL ESTADO DEL MÓDULO, y esa es la única forma de que
-// `modules.is_active` signifique algo. Antes el menú solo miraba `menu.status`
-// y el permiso: un módulo apagado seguía en la barra lateral para todo el que
-// tuviera el permiso concedido.
+// LA ESTRUCTURA VIVE EN CONTROL; EL ESTADO DEL MÓDULO, EN LA EMPRESA. El `menu`
+// es global (lo siembran las migraciones), pero `modules.is_active` es de cada
+// empresa y el interruptor lo escribe `moduleToggle` en la base de la empresa.
+// Antes se leía el estado con un JOIN contra la base de control: en una
+// instalación de una sola base coincidía, pero en multi-empresa el interruptor
+// cambiaba la fila de la empresa y el menú seguía mirando la de control. El
+// resultado era exactamente el que se reportó: se activa el módulo y el menú no
+// aparece.
 //
-// El LEFT JOIN no es un detalle: `menu.module_id` tiene DEFAULT 'core' y no
-// existe ninguna fila en `modules` con id 'core'. Con un JOIN normal, TODO el
-// menú del ERP desaparecería. COALESCE(...,1) deja visible lo que no tiene
-// módulo registrado; solo se oculta lo que pertenece a un módulo que existe y
-// está en 0.
+// Aquí solo se lee la ESTRUCTURA y el `module_id`; el estado se aplica en
+// cargarMenuFilas con `modulosActivos`, que consulta la base de la empresa.
 //
-// Si la base es antigua y no tiene `modules`, la consulta falla: se reintenta
-// sin el JOIN para no dejar al usuario sin menú por una tabla que aún no se
-// migró.
+// Si la base es antigua y no tiene `menu.module_id`, se reintenta sin esa
+// columna para no dejar al usuario sin menú.
 func (s *Server) leerMenuFilas(r *http.Request) ([]menuFila, error) {
-	filas, err := s.leerMenuFilasConModulo(r)
+	filas, err := s.leerMenuFilasConModuloID(r)
 	if err == nil {
 		return filas, nil
 	}
 	return s.leerMenuFilasSinModulo(r)
 }
 
-func (s *Server) leerMenuFilasConModulo(r *http.Request) ([]menuFila, error) {
+func (s *Server) leerMenuFilasConModuloID(r *http.Request) ([]menuFila, error) {
 	rows, err := s.authDB(r).Query(`
-		SELECT m.id, m.parent_id, m.label, m.url, m.icon, m.perm, m.active_prefix,
-		       COALESCE(mod.is_active, 1)
-		FROM menu m
-		LEFT JOIN modules mod ON mod.id = m.module_id
-		WHERE m.status = 1
-		ORDER BY m.sort_order, m.id`)
+		SELECT id, parent_id, label, url, icon, perm, active_prefix, IFNULL(module_id, '')
+		FROM menu
+		WHERE status = 1
+		ORDER BY sort_order, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -151,13 +150,10 @@ func (s *Server) leerMenuFilasConModulo(r *http.Request) ([]menuFila, error) {
 	for rows.Next() {
 		f := menuFila{}
 		var url, icon, perm, active sql.NullString
-		var activo sql.NullInt64
-		if err := rows.Scan(&f.id, &f.parentID, &f.label, &url, &icon, &perm, &active, &activo); err != nil {
+		if err := rows.Scan(&f.id, &f.parentID, &f.label, &url, &icon, &perm, &active, &f.moduleID); err != nil {
 			continue
 		}
 		f.url, f.icon, f.perm, f.active = url.String, icon.String, perm.String, active.String
-		// Sin fila de módulo (activo NULL) la entrada se pinta.
-		f.moduleOff = activo.Valid && activo.Int64 == 0
 		filas = append(filas, f)
 	}
 	if err := rows.Err(); err != nil {
