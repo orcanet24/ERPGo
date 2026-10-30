@@ -120,6 +120,37 @@ func (st *SessionStore) Get(id string) *SessionData {
 	return s
 }
 
+// DeUsuario devuelve la sesión viva de un usuario, la última si tiene varias.
+// Lo usa el canal de negocios de addons: cuando el addon pide una escritura
+// entregando solo el usuario de su contexto, el núcleo NO se fía de la
+// cabecera — comprueba que el usuario tenga una sesión viva y de ahí saca la
+// empresa y los permisos REALES. Fail-closed: sin sesión viva, ni escritura.
+// Un addon solo puede hablar desde loopback en el mismo arranque, así que
+// basta la caché de este proceso; si el usuario cerró su pestaña, el botón del
+// addon no puede escribir más.
+func (st *SessionStore) DeUsuario(userID string) *SessionData {
+	if st == nil || userID == "" {
+		return nil
+	}
+	st.mu.RLock()
+	preferida := time.Time{}
+	var elegida *SessionData
+	for _, s := range st.sessions {
+		if s == nil || s.UserID != userID {
+			continue
+		}
+		if !s.ExpiresAt.After(time.Now()) {
+			continue // expirada: como si no existiera
+		}
+		if s.ExpiresAt.After(preferida) {
+			preferida = s.ExpiresAt
+			elegida = s
+		}
+	}
+	st.mu.RUnlock()
+	return elegida
+}
+
 // Update reemplaza los datos de una sesión (p. ej. al cambiar de empresa) y
 // actualiza tanto la caché como la base.
 func (st *SessionStore) Update(id string, data *SessionData) {

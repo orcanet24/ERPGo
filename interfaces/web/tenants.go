@@ -630,8 +630,9 @@ func (s *Server) ProvisionTenant(legalName, rif, adminUser, adminPass string) (P
 	// PASO 4½: los addons ya escaneados existen también en esta empresa nueva.
 	// Sin esto, un addon instalado antes de crear la empresa desaparecería de
 	// su menú y de su pantalla de módulos (y el dueño lo reportaría como un
-	// addon roto, no como un registro faltante).
-	s.addonRegistrarEmpresa(db)
+	// addon roto, no como un registro faltante). El código de la empresa va
+	// para que los addons con lectura granular reciban también sus grants.
+	s.addonRegistrarEmpresa(db, res.Code)
 
 	// PASO 5: Registrar la empresa en el catálogo de control.
 	ctl, err := s.controlStore()

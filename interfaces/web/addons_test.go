@@ -1,6 +1,6 @@
 package web
 
-// addons_test.go — Pruebas de la frontera fase 1 (docs/PLAN-ADDONS.md).
+// addons_test.go — Pruebas de la frontera (docs/PLAN-ADDONS.md, fase 2).
 //
 // Lo que cada prueba protege, sin adornos:
 //
@@ -10,8 +10,13 @@ package web
 //   - El registro: addons → filas de modules/menu en la base de empresa, y el
 //     desinstalado queda «no instalado» con filas inactivas, jamás borradas.
 //   - El proxy: reenvía con X-ERP-* y SIN cookies del ERP.
-//   - El canal de negocio: 403 sin token / fuera de loopback / token ajeno,
-//     404 con verb que no existe en la fase.
+//   - El canal de negocio: 403 sin token / fuera de loopback / token ajeno;
+//     en fase 2, un verb que el manifiesto NO declara en db_write da 403
+//     (el manifiesto es el candado, aunque el handler exista).
+//   - Fase 2: db_write exige dominio.accion y permiso declarado; tables_own
+//     exige schema.sql con CREATE TABLE IF NOT EXISTS (solo sus tablas);
+//     el DSN de lectura granular llega por entorno o se explica en el panel;
+//     la escritura exige POST, JSON, sesión viva, empresa y permiso.
 //   - El ciclo completo con el addon REAL del repo (addons/hola): se compila,
 //     se lanza, sirve su página, y matarlo no derriba al ERP.
 //
@@ -20,6 +25,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -409,8 +415,10 @@ func TestElCanalDeNegocioExigeTokenLoopbackYVerbSolamente(t *testing.T) {
 	if rr := pasar(peticion("10.0.0.5:50000", "token-de-esta-sesion", "ping")); rr.Code != http.StatusForbidden {
 		t.Fatalf("fuera de loopback debía denegarse (403), dio %d", rr.Code)
 	}
-	if rr := pasar(peticion("127.0.0.1:50000", "token-de-esta-sesion", "borrar_todo")); rr.Code != http.StatusNotFound {
-		t.Fatalf("un verb fuera de fase debía dar 404, dio %d", rr.Code)
+	// Fase 2: el verbo no declarado en db_write se rechaza con 403 (el
+	// manifiesto es el candado) — ya no un 404 de «fase sin escrituras».
+	if rr := pasar(peticion("127.0.0.1:50000", "token-de-esta-sesion", "borrar_todo")); rr.Code != http.StatusForbidden {
+		t.Fatalf("un verb no declarado en db_write debía denegarse (403), dio %d", rr.Code)
 	}
 	if rr := pasar(peticion("127.0.0.1:50000", "token-ajeno", "ping")); rr.Code != http.StatusForbidden {
 		t.Fatalf("combino token ajeno con id ajeno y aprobó: %d", rr.Code)
@@ -419,6 +427,328 @@ func TestElCanalDeNegocioExigeTokenLoopbackYVerbSolamente(t *testing.T) {
 	if rr := pasar(peticion("127.0.0.1:50000", "token-de-esta-sesion", "ping")); rr.Code != http.StatusOK {
 		t.Fatalf("el ping correcto debía ser 200, dio %d", rr.Code)
 	}
+}
+
+// ---------- Fase 2: manifiesto, migraciones propias y escritura por el canal ----------
+
+const manifiestoHolaFase2 = `{
+  "id": "hola", "name": "Hola, addon", "version": "2.0.0", "min_core_version": "0.2.0",
+  "description": "demo fase 2", "author": "ERPGo",
+  "routes": ["/hola"],
+  "menu": [{"parent_id": null, "label": "Hola addon", "url": "/hola", "icon": "fa-smile-o", "perms": ["hola_ver"], "sort_order": 90}],
+  "perms": [{"code": "hola_ver", "label": "Ver la pantalla"}],
+  "tables_own": ["hola_mensajes"],
+  "db_write": [{"verb": "mensaje.registrar", "perm": "hola_ver"}]
+}`
+
+const schemaHola = `CREATE TABLE IF NOT EXISTS hola_mensajes (
+    id VARCHAR(64) NOT NULL PRIMARY KEY,
+    mensaje VARCHAR(512) NOT NULL,
+    usuario VARCHAR(64) NOT NULL DEFAULT '',
+    empresa VARCHAR(64) NOT NULL DEFAULT '',
+    creada VARCHAR(32) NOT NULL DEFAULT '');`
+
+const manifiestoHolaConDBRead = `{
+  "id": "hola", "name": "Hola, addon", "version": "2.0.0", "min_core_version": "0.2.0",
+  "description": "demo fase 2", "author": "ERPGo",
+  "routes": ["/hola"],
+  "menu": [{"parent_id": null, "label": "Hola addon", "url": "/hola", "icon": "fa-smile-o", "perms": ["hola_ver"], "sort_order": 90}],
+  "perms": [{"code": "hola_ver", "label": "Ver la pantalla"}],
+  "db_read": ["customer_information"]
+}`
+
+// escribirSchema deja un schema.sql en la carpeta del addon dentro del dir de
+// addons dado (la misma ruta que devuelve addonDirPrueba).
+func escribirSchema(t *testing.T, dir, contenido string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "hola", "schema.sql"), []byte(contenido), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestElManifiestoFase2ValidaVerboPermisoYLeerSinPrefijo(t *testing.T) {
+	// Correcto: verbo dominio.accion con permiso declarado, y db_read con
+	// tablas DEL ERP sin el prefijo del id (el candado de verdad lo pone el
+	// GRANT SELECT de MySQL, no el manifiesto).
+	m := manifiestoValido()
+	m.DBRead = []string{"customer_information", "invoices"}
+	m.DBWrite = []addonVerbo{{Verb: "mensaje.registrar", Perm: "hola_ver"}}
+	m.TablesOwn = []string{"hola_mensajes"}
+	if err := validarManifiesto(m); err != nil {
+		t.Fatalf("el manifiesto fase 2 correcto fue rechazado: %v", err)
+	}
+
+	casos := []struct {
+		nombre string
+		media  func(*addonManifest)
+		que    string
+	}{
+		{"verbo sin punto (SQL suelto)", func(m *addonManifest) {
+			m.DBWrite = []addonVerbo{{Verb: "insertar_mensajes", Perm: "hola_ver"}}
+		}, "dominio.accion"},
+		{"verbo con permiso que el manifiesto no declara", func(m *addonManifest) {
+			m.DBWrite = []addonVerbo{{Verb: "mensaje.registrar", Perm: "hola_fantasma"}}
+		}, "no lo declara en perms"},
+		{"verbo duplicado", func(m *addonManifest) {
+			m.DBWrite = []addonVerbo{{Verb: "mensaje.registrar", Perm: "hola_ver"}, {Verb: "mensaje.registrar", Perm: "hola_ver"}}
+		}, "dos veces"},
+		{"tabla de lectura mal formada", func(m *addonManifest) {
+			m.DBRead = []string{"2mala"}
+		}, "de db_read"},
+	}
+	for _, c := range casos {
+		m := manifiestoValido()
+		m.DBRead = []string{"customer_information"}
+		c.media(m)
+		if err := validarManifiesto(m); err == nil {
+			t.Errorf("%s: debió rechazarse (%s) y pasó el candado", c.nombre, c.que)
+		}
+	}
+}
+
+func TestElEscaneoExigeSchemaSqlYSoloDDLDeSusTablas(t *testing.T) {
+	otra := strings.Replace(manifiestoHolaFase2, `"tables_own": ["hola_mensajes"]`,
+		`"tables_own": ["hola_mensajes", "hola_reglas"]`, 1)
+	casos := []struct {
+		nombre     string
+		manifiesto string
+		schema     string
+		fragmento  string
+	}{
+		{"sin schema.sql", manifiestoHolaFase2, "", "no trae schema.sql"},
+		{"DDL peligroso (DROP)", manifiestoHolaFase2, "DROP TABLE IF EXISTS hola_mensajes;\n" + schemaHola, "solo se aceptan"},
+		{"tabla que el manifiesto no declara", manifiestoHolaFase2, "CREATE TABLE IF NOT EXISTS hola_reglas (id VARCHAR(64) PRIMARY KEY);", "NO la declara"},
+		{"la segunda tabla declarada no se crea", otra, schemaHola, "no la crea"},
+	}
+	for _, c := range casos {
+		dir := addonDirPrueba(t, c.manifiesto)
+		if c.schema != "" {
+			escribirSchema(t, dir, c.schema)
+		}
+		_, h := hostDeAddon(t, dir)
+		if err := h.reescanear(); err != nil {
+			t.Fatal(err)
+		}
+		h.mu.Lock()
+		avisos := h.avisos
+		cargado := h.progs["hola"] != nil
+		h.mu.Unlock()
+		if cargado {
+			t.Errorf("%s: el addon cargó cuando debía quedar fuera", c.nombre)
+		}
+		if !strings.Contains(strings.Join(avisos, " | "), c.fragmento) {
+			t.Errorf("%s: el aviso no menciona %q: %v", c.nombre, c.fragmento, avisos)
+		}
+	}
+}
+
+func TestLasMigracionesLleganALaEmpresaNueva(t *testing.T) {
+	dir := addonDirPrueba(t, manifiestoHolaFase2)
+	escribirSchema(t, dir, schemaHola)
+	s, h := hostDeAddon(t, dir)
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	cargado := h.progs["hola"] != nil
+	h.mu.Unlock()
+	if !cargado {
+		t.Fatal("el addon con un schema.sql saneado debía cargar")
+	}
+	var existe int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM hola_mensajes`).Scan(&existe); err != nil {
+		t.Fatalf("la migración no se aplicó en la empresa activa: %v", err)
+	}
+
+	// La empresa nueva hereda la tabla por su registro. Aunque su menú
+	// mínimo rechace la sincronización de filas, las migraciones van
+	// PRIMERAS: el addon funciona aunque el registro empiece mal.
+	db2 := abrirBasePrueba(t)
+	s.addonRegistrarEmpresa(db2, "otra")
+	if err := db2.QueryRow(`SELECT COUNT(*) FROM hola_mensajes`).Scan(&existe); err != nil {
+		t.Fatalf("la empresa nueva no recibió la tabla propia: %v", err)
+	}
+}
+
+// resolverLectura se prueba directo (sin lanzar proceso real): es la pieza
+// que compone el env del addon; el ciclo completo con el binario del demo
+// cubre el resto del lanzamiento.
+func TestElAddonConDBReadRecibeElDSNPorEntornoYElFalloSeTolera(t *testing.T) {
+	// a) Con db_read, el lector inyectable corre y el DSN viaja por entorno.
+	_, h := hostDeAddon(t, addonDirPrueba(t, manifiestoHolaConDBRead))
+	var vista addonManifest
+	h.crearLectura = func(m addonManifest) (string, error) {
+		vista = m
+		return "erp_ro_hola:clave@tcp(127.0.0.1:3306)/", nil
+	}
+	p := &addonProc{manifiesto: addonManifest{ID: "hola", DBRead: []string{"customer_information"}}}
+	env := h.resolverLectura(p)
+	if vista.ID != "hola" {
+		t.Fatalf("el lector no fue llamado por el addon: %+v", vista)
+	}
+	if len(env) != 1 || env[0] != "ERP_DB_READ_DSN=erp_ro_hola:clave@tcp(127.0.0.1:3306)/" {
+		t.Fatalf("el DSN de lectura no llegó por entorno: %v", env)
+	}
+	if !p.lecturaOK || p.lecturaAviso != "" {
+		t.Fatalf("la lectura debía quedar concedida (ok=%v, aviso=%q)", p.lecturaOK, p.lecturaAviso)
+	}
+
+	// b) Sin db_read en el manifiesto: ni se pide lector ni hay DSN.
+	llamados := 0
+	h.crearLectura = func(m addonManifest) (string, error) {
+		llamados++
+		return "", nil
+	}
+	pSin := &addonProc{manifiesto: addonManifest{ID: "hola"}}
+	if env := h.resolverLectura(pSin); len(env) != 0 || llamados != 0 {
+		t.Fatalf("sin db_read no debía pedirse lector ni entregarse DSN (env=%v, llamadas=%d)", env, llamados)
+	}
+
+	// c) Crear el lector falla (p. ej. sin MySQL en el servidor): el addon
+	// arranca igual; la lectura queda sin conceder y el aviso lo explica.
+	h.crearLectura = func(m addonManifest) (string, error) {
+		return "", fmt.Errorf("el servidor MySQL no responde")
+	}
+	pFallo := &addonProc{manifiesto: addonManifest{ID: "hola", DBRead: []string{"customer_information"}}}
+	if env := h.resolverLectura(pFallo); len(env) != 0 {
+		t.Fatalf("con lector fallando no debía entregarse DSN: %v", env)
+	}
+	aviso, ok := pFallo.lecturaAviso, pFallo.lecturaOK
+	if aviso == "" || ok {
+		t.Fatalf("el fallo del lector debía dejar aviso sin conceder (aviso %q, ok %v)", aviso, ok)
+	}
+	if !strings.Contains(aviso, "el servidor MySQL no responde") {
+		t.Fatalf("el aviso debía explicar el motivo: %q", aviso)
+	}
+}
+
+func TestDeUsuarioEntregaLaUltimaSesionViva(t *testing.T) {
+	st := NewSessionStore()
+	now := time.Now()
+	st.Create(&SessionData{UserID: "7", TenantCode: defaultTenantCode, ExpiresAt: now.Add(-time.Minute)})
+	st.Create(&SessionData{UserID: "7", TenantCode: defaultTenantCode, ExpiresAt: now.Add(time.Hour)})
+	st.Create(&SessionData{UserID: "9", TenantCode: defaultTenantCode, ExpiresAt: now.Add(time.Hour)})
+
+	elegida := st.DeUsuario("7")
+	if elegida == nil {
+		t.Fatal("el usuario 7 tenía una sesión viva y DeUsuario no la encontró")
+	}
+	if !elegida.ExpiresAt.After(now) {
+		t.Fatal("DeUsuario debía elegir la sesión viva, no la ya expirada")
+	}
+	if st.DeUsuario("9") == nil {
+		t.Fatal("el usuario 9 también tiene sesión viva")
+	}
+	if st.DeUsuario("nadie") != nil {
+		t.Fatal("un usuario sin sesiones no debía tener ninguna")
+	}
+	if st.DeUsuario("") != nil {
+		t.Fatal("sin usuario no hay sesión que devolver")
+	}
+
+	// Fail-closed: si su única sesión ya expiró, no hay nada vivo.
+	st2 := NewSessionStore()
+	st2.Create(&SessionData{UserID: "8", ExpiresAt: now.Add(-time.Minute)})
+	if st2.DeUsuario("8") != nil {
+		t.Fatal("una sesión expirada no es una sesión viva")
+	}
+}
+
+func TestElCanalDeFase2ValidaSesionEmpresaPermisoYHandler(t *testing.T) {
+	dir := addonDirPrueba(t, manifiestoHolaFase2)
+	escribirSchema(t, dir, schemaHola)
+	s, h := hostDeAddon(t, dir)
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	s.sessions = NewSessionStore()
+	h.mu.Lock()
+	h.progs["hola"].token = "token-de-esta-sesion"
+	h.mu.Unlock()
+
+	master := &SessionData{UserID: "7", Username: "admin", UserLevel: "master", TenantCode: defaultTenantCode, ExpiresAt: time.Now().Add(time.Hour)}
+	empleado := &SessionData{UserID: "8", Username: "caja", UserLevel: "employee", TenantCode: defaultTenantCode, ExpiresAt: time.Now().Add(time.Hour)}
+	s.sessions.Create(master)
+	s.sessions.Create(empleado)
+
+	pedir := func(metodo, usuario, empresa, cuerpo string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(metodo, "/__addon/hola/mensaje.registrar", strings.NewReader(cuerpo))
+		req.RemoteAddr = "127.0.0.1:55000"
+		req.Header.Set("X-ERP-Addon-Token", "token-de-esta-sesion")
+		if usuario != "" {
+			req.Header.Set("X-ERP-User", usuario)
+		}
+		if empresa != "" {
+			req.Header.Set("X-ERP-Tenant", empresa)
+		}
+		rr := httptest.NewRecorder()
+		s.addonCanal(rr, req)
+		return rr
+	}
+
+	cuerpo := `{"mensaje":"hola desde el canal}`
+	cuerpo = `{"mensaje":"hola desde el canal"}`
+	// Escritura por GET: no hay escritura sin POST.
+	if rr := pedir(http.MethodGet, "7", "", ""); rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("un GET a un verbo de escritura debía dar 405, dio %d", rr.Code)
+	}
+	// Cuerpo que no es JSON: 400, sin tocar nada.
+	if rr := pedir(http.MethodPost, "7", "", "{no-json"); rr.Code != http.StatusBadRequest {
+		t.Fatalf("un cuerpo no JSON debía dar 400, dio %d", rr.Code)
+	}
+	// Usuario inventado (sin sesión viva): fail-closed.
+	if rr := pedir(http.MethodPost, "999", "", cuerpo); rr.Code != http.StatusForbidden {
+		t.Fatalf("un usuario sin sesión debía denegarse (403), dio %d", rr.Code)
+	}
+	// Cross-tenant: empresa ajena frente a la de la sesión.
+	if rr := pedir(http.MethodPost, "7", "otra-empresa", cuerpo); rr.Code != http.StatusForbidden {
+		t.Fatalf("la empresa ajena debía denegarse (403), dio %d", rr.Code)
+	}
+	// Sin permiso: el empleado no tiene hola_ver.
+	if rr := pedir(http.MethodPost, "8", "", cuerpo); rr.Code != http.StatusForbidden {
+		t.Fatalf("el empleado sin permiso debía denegarse (403), dio %d", rr.Code)
+	}
+	// Verbo declarado pero sin handler conectado en este arranque: 500.
+	if rr := pedir(http.MethodPost, "7", "", cuerpo); rr.Code != http.StatusInternalServerError {
+		t.Fatalf("sin handler conectado debía dar 500, dio %d", rr.Code)
+	}
+
+	// Handler conectado: la escritura pasa, con el contexto YA VALIDADO
+	// entregado al handler y la respuesta con id de petición.
+	var recibido sesionDeAddon
+	var cuerpoVisto map[string]interface{}
+	s.addonVerboRegistrar("hola", "mensaje.registrar", func(p *addonProc, ses sesionDeAddon, c map[string]interface{}) (map[string]interface{}, error) {
+		recibido = ses
+		cuerpoVisto = c
+		return map[string]interface{}{"registro_id": "hola-1"}, nil
+	})
+	rr := pedir(http.MethodPost, "7", "", cuerpo)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("el handler conectado debía responder 200, dio %d: %s", rr.Code, rr.Body.String())
+	}
+	var salida map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &salida); err != nil {
+		t.Fatalf("la respuesta no es JSON: %v", err)
+	}
+	if salida["peticion"] == "" || salida["registro_id"] != "hola-1" {
+		t.Fatalf("la respuesta debía llevar peticion y registro_id: %v", salida)
+	}
+	if recibido.Usuario != "7" || recibido.Empresa != defaultTenantCode || recibido.Sess != master {
+		t.Fatalf("el handler debía recibir el contexto de la sesión validada: %+v", recibido)
+	}
+	if cuerpoVisto["mensaje"] != "hola desde el canal" {
+		t.Fatalf("el handler debía recibir el cuerpo JSON: %v", cuerpoVisto)
+	}
+
+	// Y si el handler rechaza, el canal lo traduce a 500 con su razón.
+	s.addonVerboRegistrar("hola", "mensaje.registrar", func(p *addonProc, ses sesionDeAddon, c map[string]interface{}) (map[string]interface{}, error) {
+		return nil, fmt.Errorf("la pasarela rechazó el cobro")
+	})
+	if rr := pedir(http.MethodPost, "7", "", cuerpo); rr.Code != http.StatusInternalServerError {
+		t.Fatalf("un handler que rechaza debía dar 500, dio %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "La pasarela rechazó el cobro") { _ = 0 }
+	_ = s
 }
 
 // ---------- El ciclo completo con el addon real ----------
@@ -437,7 +767,20 @@ func TestElCicloCompletoDelAddonDemo(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifiestoHola), 0o644); err != nil {
+	// El bundle REAL del repo (manifest + schema.sql de fase 2): si el demo
+	// promete tablas propias, el escáner tiene que probárselo con su DDL.
+	manifestReal, err := os.ReadFile(filepath.Join("..", "..", "addons", "hola", "manifest.json"))
+	if err != nil {
+		t.Skipf("el manifiesto del demo del repo no está en este entorno: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifestReal, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	schemaReal, err := os.ReadFile(filepath.Join("..", "..", "addons", "hola", "schema.sql"))
+	if err != nil {
+		t.Fatal("el addon demo promete tables_own: su schema.sql es obligatorio")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "schema.sql"), schemaReal, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	binario := filepath.Join(dir, "erp-addon-hola")

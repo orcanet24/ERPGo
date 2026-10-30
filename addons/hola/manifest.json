@@ -1,9 +1,9 @@
 {
   "id": "hola",
   "name": "Hola, addon",
-  "version": "1.0.0",
-  "min_core_version": "0.1.0",
-  "description": "Addon demostrativo de la frontera fase 1: una pantalla, una entrada de menú y su tabla propia declarada (la tabla se crea en fase 2).",
+  "version": "2.0.0",
+  "min_core_version": "0.2.0",
+  "description": "Addon demostrativo de la frontera fase 2: pantalla propia, tabla propia (migración), y una escritura de negocio por el canal /__addon/ que baja por el orquestador.",
   "author": "ERPGo",
   "routes": ["/hola"],
   "menu": [
@@ -20,5 +20,8 @@
   "perms": [
     { "code": "hola_ver", "label": "Ver la pantalla del addon Hola" }
   ],
-  "tables_own": ["hola_mensajes"]
+  "tables_own": ["hola_mensajes"],
+  "db_write": [
+    { "verb": "mensaje.registrar", "perm": "hola_ver" }
+  ]
 }

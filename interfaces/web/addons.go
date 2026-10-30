@@ -28,6 +28,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"database/sql"
+	"erpgo/infrastructure/persistence"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -47,12 +48,14 @@ import (
 )
 
 // addonCoreVersion es lo que un manifiesto puede exigir como mínimo.
-// Sube cuando la frontera gana capacidades nuevas (ahora: solo fase 1).
-const addonCoreVersion = "0.1.0"
+// Sube cuando la frontera gana capacidades nuevas (fase 1: la frontera viva;
+// fase 2: lectura granular, escritura por el orquestador y tablas propias).
+const addonCoreVersion = "0.2.0"
 
 // addonFase marca la fase de la frontera que corre este binario, para que el
-// panel diga la verdad («fase 1: sin escrituras ni lectura»).
-const addonFase = 1
+// panel diga la verdad («fase 2: lectura, escritura por el canal y tablas
+// propias; firma y hooks llegan en fase 3»).
+const addonFase = 2
 
 // reservaDePrefijosCore son los prefijos de ruta que el núcleo ya usa. Un
 // manifiesto que pida una de estas rutas no se instala: si le diéramos el
@@ -68,6 +71,18 @@ var (
 	addonReRuta  = regexp.MustCompile(`^/[a-z0-9][a-z0-9_-]{0,60}(/[a-z0-9_-]{1,60})*$`)
 	addonReTabla = regexp.MustCompile(`^[a-z][a-z0-9_]{0,60}$`)
 	addonRePerm  = regexp.MustCompile(`^[a-z0-9][a-z0-9_]{0,60}$`)
+
+	// Los verbs de db_write son operaciones de negocio CON NOMBRE y en dos
+	// partes (dominio.accion, como invoice.send): no es SQL libre, es la
+	// puerta con nombre por la que el addon pide que el núcleo aplique una
+	// escritura por el orquestador (docs/PLAN-ADDONS.md §7).
+	addonReVerb = regexp.MustCompile(`^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$`)
+
+	// El DDL que un addon puede pedirle al núcleo ejecutar: SOLO crear su
+	// propia tabla si no existe. Ni DROP, ni ALTER, ni INSERT de siembra: el
+	// schema.sql de un addon es una herramientas de creación, jamás un pincel
+	// sobre el esquema ajeno.
+	addonReDDL = regexp.MustCompile("(?i)^CREATE\\s+TABLE\\s+IF\\s+NOT\\s+EXISTS\\s+(?:[`\"]?)(?P<tabla>[a-z][a-z0-9_]*)(?:[`\"]?)\\s*\\(")
 )
 
 // addonDirPorDefecto es la carpeta donde viven los addons, relativa al arranque
@@ -94,6 +109,17 @@ type addonPermiso struct {
 	Label string `json:"label"`
 }
 
+// addonVerbo es una operación de escritura declarada en db_write: un verbo
+// con nombre (dominio.accion, como invoice.send) y el permiso del manifiesto
+// que la sesión llamante debe tener. No es SQL libre: el verbo solo existe si
+// el núcleo tiene conectado su handler de negocio, y la frontera valida que el
+// usuario tenga una sesión viva, que su empresa coincida y que su permiso lo
+// autorice antes de llamarlo (docs/PLAN-ADDONS.md §7).
+type addonVerbo struct {
+	Verb string `json:"verb"`
+	Perm string `json:"perm"`
+}
+
 // addonManifest es el permiso de trabajo del addon: lo que declara, existe.
 type addonManifest struct {
 	ID             string           `json:"id"`
@@ -105,7 +131,7 @@ type addonManifest struct {
 	Routes         []string         `json:"routes"`
 	Menu           []addonMenuEntry `json:"menu"`
 	DBRead         []string         `json:"db_read"`
-	DBWrite        []string         `json:"db_write"`
+	DBWrite        []addonVerbo     `json:"db_write"`
 	TablesOwn      []string         `json:"tables_own"`
 	Perms          []addonPermiso   `json:"perms"`
 	HooksOut       []string         `json:"hooks_out"`
@@ -153,7 +179,6 @@ func validarManifiesto(m *addonManifest) error {
 			}
 		}
 	}
-
 	// Permisos: código con prefijo del id y etiqueta no vacía.
 	codigos := map[string]bool{}
 	for _, p := range m.Perms {
@@ -169,15 +194,44 @@ func validarManifiesto(m *addonManifest) error {
 		codigos[p.Code] = true
 	}
 
-	// Tablas: prefijo del id, para que ningún addon pueda pisar una tabla del
-	// núcleo ni de otro addon (fase 2 las aplica; el candado ya va aquí).
-	var tablas []string
-	tablas = append(tablas, m.DBRead...)
-	tablas = append(tablas, m.DBWrite...)
-	tablas = append(tablas, m.TablesOwn...)
-	for _, t := range tablas {
+	// Lectura granular (fase 2): db_read son tablas DEL ERP que el addon quiere
+	// consultar, así que NO llevan el prefijo del id — el ejemplo del plan es
+	// customer_information, una tabla del núcleo. El candado de verdad no está
+	// en el manifiesto: está en MySQL, al que el núcleo SO le concede SELECT
+	// sobre estas tablas en la base de cada empresa. Aquí solo exigimos que el
+	// nombre sea una tabla bien formada.
+	for _, t := range m.DBRead {
 		if !addonReTabla.MatchString(t) {
-			return fmt.Errorf("la tabla %q es inválida", t)
+			return fmt.Errorf("la tabla %q de db_read es inválida", t)
+		}
+	}
+
+	// Escritura por el canal (fase 2): cada verbo de db_write es una puerta de
+	// negocio CON NOMBRE (dominio.accion) y exige un permiso DECLARADO en este
+	// mismo manifiesto: si el addon pide un permiso que él no define, el panel
+	// mostraría un candado que nadie puede conceder. Un intento de SQL libre
+	// (nombre sin punto) no es una operación de negocio: se rechaza.
+	verbos := map[string]bool{}
+	for _, v := range m.DBWrite {
+		if !addonReVerb.MatchString(v.Verb) {
+			return fmt.Errorf("el verbo %q de db_write es inválido: deben ser dominio.accion (ej. invoice.send)", v.Verb)
+		}
+		if verbos[v.Verb] {
+			return fmt.Errorf("el verbo %q de db_write está declarado dos veces", v.Verb)
+		}
+		verbos[v.Verb] = true
+		if v.Perm == "" || !codigos[v.Perm] {
+			return fmt.Errorf("el verbo %q exige el permiso %q en su campo perm, y el manifiesto no lo declara en perms", v.Verb, v.Perm)
+		}
+	}
+
+	// Tablas propias (fase 2): prefijo del id, para que ningún addon pueda pisar
+	// una tabla del núcleo ni de otro addon. El escáner exige además que el
+	// schema.sql las cree (y SOLO a ellas) con CREATE TABLE IF NOT EXISTS.
+	// db_read quedó fuera de este candado a propósito: son tablas del ERP, no suyas.
+	for _, t := range m.TablesOwn {
+		if !addonReTabla.MatchString(t) {
+			return fmt.Errorf("la tabla %q de tables_own es inválida", t)
 		}
 		if t == m.ID || !strings.HasPrefix(t, m.ID+"_") {
 			return fmt.Errorf("la tabla %q debe empezar por el prefijo del id (%s_…): las tablas del ERP no son suyas", t, m.ID)
@@ -297,6 +351,16 @@ type addonProc struct {
 	ultimoError    string
 	proximoIntento time.Time
 
+	// Fase 2: sentencias CREATE TABLE IF NOT EXISTS que el escáner validó
+	// frente al manifiesto (solo tablas propias, nada de DROP/ALTER). Se
+	// aplican sobre cada empresa registrada; una empresa nueva las hereda.
+	migraciones []string
+
+	// Fase 2: resultado de pedir al núcleo la lectura granular. Fallo de esa
+	// solicitud NO tumba al addon — se explica en el panel con aviso_lectura.
+	lecturaOK    bool
+	lecturaAviso string
+
 	proxy *httputil.ReverseProxy
 }
 
@@ -311,11 +375,35 @@ type addonHost struct {
 	rutasDelMux map[string]bool // rutas ya registradas en el mux (solo al arrancar)
 	avisos      []string        // avisos del último escaneo, para el panel
 
+	// handlers de negocio de los verbs de db_write, por addon y por verbo.
+	// Los conecta el núcleo en el arranque (addonVerboRegistrar); la frontera
+	// NO conoce su lógica: solo valida contexto y permiso, y despacha.
+	acciones map[string]map[string]verboDeAddon
+
+	// crea el usuario MySQL de solo lectura de un addon con db_read.
+	// Inyectable para pruebas; por defecto es s.crearUsuarioLectorAddon.
+	crearLectura func(m addonManifest) (string, error)
+
 	// inyectables para pruebas
 	lanzar func(p *addonProc, binario string, env []string) error
 	ahora  func() time.Time
 	parado chan struct{}
 	parada sync.Once
+}
+
+// verboDeAddon es la firma de un handler de negocio conectado por el núcleo:
+// recibe el addon, el contexto de sesión YA VALIDADO por la frontera y el
+// cuerpo JSON de la petición, y devuelve el resultado que llegará al addon.
+// Errores de negocio devuelven error y el canal lo traduce a 500.
+type verboDeAddon func(p *addonProc, ses sesionDeAddon, cuerpo map[string]interface{}) (map[string]interface{}, error)
+
+// sesionDeAddon es el contexto que la frontera pasa al handler de negocio:
+// el usuario Y LA SESIÓN DE LA PETICIÓN (la frontera la resolvió por
+// X-ERP-User: el addon nunca decide quién llama) y la empresa activa resuelta.
+type sesionDeAddon struct {
+	Usuario string
+	Empresa string
+	Sess    *SessionData
 }
 
 // addonsIniciar arranca la frontera: escanea, registra en el mux y lanza.
@@ -331,12 +419,14 @@ func (s *Server) addonsIniciar() {
 		return
 	}
 	h := &addonHost{
-		s:           s,
-		directorio:  dir,
-		progs:       map[string]*addonProc{},
-		rutasDelMux: map[string]bool{},
-		ahora:       time.Now,
-		parado:      make(chan struct{}),
+		s:            s,
+		directorio:   dir,
+		progs:        map[string]*addonProc{},
+		rutasDelMux:  map[string]bool{},
+		acciones:     map[string]map[string]verboDeAddon{},
+		crearLectura: s.crearUsuarioLectorAddon,
+		ahora:        time.Now,
+		parado:       make(chan struct{}),
 	}
 	h.lanzar = h.lanzarReal
 	s.addons = h
@@ -398,7 +488,20 @@ func (h *addonHost) escanear() (map[string]*addonProc, []string) {
 		if colision {
 			continue
 		}
-		fila[m.ID] = &addonProc{manifiesto: m, dir: dir}
+		// Fase 2: si declara tablas propias, el schema.sql es obligatorio y
+		// su DDL va candado: solo CREATE TABLE IF NOT EXISTS de ESAS tablas.
+		// Un addon que trae DROP o ALTER, o crea una tabla que no declaró,
+		// no carga: el aviso lo explica con el detalle.
+		var migraciones []string
+		if len(m.TablesOwn) > 0 {
+			sentencias, err := addonMigracionesDeCarpeta(dir, &m)
+			if err != nil {
+				avisos = append(avisos, fmt.Sprintf("%s: %v", e.Name(), err))
+				continue
+			}
+			migraciones = sentencias
+		}
+		fila[m.ID] = &addonProc{manifiesto: m, dir: dir, migraciones: migraciones}
 	}
 	return fila, avisos
 }
@@ -447,6 +550,8 @@ func (h *addonHost) reescanear() error {
 			nuevo.estado = previo.estado
 			nuevo.fallasSalud = previo.fallasSalud
 			nuevo.ultimoError = previo.ultimoError
+			nuevo.lecturaOK = previo.lecturaOK
+			nuevo.lecturaAviso = previo.lecturaAviso
 			nuevo.proxy = previo.proxy
 			nuevo.manifiesto = previo.manifiesto // el vivo manda; el nuevo pide reinicio
 			nuevo.dir = previo.dir
@@ -457,7 +562,7 @@ func (h *addonHost) reescanear() error {
 			nuevo.estado == estadoSinBin || rebuilt
 		h.mu.Unlock()
 
-		if err := h.registrarEnBD(nuevo.manifiesto); err != nil {
+		if err := h.registrarEnBD(nuevo.manifiesto, nuevo.migraciones); err != nil {
 			avisos = append(avisos, fmt.Sprintf("%s: no se pudo registrar en modules/menu: %v", id, err))
 		}
 		if reiniciar {
@@ -518,31 +623,15 @@ func (h *addonHost) dbDeAddon() *sql.DB {
 }
 
 // registrarEnBD sincroniza las filas del addon con modules y menu de la base
-// de empresa. Nada se borra: lo que ya no está declarado se marca inactivo.
-func (h *addonHost) registrarEnBD(m addonManifest) error {
+// de empresa: PRIMERO sus migraciones (la tabla propia debe existir aunque el
+// registro de módulo falle), luego modules y menu. Nada se borra: lo que ya
+// no está declarado se marca inactivo.
+func (h *addonHost) registrarEnBD(m addonManifest, migraciones []string) error {
 	db := h.dbDeAddon()
 	if db == nil {
 		return nil // sin base (arranque en pruebas): nada que grabar
 	}
-	var existe int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM modules WHERE id = ?`, m.ID).Scan(&existe); err == nil {
-		if existe == 0 {
-			// Primera instalación: nace activo. El master decide después con
-			// el toggle; el escaneo no vuelve a encender lo que el master apagó.
-			if _, err := db.Exec(`INSERT INTO modules (id, name, version, description, is_core, is_active, path, author, license_type)
-				VALUES (?, ?, ?, ?, 0, 1, ?, ?, 'MIT')`,
-				m.ID, m.Name, m.Version, truncado(m.Description, 255), h.directorio, truncado(m.Author, 100)); err != nil {
-				return fmt.Errorf("insertar módulo: %w", err)
-			}
-		} else {
-			// Sin tocar is_active. Solo se refrescan los datos descriptivos.
-			if _, err := db.Exec(`UPDATE modules SET name = ?, version = ?, description = ?, path = ?, author = ?
-				WHERE id = ?`, m.Name, m.Version, truncado(m.Description, 255), h.directorio, truncado(m.Author, 100), m.ID); err != nil {
-				return fmt.Errorf("actualizar módulo: %w", err)
-			}
-		}
-	}
-	return h.sincronizarMenu(db, m)
+	return h.registrarEnDB(db, m, migraciones)
 }
 
 // sincronizarMenu refleja el manifiesto en el menú: las entradas declaradas se
@@ -609,28 +698,49 @@ func (h *addonHost) marcaInactivoEnBD(id string) {
 
 // addonRegistrarEmpresa es lo que se llama cuando se prepara una empresa
 // nueva: los addons ya escaneados deben existir también en esa base.
-func (s *Server) addonRegistrarEmpresa(db *sql.DB) {
+// addonRegistrarEmpresa lleva el escaneo y el registro de los addons ya cargados
+// a una empresa NUEVA: filas de modules/menu, migraciones de tablas propias y,
+// si el addon tiene lectura granular en pie, los grants SELECT en la base
+// nueva. Se llama al preparar empresa (PASO 4½ del provisioning). El código de
+// empresa nuevo va para los grants; el resto es igual al arranque.
+func (s *Server) addonRegistrarEmpresa(db *sql.DB, codigo string) {
 	if s == nil || s.addons == nil || db == nil {
 		return
 	}
 	s.addons.mu.Lock()
-	var lista []addonManifest
+	var lista []*addonProc
 	for _, p := range s.addons.progs {
-		lista = append(lista, p.manifiesto)
+		lista = append(lista, p)
 	}
 	s.addons.mu.Unlock()
-	for _, m := range lista {
-		if err := s.addons.registrarEnDB(db, m); err != nil {
-			log.Printf("addons: no se pudo registrar %s en la empresa nueva: %v", m.ID, err)
+	for _, p := range lista {
+		if err := s.addons.registrarEnDB(db, p.manifiesto, p.migraciones); err != nil {
+			log.Printf("addons: no se pudo registrar %s en la empresa nueva: %v", p.manifiesto.ID, err)
+		}
+		// Lectura granular: el usuario lector ya existe (fue creado al lanzar
+		// el addon); solo se le agregan los grants de la base nueva. Un fallo
+		// aquí NO revienta la preparación de la empresa: queda en el log y el
+		// usuario lector simplemente no verá estas tablas de esta empresa.
+		if len(p.manifiesto.DBRead) > 0 {
+			if err := s.addonConcederLecturaEnBase(p, s.tenantDBName(codigo)); err != nil {
+				log.Printf("AVISO addons: %s: sin grants de lectura para la empresa %q: %v", p.manifiesto.ID, codigo, err)
+			}
 		}
 	}
 }
 
 // registrarEnDB es la variante con DB explícita de registrarEnBD (se usa al
-// preparar una empresa, cuando no hay petición activa).
-func (h *addonHost) registrarEnDB(db *sql.DB, m addonManifest) error {
+// preparar una empresa, cuando no hay petición activa). Las migraciones de
+// tablas propias van PRIMERAS: la tabla debe existir aunque el registro de
+// módulo/popups/menu falle por la razón que sea.
+func (h *addonHost) registrarEnDB(db *sql.DB, m addonManifest, migraciones []string) error {
 	if db == nil {
 		return nil
+	}
+	for _, sentencia := range migraciones {
+		if _, err := db.Exec(sentencia); err != nil {
+			return fmt.Errorf("migración del addon: %w (sentencia: %.80s)", err, sentencia)
+		}
 	}
 	var existe int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM modules WHERE id = ?`, m.ID).Scan(&existe); err == nil && existe == 0 {
@@ -641,6 +751,223 @@ func (h *addonHost) registrarEnDB(db *sql.DB, m addonManifest) error {
 		}
 	}
 	return h.sincronizarMenu(db, m)
+}
+
+// ---------- Migraciones propias y lectura granular (fase 2) ----------
+
+// addonMigracionesDeCarpeta lee y valida el schema.sql de un addon con
+// tables_own. El contrato es de piedra:
+//
+//	- El archivo existe: declarar tables_own sin schema.sql no carga (el
+//	  addon se quedaría sin tabla y su pantalla fallaría en silencio).
+//	- Cada sentencia es CREATE TABLE IF NOT EXISTS <tabla>, con <tabla>
+//	  declarada por el manifiesto. Ni DROP, ni ALTER, ni INSERT de siembra: el
+//	  esquema propio se SIEMBRA una vez con código del addon, no con DDL suelto,
+//	  y el esquema ajeno no lo toca nadie.
+//	- Cada tabla declarada tiene su CREATE (si faltara, la tabla no
+//	  existiría y el addon fallaría lejos del error real).
+func addonMigracionesDeCarpeta(dir string, m *addonManifest) ([]string, error) {
+	contenido, err := os.ReadFile(filepath.Join(dir, "schema.sql"))
+	if err != nil {
+		return nil, fmt.Errorf("declara tables_own pero la carpeta no trae schema.sql: %w", err)
+	}
+	sentencias := addonPartirSQL(string(contenido))
+	if len(sentencias) == 0 {
+		return nil, fmt.Errorf("declara tables_own pero schema.sql está vacío o sin sentencias")
+	}
+	declaradas := map[string]bool{}
+	for _, t := range m.TablesOwn {
+		declaradas[t] = true
+	}
+	creadas := map[string]bool{}
+	for _, sentencia := range sentencias {
+		coincidencia := addonReDDL.FindStringSubmatch(sentencia)
+		if coincidencia == nil {
+			return nil, fmt.Errorf("schema.sql: solo se aceptan sentencias CREATE TABLE IF NOT EXISTS <tabla>; la sentencia %.60s… no pasa el candado", sentencia)
+		}
+		tabla := coincidencia[1]
+		if !declaradas[tabla] {
+			return nil, fmt.Errorf("schema.sql: crea la tabla %q y el manifiesto NO la declara en tables_own", tabla)
+		}
+		if creadas[tabla] {
+			return nil, fmt.Errorf("schema.sql: la tabla %q se crea dos veces", tabla)
+		}
+		creadas[tabla] = true
+	}
+	for _, t := range m.TablesOwn {
+		if !creadas[t] {
+			return nil, fmt.Errorf("la tabla %q está en tables_own pero schema.sql no la crea", t)
+		}
+	}
+	return sentencias, nil
+}
+
+// addonPartirSQL parte un .sql en sentencias “;” separadas, respetando
+// comillas simples, dobles, backticks y comentarios -- de línea completa.
+// No es un parser SQL: es la sierra justa para dividir un schema.sql saneado.
+func addonPartirSQL(sql string) []string {
+	var salida []string
+	var actual strings.Builder
+	enComilla := byte(0)
+	comentario := false
+	for i := 0; i < len(sql); i++ {
+		c := sql[i]
+		if comentario {
+			if c == '\n' {
+				comentario = false
+				actual.WriteByte(c)
+			}
+			continue
+		}
+		if enComilla != 0 {
+			if c == '\\' && enComilla != '`' {
+				// Escapado dentro de comilla: copia literal los dos bytes.
+				if i+1 < len(sql) {
+					actual.WriteByte(c)
+					actual.WriteByte(sql[i+1])
+					i++
+				}
+				continue
+			}
+			if c == enComilla {
+				enComilla = 0
+			}
+			actual.WriteByte(c)
+			continue
+		}
+		switch {
+		case c == '-' && i+1 < len(sql) && sql[i+1] == '-':
+			// Comentario de línea: se salta hasta el fin de línea (puede
+		// contener ';' o citas que confundirían la sierra).
+		comentario = true
+		i++
+		case c == '\'' || c == '"' || c == '`':
+			enComilla = c
+			actual.WriteByte(c)
+		case c == ';':
+			tira := strings.TrimSpace(actual.String())
+			if tira != "" {
+				salida = append(salida, tira)
+			}
+			actual.Reset()
+		default:
+			actual.WriteByte(c)
+		}
+	}
+	if tira := strings.TrimSpace(actual.String()); tira != "" {
+		salida = append(salida, tira)
+	}
+	return salida
+}
+
+// crearUsuarioLectorAddon crea (o refresca) el usuario MySQL de solo lectura
+// de un addon con db_read, le concede SELECT SOLO sobre las tablas declaradas
+// en las bases de las empresas registradas y devuelve el DSN SIN base por
+// defecto: el addon consulta la base de la empresa activa anteponiendo el
+// prefijo de empresa que el provisioning fija como contrato (docs/PLAN-ADDONS
+// §2). La clave es NUEVA en cada lanzamiento: cuando el addon renace, la
+// sesión anterior pierde el acceso a la lectura aunque conserve la memoria.
+func (s *Server) crearUsuarioLectorAddon(m addonManifest) (string, error) {
+	if s == nil || s.config == nil {
+		return "", fmt.Errorf("sin configuración MySQL en este arranque")
+	}
+	if len(m.DBRead) == 0 {
+		return "", fmt.Errorf("el manifiesto no declara db_read")
+	}
+	db, usuario, err := s.conexionDelUsuarioLector(m.ID)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	clave := tokenEfimero()
+	host := "127.0.0.1"
+	if _, err := db.Exec(fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'%s' IDENTIFIED BY '%s'", usuario, host, clave)); err != nil {
+		return "", fmt.Errorf("no se pudo crear el usuario de lectura: %w", err)
+	}
+	if _, err := db.Exec(fmt.Sprintf("ALTER USER '%s'@'%s' IDENTIFIED BY '%s'", usuario, host, clave)); err != nil {
+		return "", fmt.Errorf("no se pudo refrescar la clave del usuario de lectura: %w", err)
+	}
+	// Las bases donde el addon consulta: la del núcleo/empresa maestra y cada
+	// una del catálogo. Una empresa nueva recibe sus grants en
+	// addonRegistrarEmpresa (mismo usuario, misma clave, sin re-crear nada).
+	bases := []string{s.config.DBName}
+	if ctl, err := s.controlStore(); err == nil {
+		rows, err := ctl.Query(`SELECT code FROM tenants`)
+		if err == nil {
+			for rows.Next() {
+				var code string
+				if err := rows.Scan(&code); err == nil && code != "" {
+					bases = append(bases, s.tenantDBName(code))
+				}
+			}
+			rows.Close()
+		}
+	}
+	for _, base := range bases {
+		if base == "" {
+			continue
+		}
+		for _, tabla := range m.DBRead {
+			if !addonReTabla.MatchString(tabla) {
+				return "", fmt.Errorf("la tabla %q de db_read no es un nombre válido para GRANT", tabla)
+			}
+			if _, err := db.Exec(fmt.Sprintf("GRANT SELECT ON `%s`.`%s` TO '%s'@'%s'", base, tabla, usuario, host)); err != nil {
+				return "", fmt.Errorf("no se pudo conceder SELECT en %s.%s: %w", base, tabla, err)
+			}
+		}
+	}
+	if _, err := db.Exec("FLUSH PRIVILEGES"); err != nil {
+		return "", fmt.Errorf("no se pudo refrescar privilegios: %w", err)
+	}
+	return persistence.DSNMySQL(persistence.ConfigMySQL{Host: s.config.DBHost, Port: s.config.DBPort, Usuario: usuario, Clave: clave}), nil
+}
+
+// conexionDelUsuarioLector abre la conexión de administración MySQL y devuelve
+// el nombre del usuario lector del addon (erp_ro_ + su id truncado, guiones
+// por guion bajo para no pisar entre ids parecidos). Las credenciales son las
+// mismas de provisioning de empresas: quien prepara empresas es quien crea
+// lectores. El lector nace SIN usuario si no hay uno del provisioning: mismo
+// rebusque que el preparado de empresas.
+func (s *Server) conexionDelUsuarioLector(idAddon string) (*sql.DB, string, error) {
+	cfgMySQL := persistence.ConfigMySQL{
+		Host: s.config.DBHost, Port: s.config.DBPort,
+		Usuario: s.config.DBProvisionUser, Clave: s.config.DBProvisionPassword,
+	}
+	if cfgMySQL.Usuario == "" {
+		cfgMySQL.Usuario = s.config.DBUser
+		cfgMySQL.Clave = s.config.DBPassword
+	}
+	db, err := persistence.ConectarServidorMySQL(cfgMySQL)
+	if err != nil {
+		return nil, "", fmt.Errorf("no se pudo conectar al servidor MySQL para el usuario de lectura: %w", err)
+	}
+	return db, "erp_ro_" + truncado(strings.ReplaceAll(idAddon, "-", "_"), 25), nil
+}
+
+// addonConcederLecturaEnBase agrega los grants SELECT del usuario lector de
+// un addon para una base NUEVA (empresa recién preparada): mismo usuario,
+// misma clave de esta sesión; no se re-crea nada ni se toca la clave aquí.
+func (s *Server) addonConcederLecturaEnBase(p *addonProc, base string) error {
+	if s == nil || p == nil || base == "" || len(p.manifiesto.DBRead) == 0 {
+		return nil
+	}
+	db, usuario, err := s.conexionDelUsuarioLector(p.manifiesto.ID)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	for _, tabla := range p.manifiesto.DBRead {
+		if !addonReTabla.MatchString(tabla) {
+			return fmt.Errorf("la tabla %q no es un nombre válido para GRANT", tabla)
+		}
+		if _, err := db.Exec(fmt.Sprintf("GRANT SELECT ON `%s`.`%s` TO '%s'@'127.0.0.1'", base, tabla, usuario)); err != nil {
+			return fmt.Errorf("no se pudo conceder SELECT en %s.%s: %w", base, tabla, err)
+		}
+	}
+	if _, err := db.Exec("FLUSH PRIVILEGES"); err != nil {
+		return fmt.Errorf("no se pudo refrescar privilegios: %w", err)
+	}
+	return nil
 }
 
 // ---------- Lanzamiento del proceso hijo ----------
@@ -715,6 +1042,10 @@ func (h *addonHost) lanzarBajoCandado(p *addonProc) {
 		env = append(env, "ERP_CORE_URL=http://127.0.0.1:"+h.s.config.ServerPort)
 	}
 
+	// Lectura granular (fase 2): el lector corre ANTES de lanzar el proceso y
+	// su DSN viaja en el entorno que el proceso va a recibir.
+	env = append(env, h.resolverLectura(p)...)
+
 	iniciar := h.lanzar
 	if iniciar == nil {
 		iniciar = h.lanzarReal
@@ -749,6 +1080,38 @@ func (h *addonHost) lanzarBajoCandado(p *addonProc) {
 		_, _ = w.Write([]byte(`{"error":"El addon está caído. Reinícialo en Configuración → Módulos → Addons."}`))
 	}
 	log.Printf("addons: %s %s activo (ruta %s, 127.0.0.1:%d)", p.manifiesto.ID, p.manifiesto.Version, p.manifiesto.Routes[0], puerto)
+}
+
+// resolverLectura pide al núcleo la lectura granular de un addon con db_read
+// y devuelve las entradas de entorno extra que el proceso recibirá (el DSN
+// cuando se concedió; nada en otro caso). Un fallo del lector NO tumba al
+// addon: su pantalla sigue sirviendo; el motivo queda en el log y en el
+// panel (lecturaAviso), y el add-on arranca sin su conexión de lectura.
+func (h *addonHost) resolverLectura(p *addonProc) []string {
+	if len(p.manifiesto.DBRead) == 0 {
+		return nil
+	}
+	crear := h.crearLectura
+	if crear == nil && h.s != nil {
+		crear = h.s.crearUsuarioLectorAddon
+	}
+	if crear == nil {
+		p.lecturaOK = false
+		p.lecturaAviso = "la lectura granular no se concedió: este arranque no trae lector"
+		log.Printf("AVISO addons: %s: %s", p.manifiesto.ID, p.lecturaAviso)
+		return nil
+	}
+	dsn, err := crear(p.manifiesto)
+	if err != nil {
+		p.lecturaOK = false
+		p.lecturaAviso = "la lectura granular no se concedió: " + err.Error()
+		log.Printf("AVISO addons: %s: %s", p.manifiesto.ID, p.lecturaAviso)
+		return nil
+	}
+	p.lecturaOK = true
+	p.lecturaAviso = ""
+	log.Printf("addons: %s: lectura granular concedida (%d tablas), DSN por entorno", p.manifiesto.ID, len(p.manifiesto.DBRead))
+	return []string{"ERP_DB_READ_DSN=" + dsn}
 }
 
 // lanzarReal ejecuta el binario como proceso hijo con su logging etiquetado.
@@ -984,9 +1347,11 @@ func (s *Server) addonPermsDelUsuario(r *http.Request, sess *SessionData, m addo
 // ---------- El canal de negocio: addon → núcleo ----------
 
 // addonCanal es el handler de /__addon/{id}/{verb}. Todo va autenticado con
-// el token efímero y desde loopback. En fase 1 no hay verbs de escritura: el
-// único implementado es ping (verificación de vida del canal). Cualquier otro
-// verb responde 404 con el mensaje exacto de que la escritura es fase 2.
+// el token efímero y desde loopback. Fase 2: además de ping (verificación de
+// vida, GET permitido porque no escribe), llega la escritura: verbo declarado
+// en el manifiesto, POST con cuerpo JSON, sesión viva del usuario, empresa
+// coincidente y permiso concedido; la escritura se aplica por el orquestador
+// vía el handler de negocio conectado (addonVerboRegistrar), NO desde aquí.
 func (s *Server) addonCanal(w http.ResponseWriter, r *http.Request) {
 	// Loopback sin excepción: la entrada /__addon/ es pública en los
 	// middlewares (permissions.go) precisamente para que este handler sea el
@@ -1027,12 +1392,121 @@ func (s *Server) addonCanal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch verb {
-	case "ping":
+	if verb == "ping" {
 		writeJSON(w, map[string]interface{}{"status": 1, "core": addonCoreVersion, "fase": addonFase})
-	default:
-		jsonError(w, fmt.Sprintf("El verbo %q no está en la fase %d de la frontera: escrituras y lectura llegan en fase 2.", verb, addonFase), http.StatusNotFound)
+		return
 	}
+	s.addonCanalEscritura(w, r, p, verb)
+}
+
+// addonCanalEscritura ejecuta un verbo de db_write. El manifiesto es el
+// candado y la frontera valida en ESTE orden, cada uno con su código y su
+// aviso en el log:
+//
+//  1. POST con cuerpo JSON válido (un GET no debe poder escribir; el cuerpo
+//     pasa por MaxBytesReader: un cuerpo gigante no tumba al ERP).
+//  2. El verbo está declarado en db_write (lo que no está declarado no existe:
+//     403 y log).
+//  3. X-ERP-User trae un usuario CON sesión viva (fail-closed: sin sesión, no
+//     hay ni usuario ni empresa ni permiso — 403).
+//  4. La empresa de X-ERP-Tenant coincide con la de la sesión (cross-tenant:
+//     403).
+//  5. El usuario tiene el permiso que el manifiesto exigió para el verbo
+//     (permissionMap; el master lo pasa — 403 si no).
+//  6. El handler de negocio está conectado (sin él el verbo es ruido: 500).
+//
+// La respuesta lleva id de petición (peticion) que también dejamos en el log:
+// trazabilidad triple journal → audit_log → registro del canal.
+func (s *Server) addonCanalEscritura(w http.ResponseWriter, r *http.Request, p *addonProc, verb string) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "La escritura va por POST (el verbo "+verb+" declara db_write).", http.StatusMethodNotAllowed)
+		return
+	}
+	// El manifiesto manda ANTES de pararse a leer el cuerpo: lo que no está
+	// declarado no existe, y a un intento fuera del candado ni se le lee
+	// (403 y log, como exige docs/PLAN-ADDONS.md §11).
+	var verbo *addonVerbo
+	for i := range p.manifiesto.DBWrite {
+		v := p.manifiesto.DBWrite[i]
+		if v.Verb == verb {
+			verbo = &v
+			break
+		}
+	}
+	if verbo == nil {
+		log.Printf("AVISO addons: canal: %q pidió el verbo %q y su manifiesto NO lo declara en db_write", p.manifiesto.ID, verb)
+		jsonError(w, fmt.Sprintf("El addon %q no declara el verbo %q en db_write: el manifiesto es el candado.", p.manifiesto.ID, verb), http.StatusForbidden)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var cuerpo map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&cuerpo); err != nil {
+		jsonError(w, "El cuerpo de la escritura no es un documento JSON válido: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	usuario := r.Header.Get("X-ERP-User")
+	empresa := r.Header.Get("X-ERP-Tenant")
+	sess := s.sessions.DeUsuario(usuario)
+	if sess == nil {
+		log.Printf("AVISO addons: canal: verbo %q de %q con usuario %q SIN sesión viva", verb, p.manifiesto.ID, usuario)
+		jsonError(w, "El usuario "+usuario+" del contexto NO tiene sesión viva en este ERP: la escritura se rechaza.", http.StatusForbidden)
+		return
+	}
+	if empresa == "" {
+		empresa = sess.TenantCode
+	}
+	if sess.TenantCode != "" && empresa != sess.TenantCode {
+		log.Printf("AVISO addons: canal: usuario %q (empresa %q) pidió escribir en %q: empresas distintas", usuario, sess.TenantCode, empresa)
+		jsonError(w, fmt.Sprintf("La empresa declarada por el canal (%q) no es la de la sesión del usuario (%q): rechazado.", empresa, sess.TenantCode), http.StatusForbidden)
+		return
+	}
+	permisos := s.permissionMap(s.requestForSession(sess), sess)
+	if !permisos["__master"] && !permisos["_all"] && !permisos[verbo.Perm] {
+		log.Printf("AVISO addons: canal: usuario %q sin el permiso %q que exige el verbo %q", usuario, verbo.Perm, verb)
+		jsonError(w, fmt.Sprintf("El usuario no tiene el permiso %q que el manifiesto exige para %q.", verbo.Perm, verb), http.StatusForbidden)
+		return
+	}
+	s.addons.mu.Lock()
+	accion := s.addons.acciones[p.manifiesto.ID][verb]
+	s.addons.mu.Unlock()
+	if accion == nil {
+		log.Printf("AVISO addons: canal: el verbo %q de %q está declarado pero no tiene handler conectado", verb, p.manifiesto.ID)
+		jsonError(w, "El verbo "+verb+" está declarado en el manifiesto pero este arranque no conectó su handler de negocio.", http.StatusInternalServerError)
+		return
+	}
+	idPeticion := "addon-" + randomHex(8)
+	resultado, err := accion(p, sesionDeAddon{Usuario: usuario, Empresa: empresa, Sess: sess}, cuerpo)
+	log.Printf("addons: canal: %s/%s usuario=%s empresa=%s petición=%s ok=%v error=%v", p.manifiesto.ID, verb, usuario, empresa, idPeticion, err == nil, err)
+	if err != nil {
+		jsonError(w, "El handler de negocio del addon "+p.manifiesto.ID+" rechazó la escritura: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	respuesta := map[string]interface{}{"status": 1, "peticion": idPeticion}
+	for k, v := range resultado {
+		respuesta[k] = v
+	}
+	writeJSON(w, respuesta)
+}
+
+// addonVerboRegistrar conecta el handler de negocio de UN verbo declarado en
+// db_write del manifiesto de un addon. Los handlers viven FUERA de la frontera
+// (cada módulo registra los suyos al arrancar); la frontera solo valida
+// contexto y permiso, y despacha. Un verbo sin entrada en db_write se rechaza
+// antes de llamar al handler: el manifiesto manda aunque el handler exista.
+func (s *Server) addonVerboRegistrar(id, verb string, fn verboDeAddon) {
+	if s == nil || s.addons == nil || id == "" || verb == "" || fn == nil {
+		return
+	}
+	h := s.addons
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.acciones == nil {
+		h.acciones = map[string]map[string]verboDeAddon{}
+	}
+	if h.acciones[id] == nil {
+		h.acciones[id] = map[string]verboDeAddon{}
+	}
+	h.acciones[id][verb] = fn
 }
 
 // addonDestinoDelPath separa id y verb del canal. Se parsea a mano y no con
@@ -1082,15 +1556,27 @@ func (s *Server) addonsEstado() map[string]interface{} {
 	for _, id := range idsOrdenados(h.progs) {
 		p := h.progs[id]
 		m := p.manifiesto
+		verbos := make([]string, 0, len(m.DBWrite))
+		for _, v := range m.DBWrite {
+			verbos = append(verbos, v.Verb)
+		}
+		// Concedidos reales (fase 2): db_read solo si el núcleo entregó el DSN;
+		// db_write si hay verbs declarados; tables si el escáner validó y aplicó
+		// sus migraciones. La mentira en el panel es la que cuesta una noche de
+		// depuración: mejor «falta X» claro que «concedido» falso.
 		limpio = append(limpio, map[string]interface{}{
 			"id": m.ID, "name": m.Name, "version": m.Version,
 			"description": m.Description, "author": m.Author,
 			"routes": m.Routes, "estado": p.estado,
 			"ultimo_error": p.ultimoError,
-			"db_read":      m.DBRead, "db_write": m.DBWrite,
+			"db_read":      m.DBRead, "db_write": verbos,
 			"tables_own": m.TablesOwn, "perms": m.Perms,
+			"lectura_aviso": p.lecturaAviso,
 			"concedido": map[string]bool{
-				"db_read": false, "db_write": false, "tables": false, "hooks": false,
+				"db_read": len(m.DBRead) > 0 && p.lecturaOK,
+				"db_write": len(m.DBWrite) > 0,
+				"tables": len(m.TablesOwn) > 0,
+				"hooks": false,
 			},
 		})
 	}

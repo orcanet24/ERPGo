@@ -83,7 +83,9 @@ hacer y el núcleo decide si se lo concede. Sin manifiesto válido no arranca.
       "sort_order": 40, "url": "/cobranza", "perms": ["cobranza_view"] }
   ],
   "db_read":  ["customer_information", "invoices"],
-  "db_write": [],
+  "db_write": [
+    { "verb": "invoice.send", "perm": "cobranza_send" }
+  ],
   "tables_own": ["cob_mensajes", "cob_reglas"],
   "perms": [
     { "code": "cobranza_view",   "label": "Ver cobranza" },
@@ -224,16 +226,23 @@ La regla de oro del repo — **una sola puerta de escritura** (el orquestador
   tablas del tenant que la sesión del usuario está usando; no existe para él
   la conexión «de todas las empresas». Consultas del addon para entender el
   negocio del ERP sin credenciales heredadas ni accesos a lo ciego.
-- **Escritura solo por el canal de negocio.** Cada verbo en `db_write` es una
-  **operación de negocio con nombre**, no un SQL libre:
+- **Escritura solo por el canal de negocio.** Cada entrada de `db_write` es
+  una **operación de negocio con nombre y su permiso requerido**, nunca SQL
+  libre: el verbo lleva dos partes (`dominio.accion`) y el `perm` citado
+  tiene que estar declarado en `perms` de este mismo manifiesto:
 
   ```json
+  "db_write": [ { "verb": "invoice.send", "perm": "cobranza_send" } ]
+  ```
+
+  ```
   POST /__addon/cobranza/invoice.send
   { "customer_id": 42, "payload": { "mensaje": "recordatorio de pago" } }
   ```
 
   El núcleo valida: viene del token, de loopback, y el usuario de la sesión
-  tiene el permiso requerido del manifiesto. Después llama al handler de
+  tiene el permiso requerido que la entrada de `db_write` exige. Después llama
+  al handler de
   negocio correspondiente, que escribe **por el orquestador** (journal +
   `audit_log`). La trazabilidad queda triple: el journal del núcleo, el
   audit_log, y el registro del verb con su id de petición.
