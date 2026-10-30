@@ -38,13 +38,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"net/http/httputil"
-	"net/url"
 	"testing"
 	"time"
 )
@@ -758,7 +758,9 @@ func TestElCanalDeFase2ValidaSesionEmpresaPermisoYHandler(t *testing.T) {
 	if rr := pedir(http.MethodPost, "7", "", cuerpo); rr.Code != http.StatusInternalServerError {
 		t.Fatalf("un handler que rechaza debía dar 500, dio %d", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), "La pasarela rechazó el cobro") { _ = 0 }
+	if !strings.Contains(rr.Body.String(), "La pasarela rechazó el cobro") {
+		_ = 0
+	}
 	_ = s
 }
 
@@ -865,8 +867,8 @@ func TestElManifiestoFase3ValidaHooks(t *testing.T) {
 	// Cada daño posible con su aviso esperado.
 	bases := []struct {
 		nombre string
-		hatNew func() *addonManifest
-		quota string
+		monta  func() *addonManifest
+		quota  string
 	}{
 		{"hook_out a un evento que el núcleo no emite", func() *addonManifest {
 			m := manifiestoValido()
@@ -895,7 +897,7 @@ func TestElManifiestoFase3ValidaHooks(t *testing.T) {
 		}, "dos veces"},
 	}
 	for _, b := range bases {
-		if err := validarManifiesto(b.hatNew()); err == nil {
+		if err := validarManifiesto(b.monta()); err == nil {
 			t.Fatalf("%s debía rechazarse", b.nombre)
 		} else if !strings.Contains(err.Error(), b.quota) {
 			t.Fatalf("%s debía explicar %q, explicó: %v", b.nombre, b.quota, err)
