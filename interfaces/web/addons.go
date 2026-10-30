@@ -1,6 +1,6 @@
 package web
 
-// addons.go — La frontera de los addons externos (docs/PLAN-ADDONS.md, fase 1).
+// addons.go — La frontera de los addons externos (docs/PLAN-ADDONS.md, fases 1 y 2).
 //
 // POR QUÉ EXISTE. El SDK anterior (retirado en 2cfcc15) vivía en go.mod: «agregar
 // un addon» era recompilar el binario. El módulo de GOWA se tejó en permisos,
@@ -12,13 +12,18 @@ package web
 // sesión del ERP. El núcleo ES este archivo y la administración de una vez;
 // los addons ya no tocan el resto del código.
 //
-// Qué es fase 1 y qué no. Aquí está: escáner, validación del manifiesto,
-// registro en modules/menu (la pantalla Módulos que ya existe), lanzamiento con
-// token efímero y puerto reservado, proxy inverso de las rutas declaradas,
-// estado de salud, reinicio, y el canal de negocio /__addon/ autenticado (sin
-// verbs de escritura: llegan en fase 2). NO hay: conexión de lectura (fase 2),
-// creación de tablas propias (fase 2), firma del manifiesto (fase 3) ni hooks
-// (fase 3). Lo declarado y no concedido se ve en el panel con esa indicación.
+// Qué está y qué no. FASE 1: escáner, validación del manifiesto, registro en
+// modules/menu (la pantalla Módulos que ya existe), lanzamiento con token
+// efímero y puerto reservado, proxy inverso de las rutas declaradas, estado de
+// salud, reinicio y el canal de negocio /__addon/ autenticado.
+//
+// FASE 2 (ya implantada): lectura granular por empresa activa — usuario MySQL
+// de solo SELECT, DSN por entorno y la cabecera X-ERP-DB que le dice al addon
+// EN QUÉ base consultar, sin la cual el grant no sirve—; escritura por verbos
+// declarados en db_write que baja por el orquestador (journal + audit_log);
+// y migraciones de las tablas propias con CREATE TABLE IF NOT EXISTS.
+// NO hay todavía (fase 3): firma ed25519 del manifiesto ni hooks out/in.
+// Lo declarado y no concedido se ve en el panel con esa indicación.
 //
 // LO QUE NO SE NEGOCIA: un addon muerto jamás derriba al ERP (solo su ruta da
 // 502 con mensaje claro), las cookies del ERP jamás llegan al addon, y las
@@ -28,9 +33,9 @@ import (
 	"bytes"
 	"crypto/rand"
 	"database/sql"
-	"erpgo/infrastructure/persistence"
 	"encoding/hex"
 	"encoding/json"
+	"erpgo/infrastructure/persistence"
 	"fmt"
 	"log"
 	"net"
@@ -93,13 +98,13 @@ const addonDirPorDefecto = "addons"
 
 // addonMenuEntry es una entrada de menú del addon.
 type addonMenuEntry struct {
-	ParentID    *int     `json:"parent_id"`
-	Label       string   `json:"label"`
-	URL         string   `json:"url"`
-	Icon        string   `json:"icon"`
-	Perms       []string `json:"perms"`
-	SortOrder   int      `json:"sort_order"`
-	ActivePrefix string  `json:"active_prefix"`
+	ParentID     *int     `json:"parent_id"`
+	Label        string   `json:"label"`
+	URL          string   `json:"url"`
+	Icon         string   `json:"icon"`
+	Perms        []string `json:"perms"`
+	SortOrder    int      `json:"sort_order"`
+	ActivePrefix string   `json:"active_prefix"`
 }
 
 // addonPermiso es un permiso declarado por el addon. El código SIEMPRE lleva
@@ -331,9 +336,9 @@ func addonVersionNumeros(v string) ([3]int, bool) {
 
 // Estados visibles en el panel de addons.
 const (
-	estadoActivo  = "activo"
-	estadoCaydo   = "caído"
-	estadoSinBin  = "sin binario"
+	estadoActivo   = "activo"
+	estadoCaydo    = "caído"
+	estadoSinBin   = "sin binario"
 	estadoDetenido = "detenido"
 )
 
@@ -758,14 +763,14 @@ func (h *addonHost) registrarEnDB(db *sql.DB, m addonManifest, migraciones []str
 // addonMigracionesDeCarpeta lee y valida el schema.sql de un addon con
 // tables_own. El contrato es de piedra:
 //
-//	- El archivo existe: declarar tables_own sin schema.sql no carga (el
-//	  addon se quedaría sin tabla y su pantalla fallaría en silencio).
-//	- Cada sentencia es CREATE TABLE IF NOT EXISTS <tabla>, con <tabla>
-//	  declarada por el manifiesto. Ni DROP, ni ALTER, ni INSERT de siembra: el
-//	  esquema propio se SIEMBRA una vez con código del addon, no con DDL suelto,
-//	  y el esquema ajeno no lo toca nadie.
-//	- Cada tabla declarada tiene su CREATE (si faltara, la tabla no
-//	  existiría y el addon fallaría lejos del error real).
+//   - El archivo existe: declarar tables_own sin schema.sql no carga (el
+//     addon se quedaría sin tabla y su pantalla fallaría en silencio).
+//   - Cada sentencia es CREATE TABLE IF NOT EXISTS <tabla>, con <tabla>
+//     declarada por el manifiesto. Ni DROP, ni ALTER, ni INSERT de siembra: el
+//     esquema propio se SIEMBRA una vez con código del addon, no con DDL suelto,
+//     y el esquema ajeno no lo toca nadie.
+//   - Cada tabla declarada tiene su CREATE (si faltara, la tabla no
+//     existiría y el addon fallaría lejos del error real).
 func addonMigracionesDeCarpeta(dir string, m *addonManifest) ([]string, error) {
 	contenido, err := os.ReadFile(filepath.Join(dir, "schema.sql"))
 	if err != nil {
@@ -838,9 +843,9 @@ func addonPartirSQL(sql string) []string {
 		switch {
 		case c == '-' && i+1 < len(sql) && sql[i+1] == '-':
 			// Comentario de línea: se salta hasta el fin de línea (puede
-		// contener ';' o citas que confundirían la sierra).
-		comentario = true
-		i++
+			// contener ';' o citas que confundirían la sierra).
+			comentario = true
+			i++
 		case c == '\'' || c == '"' || c == '`':
 			enComilla = c
 			actual.WriteByte(c)
@@ -1323,6 +1328,15 @@ func (s *Server) addonProxyRequest(w http.ResponseWriter, r *http.Request, sess 
 	req.Header.Set("X-ERP-User", sess.UserID)
 	req.Header.Set("X-ERP-Tenant", s.tenantOf(r))
 	req.Header.Set("X-ERP-Perms", s.addonPermsDelUsuario(r, sess, p.manifiesto))
+	// La base de la empresa activa (fase 2). Sin esta cabecera el DSN de
+	// lectura granular es una llave sin puerta: el manifiesto pide tablas y el
+	// usuario lector tiene los grants, pero nadie le dice en qué base están
+	// las filas de ESTA sesión —el mismo addon atiende a varias empresas—.
+	// El nombre de base no es secreto: sin el grant de SELECT, entrar en ella
+	// no deja leer nada.
+	if s.config != nil {
+		req.Header.Set("X-ERP-DB", s.tenantDBName(s.tenantOf(r)))
+	}
 	p.proxy.ServeHTTP(w, req)
 }
 
@@ -1573,10 +1587,10 @@ func (s *Server) addonsEstado() map[string]interface{} {
 			"tables_own": m.TablesOwn, "perms": m.Perms,
 			"lectura_aviso": p.lecturaAviso,
 			"concedido": map[string]bool{
-				"db_read": len(m.DBRead) > 0 && p.lecturaOK,
+				"db_read":  len(m.DBRead) > 0 && p.lecturaOK,
 				"db_write": len(m.DBWrite) > 0,
-				"tables": len(m.TablesOwn) > 0,
-				"hooks": false,
+				"tables":   len(m.TablesOwn) > 0,
+				"hooks":    false,
 			},
 		})
 	}
@@ -1585,10 +1599,10 @@ func (s *Server) addonsEstado() map[string]interface{} {
 		avisos = []string{}
 	}
 	return map[string]interface{}{
-		"fase":    addonFase,
-		"core":    addonCoreVersion,
-		"addons":  limpio,
-		"avisos":  avisos,
+		"fase":       addonFase,
+		"core":       addonCoreVersion,
+		"addons":     limpio,
+		"avisos":     avisos,
 		"directorio": h.directorio,
 	}
 }

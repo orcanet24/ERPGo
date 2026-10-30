@@ -162,6 +162,11 @@ con el token efímero del arranque. Son dos canales distintos:
   ERP para que no circulen hacia el addon:
   - `X-ERP-User`: id del usuario logueado.
   - `X-ERP-Tenant`: código de la empresa activa.
+  - `X-ERP-DB`: nombre de la **base** de esa empresa activa. Es la otra mitad
+    de la lectura granular (§7): sin ella el addon recibe un DSN y unos
+    grants pero no sabe en qué base están las filas de ESTA sesión, y el
+    mismo addon atiende a varias empresas. El nombre de base no es un
+    secreto: sin el `SELECT` concedido, entrar en ella no deja leer nada.
   - `X-ERP-Perms`: los códigos del manifiesto que ese usuario tiene, en CSV
     (`__master` para el super administrador).
 
@@ -220,12 +225,18 @@ La regla de oro del repo — **una sola puerta de escritura** (el orquestador
 
 - **Lectura directa y granular.** Si el manifiesto declara `db_read`, el
   núcleo crea un usuario MySQL `erp_ro_<id>@localhost` con permiso **solo de
-  `SELECT`** sobre las tablas listadas, y le entrega la cadena de conexión
-  (`ERP_DB_READ_DSN`) por el arranque, con contraseña distinta en cada
-  sesión. Además, la vista es **por empresa activa**: el addon consulta las
-  tablas del tenant que la sesión del usuario está usando; no existe para él
-  la conexión «de todas las empresas». Consultas del addon para entender el
-  negocio del ERP sin credenciales heredadas ni accesos a lo ciego.
+  `SELECT`** sobre las tablas listadas, y le entrega la cadena de  conexión (`ERP_DB_READ_DSN`) por el arranque. Ese DSN viene **sin base por
+  defecto**: el addon abre cada consulta sobre la base que le indica la
+  cabecera `X-ERP-DB` de la petición que está atendiendo (§4), de modo que la
+  vista es **por empresa activa**; no existe para él la conexión «de todas las
+  empresas». Consultas del addon para entender el negocio del ERP sin
+  credenciales heredadas ni accesos a lo ciego.
+
+  Un addon puede declarar en `db_read` **también sus propias tablas** (`demo_avisos`,
+  `memo_notas`…): los grants SELECT se aplican a las tablas declaradas sin
+  preguntar de quién son, y sin esa entrada el addon no podría LEER lo que él
+  mismo escribió por el canal para pintarlo en su pantalla. Es la lectura de
+  su espejo, no una ampliación de poder: solo alcanza a lo que ya es suyo.
 - **Escritura solo por el canal de negocio.** Cada entrada de `db_write` es
   una **operación de negocio con nombre y su permiso requerido**, nunca SQL
   libre: el verbo lleva dos partes (`dominio.accion`) y el `perm` citado
@@ -280,7 +291,12 @@ tablas son suyas, y el núcleo ni recuerda que existieron.
 
 ## 9. Plan por fases
 
-### Fase 1 — La frontera mínima (la primera; todo lo demás la necesita)
+### Fase 1 — La frontera mínima (la primera; todo lo demás la necesita) ✅
+
+> **Estado (2026-10-30): IMPLEMENTADA y probada.** El escáner, el proxy con
+> cabeceras de contexto, el registro en `modules`/`menu`, el canal de negocio
+> con token y loopback, y el addon demo (`addons/hola/`) viven en
+> `interfaces/web/addons.go` con sus pruebas en `addons_test.go`.
 - Escáner de `addons/`, validación del manifiesto, lanzamiento del proceso
   hijo con token efímero y puerto reservado.
 - Proxy inverso de las rutas del manifiesto con validación de sesión del
@@ -294,14 +310,19 @@ tablas son suyas, y el núcleo ni recuerda que existieron.
   entrada de menú y una tabla propia, que acredite el ciclo completo; su
   prueba `*_test.go` en el repo y todo en verde antes de cerrar.
 
-### Fase 2 — Datos y escrituras
+### Fase 2 — Datos y escrituras ✅
+
+> **Estado (2026-10-30): IMPLEMENTADA y probada.** Conexión de solo lectura
+> granular (usuario `erp_ro_<id>`, clave nueva por sesión y cabecera
+> `X-ERP-DB` para elegir la base), verbos de escritura por el orquestador y
+> migraciones de tablas propias con `CREATE TABLE IF NOT EXISTS`.
 - Conexión MySQL de solo lectura granular (`db_read`) por empresa activa,
   con usuario renovado por sesión.
 - Verbs de escritura en `/__addon/` a través del orquestador, cada uno con su
   handler de negocio y su prueba.
 - Migraciones de tablas propias en el arranque, nombres prefijados por `id`.
 
-### Fase 3 — Confianza y reactividad
+### Fase 3 — Confianza y reactividad (pendiente)
 - Firma ed25519 del manifiesto y verificación en el arranque; modo
   `ADDONS_UNSIGNED` solo para desarrollo, con la clara indicación «sin
   verificar» en la pantalla Módulos.

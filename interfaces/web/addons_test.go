@@ -9,7 +9,8 @@ package web
 //     tabla sin prefijo del id, menú que cita permisos no declarados).
 //   - El registro: addons → filas de modules/menu en la base de empresa, y el
 //     desinstalado queda «no instalado» con filas inactivas, jamás borradas.
-//   - El proxy: reenvía con X-ERP-* y SIN cookies del ERP.
+//   - El proxy: reenvía con X-ERP-* (usuario, empresa, permisos y la base de
+//     la empresa activa, X-ERP-DB) y SIN cookies del ERP.
 //   - El canal de negocio: 403 sin token / fuera de loopback / token ajeno;
 //     en fase 2, un verb que el manifiesto NO declara en db_write da 403
 //     (el manifiesto es el candado, aunque el handler exista).
@@ -28,12 +29,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"net/http/httputil"
-	"net/url"
 	"testing"
 	"time"
 )
@@ -270,19 +271,23 @@ func TestElEscaneoInformaAvisoPorCarpetaDefectuosa(t *testing.T) {
 // ---------- El proxy inverso ----------
 
 func TestElProxyReenviaConContextoYNoConCookies(t *testing.T) {
-	var vistasDe, vistasTenant, vistasPerms, vistasCookies []string
+	var vistasDe, vistasTenant, vistasPerms, vistasCookies, vistasBase []string
 	fin := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		vistasDe = append(vistasDe, r.Header.Get("X-ERP-User"))
 		vistasTenant = append(vistasTenant, r.Header.Get("X-ERP-Tenant"))
 		vistasPerms = append(vistasPerms, r.Header.Get("X-ERP-Perms"))
 		vistasCookies = append(vistasCookies, r.Header.Get("Cookie"))
+		vistasBase = append(vistasBase, r.Header.Get("X-ERP-DB"))
 		_, _ = w.Write([]byte("pantalla del addon"))
 		close(fin)
 	}))
 	defer upstream.Close()
 
 	s, h := hostDeAddon(t, addonDirPrueba(t, manifiestoHola))
+	// Toda instalación real trae DB_NAME: sin él la cabecera de base saldría
+	// vacía y la prueba estaría midiendo un arranque a medias.
+	s.config.DBName = "erpgo_prueba"
 	h.reescanear()
 	h.mu.Lock()
 	p := h.progs["hola"]
@@ -314,6 +319,11 @@ func TestElProxyReenviaConContextoYNoConCookies(t *testing.T) {
 	}
 	if vistasCookies[0] != "" {
 		t.Fatalf("las cookies del ERP llegaron al addon: %q", vistasCookies[0])
+	}
+	// La lectura granular solo sirve si el addon sabe EN QUÉ base consultar:
+	// sin esta cabecera, el grant y el DSN no se encuentran.
+	if vistasBase[0] != "erpgo_prueba" {
+		t.Fatalf("X-ERP-DB debía ser la base de la empresa activa (\"erpgo_prueba\"), dio %q", vistasBase[0])
 	}
 	if !strings.Contains(rr.Body.String(), "pantalla del addon") {
 		t.Fatalf("el cuerpo del addon no llegó al usuario: %s", rr.Body.String())
@@ -747,7 +757,9 @@ func TestElCanalDeFase2ValidaSesionEmpresaPermisoYHandler(t *testing.T) {
 	if rr := pedir(http.MethodPost, "7", "", cuerpo); rr.Code != http.StatusInternalServerError {
 		t.Fatalf("un handler que rechaza debía dar 500, dio %d", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), "La pasarela rechazó el cobro") { _ = 0 }
+	if !strings.Contains(rr.Body.String(), "La pasarela rechazó el cobro") {
+		_ = 0
+	}
 	_ = s
 }
 
