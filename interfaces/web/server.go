@@ -629,7 +629,15 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		public := []string{"/login", "/api/login", "/api/pos/", "/health", "/setup/company", "/static/", "/uploads", "/favicon"}
+		// /__addon/: el canal de negocio de los addons. Un addon no tiene cookie
+		// de navegador ni va a tener, y este middleware corre POR FUERA del de
+		// permisos —donde /__addon/ ya estaba declarado público—: sin esta
+		// entrada, todo verbo de todo addon moría en un 302 a /login que el
+		// addon no puede seguir (ni nota.crear ni ningún otro llegaba al
+		// orquestador en un ERP real). No es abrir la puerta: addonCanal decide
+		// después, fail-closed, con loopback, grant efímero, sesión viva,
+		// empresa y permiso — que es para lo que existe esa ruta.
+		public := []string{"/login", "/api/login", "/api/pos/", "/__addon/", "/health", "/setup/company", "/static/", "/uploads", "/favicon"}
 		for _, p := range public {
 			if strings.HasPrefix(r.URL.Path, p) {
 				next.ServeHTTP(w, r)

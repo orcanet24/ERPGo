@@ -370,6 +370,59 @@ func TestLaRutaDelAddonPideSesion(t *testing.T) {
 	}
 }
 
+// TestElCanalDeNegocioAtraviesaLaCadenaDeMiddlewares: el canal se prueba AQUÍ
+// contra la cadena EXACTA de producción —authMiddleware envolviendo a
+// permissionMiddleware—, no contra el handler suelto.
+//
+// Por qué hace falta esta prueba: authMiddleware manda al login a todo lo que
+// no esté en SU lista de públicos y corre ANTES que el de permisos, donde
+// /__addon/ ya estaba declarado. Un addon no tiene cookie ni va a tener, así
+// que su escritura moría en un 302 que no puede seguir: ningún verbo de
+// ningún módulo (nota.crear incluido) llegaba al orquestador en un ERP real,
+// y las pruebas no lo veían porque llamaban al canal directamente.
+func TestElCanalDeNegocioAtraviesaLaCadenaDeMiddlewares(t *testing.T) {
+	// El manifiesto fase 2 declara tables_own: sin schema.sql el escáner ni
+	// carga el addon y no hay canal que probar.
+	dir := addonDirPrueba(t, manifiestoHolaFase2)
+	escribirSchema(t, dir, schemaHola)
+	s, h := hostDeAddon(t, dir)
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	h.progs["hola"].token = "token-canal"
+	h.mu.Unlock()
+
+	pasar := func(r *http.Request) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		s.authMiddleware(s.permissionMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s.addonCanal(w, r)
+		}))).ServeHTTP(rr, r)
+		return rr
+	}
+
+	// a) El ping sin cookie: tiene que responder EL CANAL, no el login.
+	ping := httptest.NewRequest(http.MethodGet, "/__addon/hola/ping", nil)
+	ping.RemoteAddr = "127.0.0.1:50000"
+	ping.Header.Set("X-ERP-Addon-Token", "token-canal")
+	if rr := pasar(ping); rr.Code != http.StatusOK {
+		t.Fatalf("el canal debía responder 200 al atravesar la cadena, dio %d (Location=%q): la escritura de los addons volvería a estar cortada",
+			rr.Code, rr.Header().Get("Location"))
+	}
+
+	// b) Una escritura sin usuario en el contexto: la rechaza EL CANAL, con su
+	//    403 y su motivo — no un redirect, que es lo que pasaba antes.
+	escritura := httptest.NewRequest(http.MethodPost, "/__addon/hola/mensaje.registrar",
+		strings.NewReader(`{"mensaje":"hola"}`))
+	escritura.RemoteAddr = "127.0.0.1:50000"
+	escritura.Header.Set("X-ERP-Addon-Token", "token-canal")
+	escritura.Header.Set("Content-Type", "application/json")
+	if rr := pasar(escritura); rr.Code != http.StatusForbidden || !strings.Contains(rr.Body.String(), "sesión viva") {
+		t.Fatalf("la escritura sin sesión debía rechazarla el canal (403 con su motivo), dio %d: %s",
+			rr.Code, rr.Body.String())
+	}
+}
+
 func TestElAddonApagadoPorElMasterNoSirveSuPantalla(t *testing.T) {
 	s, h := hostDeAddon(t, addonDirPrueba(t, manifiestoHola))
 	h.reescanear()
