@@ -11,7 +11,7 @@ REM El directorio bin/ no se sube a GitHub: está en .gitignore.
 if not exist bin mkdir bin
 
 echo Compilando ERPGo...
-go build -o bin/ERPGo.exe .
+go build -o bin/ERPGo.exe ./cmd/server
 if errorlevel 1 (
     echo.
     echo *** ERROR: la compilacion fallo ***
