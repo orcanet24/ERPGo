@@ -9,6 +9,9 @@ config/empresas/
 backup/
 logs/
 
+# Binario Windows: se compila con build.bat y nunca se sube a GitHub
+/bin/
+
 # Documentacion historica del ERP PHP original (~38 MB): se conserva en disco pero no en el repositorio
 /doc/*
 !/doc/informe-auditoria-tecnica-2026-10-29.md
