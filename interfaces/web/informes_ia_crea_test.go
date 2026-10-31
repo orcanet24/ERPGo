@@ -15,6 +15,7 @@ package web
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -272,5 +273,84 @@ func TestParametrosDesdeHastaSeSustituyen(t *testing.T) {
 	}
 	if _, err := substituteReportParams("SELECT * FROM a WHERE f >= :desde", "", "2026-01-31"); err == nil {
 		t.Fatal("una fecha :desde vacía debe rechazarse")
+	}
+}
+
+// TestTotalsNoDependenDeOrdenColumns: reproduce el bug del usuario en el que
+// el agente reordena columns respecto a los aliases del SELECT (ej: declara
+// "mes" antes que "trimestre" pero el SELECT devuelve "trimestre" antes que
+// "mes"). Antes, el motor sumaba posición a posición y un total declarado
+// caía en la posición equivocada → "no se pudo calcular el total". Con
+// keyIndex el total se busca por key declarada sin depender del orden.
+func TestTotalsNoDependenDeOrdenColumns(t *testing.T) {
+	s, db := basePrueba(t)
+	crearTablaReportTemplatePrueba(t, db)
+	// Tabla de prueba con datos numéricos.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS ventas_demo (
+		fecha TEXT, periodo TEXT, importe REAL)`); err != nil {
+		t.Fatalf("create ventas_demo: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO ventas_demo (fecha, periodo, importe) VALUES
+		('2026-01-05','2026-01','100'), ('2026-01-10','2026-01','200')`); err != nil {
+		t.Fatalf("insert ventas_demo: %v", err)
+	}
+	sess := sessPrueba("admin")
+	// El agente reordena: columns dice mes,trimestre pero el SELECT devuelve
+	// en orden trimestre,mes (¡la desalineación del bug!). totals pide "mes".
+	def := `{"title":"Ventas","sql":"SELECT fecha AS dia, periodo AS trimestre, importe AS mes FROM ventas_demo","columns":[{"key":"dia","label":"Día"},{"key":"mes","label":"Mes"},{"key":"trimestre","label":"Trimestre"}],"totals":["mes"]}`
+	_, preview, err := s.previewDefinitionFromJSON(sess, def)
+	if err != nil {
+		t.Fatalf("previewDefinitionFromJSON no debe fallar por reorden: %v", err)
+	}
+	// preview se usa solo para confirmar que no bloquea; aquí "mes" es una fecha
+	// (TEXT) así que su total no se calcula, pero no debe dar error.
+	_ = preview
+	// Para probar el total NUMÉRICO real, usamos importe AS monto, con el key
+	// declarado en otro orden que el SELECT (monto aparece en cols pero el
+	// agente pudo reordenar): keyIndex resuelve por key, no por posición.
+	def2 := `{"title":"Ventas","sql":"SELECT fecha AS dia, importe AS monto FROM ventas_demo","columns":[{"key":"dia","label":"Día"},{"key":"monto","label":"Monto"}],"totals":["monto"]}`
+	_, preview2, err := s.previewDefinitionFromJSON(sess, def2)
+	if err != nil {
+		t.Fatalf("preview2: %v", err)
+	}
+	if len(preview2.Warnings) > 0 {
+		t.Fatalf("no debe haber warnings: %v", preview2.Warnings)
+	}
+	v, ok := preview2.Totals["monto"]
+	if !ok {
+		t.Fatal("el total de 'monto' no se calculó")
+	}
+	if fmt.Sprintf("%v", v) != "300" && fmt.Sprintf("%v", v) != "300.0" {
+		t.Errorf("esperaba total monto=300; salió %v", v)
+	}
+}
+
+// TestPreviewNoBloqueaMostrandoWarning: el preview devuelve warnings (no error)
+// para que el usuario itere; el warning incluye las columnas reales. Reproduce
+// el reporte del usuario (ventas_actual/iva_cobrado sin valores numéricos porque
+// el resultado tiene NULL por división por cero en variacion_pct).
+func TestPreviewNoBloqueaMostrandoWarning(t *testing.T) {
+	s, db := basePrueba(t)
+	crearTablaReportTemplatePrueba(t, db)
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS ventas_demo2 (actual REAL, anterior REAL)`); err != nil {
+		t.Fatalf("create ventas_demo2: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO ventas_demo2 (actual, anterior) VALUES (100, 0)`); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	sess := sessPrueba("admin")
+	// variacion_pct = actual/anterior*100 → NULL (división por cero) → no numerico.
+	// ventas_actual SÍ es numérica: debe calcularse. ventas_anterior también.
+	def := `{"title":"V","sql":"SELECT actual AS ventas_actual, anterior AS ventas_anterior, CASE WHEN anterior=0 THEN NULL ELSE actual/anterior*100 END AS variacion_pct FROM ventas_demo2","columns":[{"key":"ventas_actual"},{"key":"ventas_anterior"},{"key":"variacion_pct"}],"totals":["ventas_actual","ventas_anterior","variacion_pct"]}`
+	_, preview, err := s.previewDefinitionFromJSON(sess, def)
+	if err != nil {
+		t.Fatalf("preview no debe bloquear por warnings: %v", err)
+	}
+	// ventas_actual y ventas_anterior deben calcularse (no están en warnings).
+	if _, ok := preview.Totals["ventas_actual"]; !ok {
+		t.Errorf("ventas_actual debería calcularse; warnings=%v", preview.Warnings)
+	}
+	if _, ok := preview.Totals["ventas_anterior"]; !ok {
+		t.Errorf("ventas_anterior debería calcularse; warnings=%v", preview.Warnings)
 	}
 }

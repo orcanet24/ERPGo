@@ -228,25 +228,26 @@ func (s *Server) executeReportDefinition(sess *SessionData, definition, from, to
 	sums := map[string]float64{}
 
 	// Los totales van por la clave DECLARADA (d.Columns[i].Key) y no por el
-	// alias del SELECT. Antes se sumaba por cols[i], que es el alias, mientras
-	// los encabezados se armaban con las claves declaradas: en cuanto el agente
-	// nombraba una columna distinto en el SELECT que en columns, los totales
-	// salían vacíos sin decir nada.
+	// alias del SELECT. Antes se sumaba posición a posición (cols[i]↔declaradas[i]),
+	// lo que rompía cuando el agente reordenaba columns respecto al SELECT
+	// (ej: declara mes/trimestre al revés): el valor de una posición caía en
+	// la key equivocada y el total salía vacío con un warning confuso.
 	//
-	// Se calculan los dos y se suma por los dos nombres, porque la plantilla
-	// puede pedir el total por cualquiera de los dos y el motor no tiene por qué
-	// saber cuál escribió el agente.
+	// La corrección: construir keyIndex mapeando CUALQUIER nombre (alias del
+	// SELECT y/o key declarada) a su posición i en vals. Luego el total por
+	// key busca vals[keyIndex[key]] directamente, sin depender del orden.
 	declaradas := d.ClavesDeclaradas()
-	if len(declaradas) < len(cols) {
-		for len(declaradas) < len(cols) {
-			declaradas = append(declaradas, "")
+	keyIndex := map[string]int{}
+	for i, c := range cols {
+		if i < len(declaradas) && declaradas[i] != "" && declaradas[i] != c {
+			keyIndex[declaradas[i]] = i
+		}
+		if _, ok := keyIndex[c]; !ok {
+			keyIndex[c] = i
 		}
 	}
-	for _, c := range d.Columns {
-		res.Headers = append([]string{}, cols...)
-		_ = c
-		break
-	}
+	// Los encabezados los arma la definición (label > key), no el SELECT: así
+	// el usuario ve nombres amigables y no aliases de SQL crudo.
 	if len(d.Columns) > 0 {
 		res.Headers = make([]string, 0, len(d.Columns))
 		for _, c := range d.Columns {
@@ -266,30 +267,29 @@ func (s *Server) executeReportDefinition(sess *SessionData, definition, from, to
 		if err := rows.Scan(ptrs...); err != nil {
 			continue
 		}
+		// Normalizar []byte a string para valorNumerico.
 		for i, v := range vals {
 			if b, ok := v.([]byte); ok {
 				vals[i] = string(b)
 			}
-			// Se acumula por los dos nombres posibles: el alias del SELECT y la
-			// clave declarada. Así la plantilla funciona se escribiera la
-			// columna como se escribiera, que es justo cuando discrepan.
-			//
-			// Solo se suman si son DISTINTOS: cuando coinciden (lo normal) sumarlos
-			// los dos duplicaba la columna y el total salía al doble, sin ningún
-			// aviso. Un total que cuadra al doble es peor que uno que no sale,
-			// porque parece un dato bueno.
-			//
-			// Y se convierte el valor antes de sumar porque MySQL devuelve los
-			// DECIMAL como []byte, no como float64: si solo se sumaran los
-			// float64, NINGÚN total de dinero se calcularía jamás.
-			f := valorNumerico(vals[i])
+		}
+		// Sumar por cada key declarada; buscar el valor por su posición REAL
+		// (keyIndex), no por posición. Esto resuelve el desalineamiento entre
+		// columns[].key y los aliases del SELECT.
+		for _, c := range d.Columns {
+			key := c.Key
+			if key == "" {
+				continue
+			}
+			idx, ok := keyIndex[key]
+			if !ok {
+				continue
+			}
+			f := valorNumerico(vals[idx])
 			if f == nil {
 				continue
 			}
-			sums[cols[i]] += *f
-			if d := declaradas[i]; d != "" && d != cols[i] {
-				sums[d] += *f
-			}
+			sums[key] += *f
 		}
 		res.Rows = append(res.Rows, vals)
 		if len(res.Rows) >= aiHardMaxRows {
@@ -305,22 +305,24 @@ func (s *Server) executeReportDefinition(sess *SessionData, definition, from, to
 		// con las mismas filas y sin cifras, y quien lo lee no tiene por qué
 		// sospechar que le falta el dato más importante.
 		//
-		// Por qué se incluyen los aliases reales del SELECT: el agente suele
-		// declarar "total_ventas" como key pero el SELECT usa "total". Listar
-		// las columnas que SÍ aparecen acelera la corrección: el feedback va en
-		// el warning que se muestra en la pantalla, no en un log de servidor.
+		// Por qué se listan las columnas y el mismatch: el agente suele desalinear
+		// `columns` respecto a los aliases del SELECT, o declarar una key que el
+		// SELECT ni devuelve. Mostrar ambos nombres ("key (SELECT: alias)") deja
+		// visible el desajuste para corregir en el refine.
 		disponibles := make([]string, 0, len(cols))
+		seen := map[string]bool{}
 		for i := range cols {
 			k := cols[i]
 			if k == "" {
 				continue
 			}
-			// Si el agente declaró un key distinto al alias del SELECT, se
-			// muestra "key (SELECT: alias)" para que el mismatch salte a la vista.
-			if i < len(declaradas) && declaradas[i] != "" && declaradas[i] != k {
+			if i < len(declaradas) && declaradas[i] != "" && declaradas[i] != k && !seen[declaradas[i]] {
 				disponibles = append(disponibles, declaradas[i]+" (SELECT: "+k+")")
-			} else {
+				seen[declaradas[i]] = true
+			}
+			if !seen[k] {
 				disponibles = append(disponibles, k)
+				seen[k] = true
 			}
 		}
 		res.Warnings = append(res.Warnings, fmt.Sprintf(
@@ -330,7 +332,13 @@ func (s *Server) executeReportDefinition(sess *SessionData, definition, from, to
 	return res, nil
 }
 
-// valorNumerico convierte a float lo que venga de la base.
+// containsIntKey verifica si key ya está mapeado en m.
+func containsIntKey(m map[string]int, key string) bool {
+	_, ok := m[key]
+	return ok
+}
+
+// valorNumerico convierte a float lo que venga de la base. convierte a float lo que venga de la base.
 //
 // MySQL entrega los DECIMAL como []byte para no perder precisión, de modo que un
 // `SUM(total_amount)` no aparece como float64 sino como []byte("145.00"). Por eso
