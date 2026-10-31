@@ -135,3 +135,49 @@ func TestGuiaDDLUsaDialectoCorrecto(t *testing.T) {
 		t.Logf("cierre de base limpia: %v", err)
 	}
 }
+
+// TestGuiaProgressNoEsBloqueadoPorCSRF: GOti solo carga en empresa demo y su
+// JS (goti.js) no siempre adjunta el token CSRF. EnforceCSRF exime /guia/ para
+// que el POST /guia/progress no caiga en 403 "Token de seguridad inválido".
+func TestGuiaProgressNoEsBloqueadoPorCSRF(t *testing.T) {
+	s, db := baseGuia(t)
+	sess := &SessionData{UserID: "7", Username: "usuario", UserLevel: "admin"}
+
+	// POST /guia/progress SIN token CSRF: enforCSRF lo exime, llega al handler.
+	// El handler valida sess y tenantEsDemo, así que no se cae en 403 de CSRF.
+	req := httptest.NewRequest(http.MethodPost, "/guia/progress", nil)
+	req = withScope(req, &scope{tenant: "default", db: db, sess: sess})
+	res := httptest.NewRecorder()
+	s.guiaProgress(res, req)
+
+	// No debe ser 403 de CSRF (token inválido). El action vacío → 400, no 403.
+	if res.Code == http.StatusForbidden {
+		t.Fatalf("/guia/progress no debe dar 403 (CSRF bloqueado): %s", res.Body.String())
+	}
+
+	// Verificar directamente que enforCSRF exime /guia/
+	sinSess := &Server{}
+	req2 := httptest.NewRequest(http.MethodPost, "/guia/progress", nil)
+	res2 := httptest.NewRecorder()
+	// enforceCSRF con sess nil: normalmente exime (login) → next.
+	// Pero con sess nil, caería en redirect de authMiddleware, no en 403 de CSRF.
+	// La exención /guia/ significa que ni siquiera se valida el token:
+	sinSess.enforceCSRF(res2, req2, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), nil)
+	if res2.Code != http.StatusOK {
+		t.Fatalf("enforceCSRF debe eximir /guia/ (200 esperado); dio %d", res2.Code)
+	}
+
+	// Una ruta NO exenta con POST y sess nil también exime (porque sess es nil),
+	// así que probamos con sess NO nil para confirmar que /guia/ sí exime:
+	sConSess := &Server{}
+	req3 := httptest.NewRequest(http.MethodPost, "/guia/progress", nil)
+	res3 := httptest.NewRecorder()
+	sConSess.enforceCSRF(res3, req3, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), &SessionData{CSRFToken: "token"})
+	if res3.Code != http.StatusOK {
+		t.Fatalf("enforceCSRF debe eximir /guia/ incluso con sess y token; dio %d: %s", res3.Code, res3.Body.String())
+	}
+}

@@ -19,10 +19,17 @@
 
   function $(id) { return document.getElementById(id); }
   function http(method, url, body) {
-    return fetch(url, {
+    // Usa ERPGo.csrfFetch (definido en csrf.js del layout) para adjuntar el
+    // token CSRF en las peticiones que cambian estado. SIN ESTO, el POST a
+    // /guia/progress cae en enforceCSRF → 403 "Token de seguridad inválido",
+    // porque fetch nativo no setea X-CSRF-Token. GOti.js sólo carga en empresa
+    // demo (GuiDemo), y csrf.js está en el layout, así que ERPGo está definido.
+    var fetcher = (typeof window !== 'undefined' && window.ERPGo && window.ERPGo.csrfFetch) ? window.ERPGo.csrfFetch : fetch;
+    return fetcher(url, {
       method: method,
       headers: { 'Content-Type': 'application/json' },
-      body: body ? JSON.stringify(body) : undefined
+      body: body ? JSON.stringify(body) : undefined,
+      credentials: 'same-origin'
     }).then(function (r) { return r.json(); });
   }
   function esc(s) {
