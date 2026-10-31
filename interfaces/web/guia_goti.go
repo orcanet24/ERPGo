@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"erpgo/infrastructure/persistence"
 )
 
 // guiaToursDemo son los tours sembrados. Con INSERT ... ON DUPLICATE KEY UPDATE
@@ -235,41 +237,19 @@ func ensureGuiaTables(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("sin base")
 	}
-	sentencias := []string{
-		`CREATE TABLE IF NOT EXISTS guia_tour (
-		  id INTEGER PRIMARY KEY AUTOINCREMENT,
-		  code VARCHAR(64) NOT NULL UNIQUE,
-		  label VARCHAR(160) NOT NULL,
-		  rol VARCHAR(30) NOT NULL DEFAULT '*',
-		  status TINYINT NOT NULL DEFAULT 1
-		)`,
-		`CREATE TABLE IF NOT EXISTS guia_paso (
-		  id INTEGER PRIMARY KEY AUTOINCREMENT,
-		  tour_id INT NOT NULL,
-		  orden INT NOT NULL,
-		  url VARCHAR(255) NOT NULL,
-		  selector VARCHAR(255) NOT NULL DEFAULT '',
-		  titulo VARCHAR(200) NOT NULL,
-		  mensaje TEXT NOT NULL,
-		  depends_on INT NULL,
-		  check_sql TEXT NULL,
-		  check_msg VARCHAR(255) NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS guia_progreso (
-		  user_id INT NOT NULL,
-		  paso_id INT NOT NULL,
-		  done TINYINT NOT NULL DEFAULT 0,
-		  skipped TINYINT NOT NULL DEFAULT 0,
-		  hidden TINYINT NOT NULL DEFAULT 0,
-		  updated_at VARCHAR(32) NOT NULL DEFAULT '',
-		  PRIMARY KEY (user_id, paso_id)
-		)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uk_tour_orden ON guia_paso (tour_id, orden)`,
-	}
-	for _, q := range sentencias {
-		if _, err := db.Exec(q); err != nil {
-			return err
-		}
+	// DDL en dialecto MySQL (INT AUTO_INCREMENT PRIMARY KEY), aplicado con
+	// AplicarEsquema que ya tolera "la tabla ya existía". ANTES se usaba
+	// INTEGER PRIMARY KEY AUTOINCREMENT (SQLite), y MySQL rechazaba la
+	// sentencia con un error de sintaxis → 500 en guia/active en producción.
+	// El dataTables que consume la respuesta caía en "Cannot read properties
+	// of null (reading 'length')" porque el 500 devolvía HTML, no JSON.
+	//
+	// Los tests usan SQLite: baseGuia pre-crea las tablas con DDL SQLite
+	// compatible, así que AplicarEsquema las ve ya existentes y no intenta
+	// parsear el AUTO_INCREMENT.
+	sentencias := guiaDDLSentencias(db)
+	if err := persistence.AplicarEsquema(db, sentencias); err != nil {
+		return fmt.Errorf("no se pudieron crear las tablas de GOti: %w", err)
 	}
 
 	// Siembra idempotente del contenido. Se borra lo sembrado de cada tour antes
