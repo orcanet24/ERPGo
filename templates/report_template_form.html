@@ -597,10 +597,12 @@ $(function () {
 });
 
 function aiHelp() {
-    // "Ayuda rápida": abre el modal interactivo con el prompt ya escrito.
-    var req = $('#ai_req').val().trim();
-    // Si existe un #ai_req antiguo (formulario manual), moverlo al prompt del modal.
-    $('#ai_prompt').val(req || $('#tpl_def').val().trim().substring(0, 200) + '...');
+    // "Ayuda rápida": abre el modal interactivo. Si el textarea de definición
+    // ya tiene contenido (un borrador manual), lo ofrecemos como prompt
+    // inicial; si no, el prompt queda vacío para escribir desde cero.
+    var defText = $('#tpl_def').val().trim();
+    var prompt = defText ? defText.substring(0, 220) + '...' : '';
+    $('#ai_prompt').val(prompt);
     $('#aiOpenCreate').trigger('click');
 }
 </script>
