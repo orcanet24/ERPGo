@@ -60,7 +60,16 @@ func (s *Server) moduleList(w http.ResponseWriter, r *http.Request) {	s.render(w
 }
 
 // moduleListData devuelve los módulos en formato JSON
-func (s *Server) moduleListData(w http.ResponseWriter, r *http.Request) {	rows, err := s.dbFor(r).Query(`
+func (s *Server) moduleListData(w http.ResponseWriter, r *http.Request) {
+	db := s.dbFor(r)
+	if db == nil {
+		// Sin base, DataTables recibe null en "data" y cae en
+		// "Cannot read properties of null (reading 'length')". Devolver un
+		// array vacío mantiene al DataTable sano.
+		writeJSON(w, map[string]interface{}{"data": []map[string]interface{}{}})
+		return
+	}
+	rows, err := db.Query(`
 		SELECT m.id, m.name, m.version, m.description, m.is_core, m.is_active, 
 		       m.path, m.author, m.license_type, m.created_at, m.updated_at,
 		       COUNT(me.id) as menu_count
@@ -74,7 +83,11 @@ func (s *Server) moduleListData(w http.ResponseWriter, r *http.Request) {	rows, 
 	}
 	defer rows.Close()
 
-	var modules []map[string]interface{}
+	// Inicializar como slice vacío, no nil: json.Marshal(nil) produce "null"
+	// y DataTables hace data.length → crash con la tabla vacía o si la query
+	// no devuelve filas. Un slice vacío serializa como "[]" y DataTable lo
+	// muestra como tabla vacía sin morir.
+	modules := []map[string]interface{}{}
 	for rows.Next() {
 		var m Module
 		var desc, path, author, licenseType sql.NullString
