@@ -1,33 +1,73 @@
 {{define "content"}}
-<div class="panel panel-bd">
-    <div class="panel-heading"><div class="panel-title"><h4>{{.Title}}</h4></div></div>
-    <div class="panel-body">
-        <div class="row">
-            <div class="col-md-8">
-                <form id="tplForm" style="max-width:700px">
+<style>
+    /* Estilos modernos personalizados para superponer sobre la base existente */
+    .modern-card { border-radius: 10px; border: 1px solid #e0e4e8; box-shadow: 0 4px 12px rgba(0,0,0,0.04); background: #fff; margin-bottom: 24px; }
+    .modern-card-header { background: #f8f9fa; border-bottom: 1px solid #e0e4e8; border-radius: 10px 10px 0 0; padding: 16px 24px; }
+    .modern-card-header h4, .modern-card-header h5 { margin: 0; font-weight: 600; color: #333; }
+    .modern-card-body { padding: 24px; }
+    
+    .modern-input { border-radius: 6px; border: 1px solid #cfd4d9; padding: 8px 12px; transition: border-color 0.2s, box-shadow 0.2s; }
+    .modern-input:focus { border-color: #4a90e2; box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.15); outline: none; }
+    
+    .modern-btn { border-radius: 6px; font-weight: 500; transition: all 0.2s ease; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+    .modern-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+    
+    .action-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 24px; padding-top: 20px; border-top: 1px solid #eee; align-items: center; }
+    .action-bar-right { margin-left: auto; display: flex; gap: 10px; }
+    
+    .db-map-pre { background-color: #1e1e1e; color: #4af626; border-radius: 8px; padding: 16px; border: none; font-family: 'Consolas', 'Monaco', monospace; line-height: 1.4; }
+    
+    .modern-modal .modal-content { border-radius: 12px; border: none; box-shadow: 0 12px 28px rgba(0,0,0,0.2); }
+    .modern-modal .modal-header { border-bottom: 1px solid #f0f0f0; background: #fafbfc; border-radius: 12px 12px 0 0; padding: 16px 24px; }
+    .modern-modal .modal-header .modal-title { font-weight: 600; font-size: 16px; }
+    .modern-modal .modal-body { padding: 24px; }
+    .modern-modal .modal-footer { border-top: 1px solid #f0f0f0; background: #fafbfc; border-radius: 0 0 12px 12px; padding: 16px 24px; }
+    
+    .chart-section-box { border: 1px solid #e2e8f0; padding: 20px; margin-top: 15px; border-radius: 8px; background: #f8fafc; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02); }
+</style>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="modern-card">
+            <div class="modern-card-header">
+                <h4><i class="fa fa-file-text-o"></i> {{.Title}}</h4>
+            </div>
+            <div class="modern-card-body">
+                <form id="tplForm">
                     {{if .Template}}<input type="hidden" name="id" value="{{.Template.ID}}">{{end}}
-                    <div class="form-group">
-                        <label>Nombre del informe *</label>
-                        <input type="text" class="form-control" name="name" id="tpl_name" required value="{{if .Template}}{{.Template.Name}}{{end}}">
+                    
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="form-group">
+                                <label class="font-weight-bold">Nombre del informe *</label>
+                                <input type="text" class="form-control modern-input" name="name" id="tpl_name" required value="{{if .Template}}{{.Template.Name}}{{end}}">
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-group">
+                                <label class="font-weight-bold">Descripción</label>
+                                <input type="text" class="form-control modern-input" name="description" value="{{if .Template}}{{.Template.Description}}{{end}}">
+                            </div>
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label>Descripción</label>
-                        <input type="text" class="form-control" name="description" value="{{if .Template}}{{.Template.Description}}{{end}}">
-                    </div>
-                    <div class="form-group">
-                        <label>Definición JSON *</label>
-                        <textarea class="form-control" name="definition" id="tpl_def" rows="14" required placeholder='{"title":"Ventas por cliente","sql":"SELECT c.customer_name AS cliente, SUM(i.total_amount) AS total FROM invoice i JOIN customer_information c ON c.customer_id = i.customer_id GROUP BY c.customer_name","columns":[{"key":"cliente","label":"Cliente"},{"key":"total","label":"Total"}],"totals":["total"]}'>{{if .Template}}{{.Template.Definition}}{{end}}</textarea>
-                        <small class="text-muted">El SQL debe ser un único SELECT de lectura sobre las tablas del mapa; el sistema fuerza LIMIT y bloquea escrituras. <a href="#" id="toggleChart"><i class="fa fa-line-chart"></i> Agregar gráfico</a></small>
+
+                    <div class="form-group mt-3">
+                        <label class="font-weight-bold">Definición JSON *</label>
+                        <textarea class="form-control modern-input font-monospace" name="definition" id="tpl_def" rows="12" required placeholder='{"title":"Ventas por cliente","sql":"SELECT c.customer_name AS cliente, SUM(i.total_amount) AS total FROM invoice i JOIN customer_information c ON c.customer_id = i.customer_id GROUP BY c.customer_name","columns":[{"key":"cliente","label":"Cliente"},{"key":"total","label":"Total"}],"totals":["total"]}'>{{if .Template}}{{.Template.Definition}}{{end}}</textarea>
+                        <div class="d-flex justify-content-between mt-2">
+                            <small class="text-muted"><i class="fa fa-info-circle"></i> El SQL debe ser un único SELECT de lectura; el sistema bloquea escrituras.</small>
+                            <a href="#" id="toggleChart" class="btn btn-sm btn-default modern-btn"><i class="fa fa-line-chart text-primary"></i> Configurar Gráfico</a>
+                        </div>
                     </div>
 
                     <!-- Sección gráfico (oculta por defecto) -->
-                    <div id="chartSection" style="display:none;border:1px solid #ddd;padding:12px;margin-top:10px;border-radius:4px;background:#fafafa">
-                        <label><i class="fa fa-bar-chart"></i> Configuración del gráfico</label>
-                        <div class="row" style="margin-top:8px">
+                    <div id="chartSection" class="chart-section-box" style="display:none;">
+                        <h5 style="margin-top:0; margin-bottom:15px; color:#475569;"><i class="fa fa-bar-chart"></i> Parámetros del gráfico visual</h5>
+                        <div class="row">
                             <div class="col-sm-4">
                                 <div class="form-group">
-                                    <label>Tipo</label>
-                                    <select class="form-control input-sm" id="chart_type">
+                                    <label>Tipo de representación</label>
+                                    <select class="form-control modern-input input-sm" id="chart_type">
                                         <option value="line">Línea</option>
                                         <option value="bar">Barra</option>
                                         <option value="pie">Pastel</option>
@@ -38,49 +78,58 @@
                             <div class="col-sm-4">
                                 <div class="form-group">
                                     <label>Clave para X (eje horizontal) *</label>
-                                    <select class="form-control input-sm" id="chart_x_key"></select>
+                                    <select class="form-control modern-input input-sm" id="chart_x_key"></select>
                                 </div>
                             </div>
                             <div class="col-sm-4">
                                 <div class="form-group">
                                     <label>Clave para Y (valor) *</label>
-                                    <select class="form-control input-sm" id="chart_y_key"></select>
+                                    <select class="form-control modern-input input-sm" id="chart_y_key"></select>
                                 </div>
                             </div>
                         </div>
                         <div class="row">
                             <div class="col-sm-6">
-                                <div class="form-group">
-                                    <label>Etiqueta del valor</label>
-                                    <input type="text" class="form-control input-sm" id="chart_y_label" placeholder="Ej: Ventas, Total...">
+                                <div class="form-group mb-0">
+                                    <label>Etiqueta del valor (Tooltip)</label>
+                                    <input type="text" class="form-control modern-input input-sm" id="chart_y_label" placeholder="Ej: Ventas, Total...">
                                 </div>
                             </div>
                             <div class="col-sm-6">
-                                <div class="form-group">
-                                    <label>Título del gráfico</label>
-                                    <input type="text" class="form-control input-sm" id="chart_title" placeholder="Ej: Ventas por mes">
+                                <div class="form-group mb-0">
+                                    <label>Título interno del gráfico</label>
+                                    <input type="text" class="form-control modern-input input-sm" id="chart_title" placeholder="Ej: Ventas por mes">
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <div id="tplSaveMessage" class="alert" role="status" aria-live="polite" style="display:none;margin-top:12px"></div>
-                    <div style="margin-top:12px">
-                        <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
-                        <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
-                        <button type="button" class="btn btn-info" id="btnHelpModal"><i class="fa fa-book"></i> Guía de informes</button>
-                        <button type="button" class="btn btn-warning" onclick="aiHelp()">Ayuda rápida con IA</button>
-                        <button type="button" class="btn btn-success" id="aiOpenCreate"><i class="fa fa-magic"></i> Crear con ayuda de la IA</button>
-                        <a class="btn btn-default" href="/reports/custom">Cancelar</a>
+                    <div id="tplSaveMessage" class="alert" role="status" aria-live="polite" style="display:none;margin-top:16px; border-radius:6px;"></div>
+                    
+                    <div class="action-bar">
+                        <button type="submit" name="action" value="save" class="btn btn-primary modern-btn"><i class="fa fa-save"></i> Guardar</button>
+                        <button type="submit" name="action" value="save_exit" class="btn btn-default modern-btn">Guardar y Salir</button>
+                        <a class="btn btn-link text-muted" href="/reports/custom">Cancelar</a>
+                        
+                        <div class="action-bar-right">
+                            <button type="button" class="btn btn-info modern-btn" id="btnHelpModal" title="Ver guía de sintaxis"><i class="fa fa-book"></i> Guía</button>
+                            <button type="button" class="btn btn-warning modern-btn" onclick="aiHelp()"><i class="fa fa-lightbulb-o"></i> Ayuda IA</button>
+                            <button type="button" class="btn btn-success modern-btn" id="aiOpenCreate"><i class="fa fa-magic"></i> Crear con IA</button>
+                        </div>
                     </div>
                 </form>
             </div>
-            <div class="col-md-4">
-                <div class="panel panel-default">
-                    <div class="panel-heading"><div class="panel-title"><h5>Mapa de la base de datos</h5></div></div>
-                    <div class="panel-body" style="max-height:380px;overflow:auto;font-size:11px">
-                        <pre style="white-space:pre-wrap;font-size:11px">{{.CMap}}</pre>
-                    </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4">
+        <div class="modern-card">
+            <div class="modern-card-header">
+                <h5><i class="fa fa-sitemap"></i> Mapa de la Base de Datos</h5>
+            </div>
+            <div class="modern-card-body" style="padding: 16px;">
+                <div style="max-height:480px; overflow:auto; border-radius:8px;">
+                    <pre class="db-map-pre">{{.CMap}}</pre>
                 </div>
             </div>
         </div>
@@ -88,16 +137,16 @@
 </div>
 
 <!-- Modal: Guía de creación de informes -->
-<div class="modal fade" id="reportGuideModal" tabindex="-1" role="dialog">
-    <div class="modal-dialog modal-lg" role="document">
+<div class="modal fade modern-modal" id="reportGuideModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
         <div class="modal-content">
             <div class="modal-header">
                 <button type="button" class="close" data-dismiss="modal">&times;</button>
-                <h4 class="modal-title"><i class="fa fa-book"></i> Guía para crear informes personalizados</h4>
+                <h4 class="modal-title"><i class="fa fa-book text-info"></i> Guía para crear informes personalizados</h4>
             </div>
-            <div class="modal-body" style="max-height:520px;overflow:auto">
-                <h5>1. Estructura básica (sin gráfico)</h5>
-<pre style="font-size:12px">{
+            <div class="modal-body" style="max-height:60vh; overflow-y:auto">
+                <h5 class="text-primary">1. Estructura básica (sin gráfico)</h5>
+<pre style="font-size:12px; border-radius:6px; background:#f4f4f4; padding:10px;">{
   "title": "Ventas por cliente",
   "sql": "SELECT c.customer_name AS cliente, SUM(i.total_amount) AS total FROM invoice i JOIN customer_information c ON c.customer_id = i.customer_id WHERE i.date BETWEEN :desde AND :hasta GROUP BY c.customer_name",
   "columns": [
@@ -111,9 +160,9 @@
   ]
 }</pre>
 
-                <h5>2. Con gráfico</h5>
-                <p>Agregue un bloque <code>"chart"</code> al JSON:</p>
-<pre style="font-size:12px">{
+                <h5 class="text-primary mt-4">2. Con gráfico</h5>
+                <p class="text-muted">Agregue un bloque <code>"chart"</code> al JSON:</p>
+<pre style="font-size:12px; border-radius:6px; background:#f4f4f4; padding:10px;">{
   "title": "Ventas por mes",
   "sql": "SELECT DATE_FORMAT(i.date,'%Y-%m') AS mes, SUM(i.total_amount) AS total FROM invoice i GROUP BY mes ORDER BY mes",
   "columns": [
@@ -130,142 +179,128 @@
   }
 }</pre>
 
-                <h5>3. Tipos de gráfico</h5>
-                <ul>
+                <h5 class="text-primary mt-4">3. Tipos de gráfico soportados</h5>
+                <ul class="text-muted">
                     <li><code>line</code> — Línea temporal</li>
                     <li><code>bar</code> — Barras verticales</li>
                     <li><code>pie</code> — Pastel (proporciones)</li>
                     <li><code>doughnut</code> — Dona</li>
                 </ul>
 
-                <h5>4. Reglas de seguridad (Nivel 1)</h5>
-                <ul>
-                    <li><b>Solo SELECT</b> — El sistema bloquea INSERT, UPDATE, DELETE, DROP, ALTER, etc. Ningún SQL de escritura funciona, aunque lo fuerce por prompt.</li>
-                    <li><b>Tablas fiscales protegidas</b> — Las tablas <code>acc_transaction</code>, <code>acc_vaucher</code>, <code>audit_log</code> son de <b>solo lectura</b> para informes. No pueden alterarse.</li>
-                    <li><b>Informes de datos delicados</b> (costos, márgenes, sueldos, retenciones): un usuario sin rol gerencial puede generarlos pero se registran en <b>auditoría</b>. El administrador puede desactivar informes sensibles.</li>
-                    <li><b>Plantillas creadas por IA</b> pasan por el mismo guardián que las humanas — el agente no puede saltarse las reglas.</li>
-                    <li><b>Períodos cerrados</b> — El informe muestra una advertencia si apunta a un período contable cerrado.</li>
+                <h5 class="text-danger mt-4"><i class="fa fa-shield"></i> Reglas de seguridad (Nivel 1)</h5>
+                <ul class="text-muted">
+                    <li><b>Solo SELECT</b> — El sistema bloquea INSERT, UPDATE, DELETE, DROP, ALTER.</li>
+                    <li><b>Tablas fiscales protegidas</b> — Las tablas <code>acc_transaction</code>, <code>acc_vaucher</code>, <code>audit_log</code> son de solo lectura.</li>
+                    <li><b>Auditoría activa</b> — Informes sensibles quedan registrados.</li>
+                    <li><b>Guardianes IA</b> — Las plantillas generadas por IA respetan estas reglas sin excepción.</li>
                 </ul>
-
-                <h5>5. Parámetros disponibles</h5>
-                <ul>
-                    <li><code>type: "date"</code> — Fecha (formato AAAA-MM-DD)</li>
-                    <li><code>type: "number"</code> — Número</li>
-                    <li><code>type: "text"</code> — Texto libre</li>
-                    <li><code>type: "enum"</code> — Lista desplegable (requiere <code>"options":[...]</code>)</li>
-                </ul>
-                <p>Use <code>"required": true</code> para campos obligatorios.</p>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-default" data-dismiss="modal">Cerrar</button>
+                <button type="button" class="btn btn-default modern-btn" data-dismiss="modal">Cerrar guía</button>
             </div>
         </div>
     </div>
 </div>
 
 <!-- Modal: crear informe con ayuda de la IA (flujo interactivo) -->
-<!-- Tres paneles: (1) prompt, (2) JSON editable, (3) vista previa. -->
-<!-- Itera con "Refinar con IA" y confirma con "Guardar definitivo". -->
-<div class="modal fade" id="aiCreateModal" tabindex="-1" role="dialog" data-backdrop="static" data-keyboard="false">
-    <div class="modal-dialog modal-dialog-centered" role="document" style="width: 90vw; max-width: 95vw;">
-        <div class="modal-content" style="height: 90vh; display: flex; flex-direction: column;">
-            <div class="modal-header">
-                <div class="modal-title"><i class="fa fa-magic"></i> Crear informe con la IA — definición + preview interactivo</div>
-                <button type="button" class="close" data-dismiss="modal" aria-label="Cerrar" id="aiCreateModalClose"><span aria-hidden="true">&times;</span></button>
+<div class="modal fade modern-modal" id="aiCreateModal" tabindex="-1" role="dialog" data-backdrop="static" data-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered" role="document" style="width: 92vw; max-width: 1400px;">
+        <div class="modal-content" style="height: 88vh; display: flex; flex-direction: column;">
+            <div class="modal-header d-flex justify-content-between align-items-center">
+                <div class="modal-title"><i class="fa fa-magic text-success"></i> Asistente de IA: Generación y Vista Previa Interactiva</div>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Cerrar" id="aiCreateModalClose" style="margin-top:-10px;"><span aria-hidden="true">&times;</span></button>
             </div>
-            <div class="modal-body p-0" style="flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;">
+            <div class="modal-body p-0" style="flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background:#fcfcfc;">
                 <div class="row m-0 flex-grow-1" style="height: 100%; min-height: 0;">
                     <!-- Columna izquierda: prompt + acciones -->
-                    <div class="col-md-3 p-3" style="border-right: 1px solid #ddd; display: flex; flex-direction: column; flex: 0 0 18%; min-width: 180px; max-width: 220px;">
-                        <h6 style="margin-top:0"><i class="fa fa-edit"></i> Describe el informe</h6>
-                        <textarea class="form-control mb-2" id="ai_prompt" rows="4"
-                            placeholder="Ej: un informe de ventas por cliente del mes actual con el total general, filtrable por fecha"></textarea>
-                        <div class="mb-2">
-                            <button class="btn btn-sm btn-primary w-100" id="ai_preview_go">1. Generar definición + preview</button>
+                    <div class="col-md-3 p-4" style="border-right: 1px solid #e0e4e8; display: flex; flex-direction: column; background:#fff;">
+                        <h6 style="margin-top:0; font-weight:600;"><i class="fa fa-edit text-primary"></i> 1. Describe el informe</h6>
+                        <textarea class="form-control modern-input mb-3" id="ai_prompt" rows="5"
+                            placeholder="Ej: un informe de ventas por cliente del mes actual con el total general, filtrable por fecha" style="resize:none;"></textarea>
+                        
+                        <button class="btn btn-primary modern-btn w-100 mb-2" id="ai_preview_go"><i class="fa fa-play"></i> Generar y Previsualizar</button>
+                        <button class="btn btn-warning modern-btn w-100 mb-2" id="ai_refine_btn" disabled><i class="fa fa-sliders"></i> Refinar con IA</button>
+                        <button class="btn btn-success modern-btn w-100 mb-2" id="ai_save_final_btn" disabled><i class="fa fa-check"></i> Guardar definitivo</button>
+                        
+                        <div class="mt-auto text-center">
+                            <button type="button" class="btn btn-link text-muted" data-dismiss="modal">Cancelar asistente</button>
                         </div>
-                        <div class="mb-2">
-                            <button class="btn btn-sm btn-warning w-100" id="ai_refine_btn" disabled>2. Refinar con IA</button>
-                        </div>
-                        <div class="mb-2">
-                            <button class="btn btn-sm btn-success w-100" id="ai_save_final_btn" disabled>3. Guardar definitivo</button>
-                        </div>
-                        <div class="mt-auto">
-                            <button type="button" class="btn btn-link btn-sm w-100" data-dismiss="modal">Cancelar</button>
-                        </div>
-                        <div id="ai_status" class="text-muted small mt-2" style="min-height: 20px;"></div>
+                        <div id="ai_status" class="text-info small mt-2 text-center" style="min-height: 20px; font-weight:500;"></div>
                     </div>
                     <!-- Columna centro: JSON definición (editable) -->
-                    <div class="p-3" style="border-right: 1px solid #ddd; display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; max-width: 420px;">
-                        <h6 style="margin-top:0"><i class="fa fa-code"></i> Definición JSON <small class="text-muted">(editable)</small></h6>
-                        <textarea class="form-control font-monospace" id="ai_definition" rows="22"
-                            spellcheck="false" style="font-size:12px; flex: 1 1 auto; resize: none; min-width: 0;"></textarea>
+                    <div class="col-md-4 p-4" style="border-right: 1px solid #e0e4e8; display: flex; flex-direction: column; background:#fff;">
+                        <h6 style="margin-top:0; font-weight:600;"><i class="fa fa-code text-secondary"></i> 2. Definición JSON <small class="text-muted font-weight-normal">(editable manualmente)</small></h6>
+                        <textarea class="form-control modern-input font-monospace" id="ai_definition"
+                            spellcheck="false" style="font-size:12px; flex: 1 1 auto; resize: none; background:#fafafa;"></textarea>
                     </div>
                     <!-- Columna derecha: preview (tabla) -->
-                    <div class="p-3" style="display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0;">
-                        <h6 style="margin-top:0"><i class="fa fa-table"></i> Vista previa (ejecución real)</h6>
-                        <div id="ai_preview_container" class="text-muted small" style="flex: 1 1 auto; min-height: 0; overflow:auto;">
-                            <p class="text-center my-4">Genera la definición para ver la vista previa.</p>
+                    <div class="col-md-5 p-4" style="display: flex; flex-direction: column; background:#f8fafc;">
+                        <h6 style="margin-top:0; font-weight:600;"><i class="fa fa-table text-info"></i> 3. Vista previa (Ejecución real)</h6>
+                        <div id="ai_preview_container" style="flex: 1 1 auto; min-height: 0; overflow:auto; background:#fff; border:1px solid #e0e4e8; border-radius:8px; padding:15px; box-shadow:inset 0 2px 5px rgba(0,0,0,0.02);">
+                            <div class="text-center text-muted" style="margin-top: 25%;">
+                                <i class="fa fa-flask fa-3x mb-3" style="opacity:0.3"></i>
+                                <p>Genera la definición para cargar los datos reales del informe.</p>
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-default" data-dismiss="modal">Cancelar</button>
             </div>
         </div>
     </div>
 </div>
 
 <!-- Sub-modal: feedback para refinar -->
-<div class="modal fade" id="aiRefineModal" tabindex="-1" role="dialog">
-    <div class="modal-dialog" role="document">
+<div class="modal fade modern-modal" id="aiRefineModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-dialog-centered" role="document">
         <div class="modal-content">
             <div class="modal-header">
-                <div class="modal-title"><i class="fa fa-sliders"></i> Ajustar informe con IA</div>
+                <div class="modal-title"><i class="fa fa-sliders text-warning"></i> Ajustar informe con IA</div>
                 <button type="button" class="close" data-dismiss="modal"><span aria-hidden="true">&times;</span></button>
             </div>
             <div class="modal-body">
-                <label for="ai_refine_prompt">¿Qué quieres cambiar?</label>
-                <textarea class="form-control" id="ai_refine_prompt" rows="3"
-                    placeholder="Ej: agrega la columna de margen, el total por categoría y un gráfico de barras"></textarea>
-                <div class="form-text mt-1">La IA recibe la definición actual y aplica solo este ajuste.</div>
+                <div class="form-group">
+                    <label for="ai_refine_prompt" class="font-weight-bold">¿Qué necesitas cambiar?</label>
+                    <textarea class="form-control modern-input" id="ai_refine_prompt" rows="3"
+                        placeholder="Ej: agrega la columna de margen, el total por categoría y un gráfico de barras"></textarea>
+                    <div class="form-text text-muted small mt-2"><i class="fa fa-info-circle"></i> La IA aplicará este cambio sobre la definición actual.</div>
+                </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-default" data-dismiss="modal">Cancelar</button>
-                <button type="button" class="btn btn-primary" id="ai_refine_go">Aplicar ajuste y previsualizar</button>
+                <button type="button" class="btn btn-default modern-btn" data-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-primary modern-btn" id="ai_refine_go"><i class="fa fa-bolt"></i> Aplicar y previsualizar</button>
             </div>
         </div>
     </div>
 </div>
 
 <!-- Sub-modal: guardar definitivo (nombre, descripción, visibilidad) -->
-<div class="modal fade" id="aiSaveModal" tabindex="-1" role="dialog">
-    <div class="modal-dialog" role="document">
+<div class="modal fade modern-modal" id="aiSaveModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-dialog-centered" role="document">
         <div class="modal-content">
             <div class="modal-header">
-                <div class="modal-title"><i class="fa fa-save"></i> Guardar informe definitivo</div>
+                <div class="modal-title"><i class="fa fa-save text-success"></i> Finalizar y Guardar Informe</div>
                 <button type="button" class="close" data-dismiss="modal"><span aria-hidden="true">&times;</span></button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label>Nombre del informe *</label>
-                    <input type="text" class="form-control" id="ai_save_name">
+                    <label class="font-weight-bold">Nombre del informe *</label>
+                    <input type="text" class="form-control modern-input" id="ai_save_name">
                 </div>
                 <div class="form-group">
-                    <label>Descripción</label>
-                    <input type="text" class="form-control" id="ai_save_desc">
+                    <label class="font-weight-bold">Descripción</label>
+                    <input type="text" class="form-control modern-input" id="ai_save_desc">
                 </div>
                 <div class="form-group">
-                    <label>Visibilidad (¿quién puede ver este informe?)</label>
-                    <div class="form-text mb-1">Si no seleccionas roles, <b>el informe será visible para todos</b> los usuarios. Selecciona roles para restringir.</div>
-                    <select class="form-control" id="ai_save_roles" multiple style="height: auto;">
-                        <!-- Opciones cargadas vía AJAX desde /reports/custom/roles -->
+                    <label class="font-weight-bold">Visibilidad de Roles</label>
+                    <p class="form-text text-muted small mb-2">Si no seleccionas roles, el informe será <b>público</b> para todos los usuarios. Selecciona roles para restringir acceso.</p>
+                    <select class="form-control modern-input" id="ai_save_roles" multiple style="height: 120px;">
+                        <!-- Opciones cargadas vía AJAX -->
                     </select>
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-default" data-dismiss="modal">Cancelar</button>
-                <button type="button" class="btn btn-primary" id="ai_save_confirm">Guardar y abrir editor</button>
+                <button type="button" class="btn btn-default modern-btn" data-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-success modern-btn" id="ai_save_confirm"><i class="fa fa-check-circle"></i> Confirmar y abrir editor</button>
             </div>
         </div>
     </div>
@@ -286,7 +321,7 @@ $(function () {
     // Toggle sección gráfico
     $('#toggleChart').on('click', function (e) {
         e.preventDefault();
-        $('#chartSection').toggle();
+        $('#chartSection').slideToggle(200);
     });
 
     // Autocompletar selects de columnas desde el JSON
@@ -354,14 +389,14 @@ $(function () {
                     window.location = r.redirect || '/reports/custom';
                     return;
                 }
-                $('#tplSaveMessage').addClass('alert-success').text(r.msg || 'Informe guardado').show();
+                $('#tplSaveMessage').addClass('alert-success').html('<i class="fa fa-check-circle"></i> ' + (r.msg || 'Informe guardado')).fadeIn();
                 if (window.toastr) toastr.success(r.msg || 'Informe guardado');
             } else {
-                $('#tplSaveMessage').addClass('alert-danger').text(r.error || 'No se pudo guardar el informe').show();
+                $('#tplSaveMessage').addClass('alert-danger').html('<i class="fa fa-exclamation-circle"></i> ' + (r.error || 'No se pudo guardar el informe')).fadeIn();
             }
         }).fail(function (xhr) {
             var message = (xhr.responseJSON && xhr.responseJSON.error) || 'No se pudo guardar el informe. Revise la conexión e inténtelo de nuevo.';
-            $('#tplSaveMessage').addClass('alert-danger').text(message).show();
+            $('#tplSaveMessage').addClass('alert-danger').html('<i class="fa fa-exclamation-triangle"></i> ' + message).fadeIn();
         }).always(function () {
             saving = false;
             $buttons.prop('disabled', false);
@@ -370,81 +405,77 @@ $(function () {
 
     /* ---------------------- Modal: crear con IA (interactivo) ---------------------- */
 
-    // Abrir el modal interactivo desde el botón "Crear con ayuda de la IA"
     $('#aiOpenCreate').on('click', function () {
         $('#ai_prompt').val('');
         $('#ai_definition').val('');
-        $('#ai_preview_container').html('<p class="text-center my-4">Genera la definición para ver la vista previa.</p>');
+        $('#ai_preview_container').html('<div class="text-center text-muted" style="margin-top: 25%;"><i class="fa fa-flask fa-3x mb-3" style="opacity:0.3"></i><p>Genera la definición para cargar los datos reales del informe.</p></div>');
         $('#ai_refine_btn, #ai_save_final_btn').prop('disabled', true);
         $('#ai_status').text('');
         $('#aiCreateModal').modal({backdrop: 'static', keyboard: false});
     });
 
-    // Renderiza la vista previa (tabla) desde {title, headers, rows, totals, warnings}
     function renderPreview(preview) {
         if (!preview) {
-            $('#ai_preview_container').html('<p class="text-center my-4 text-muted">Sin vista previa.</p>');
+            $('#ai_preview_container').html('<p class="text-center mt-5 text-muted"><i class="fa fa-info-circle"></i> Sin vista previa disponible.</p>');
             return;
         }
         var html = '';
-        if (preview.title) html += '<h6 class="mt-0">' + escHtml(preview.title) + '</h6>';
+        if (preview.title) html += '<h5 class="mt-0 text-primary" style="font-weight:600;">' + escHtml(preview.title) + '</h5>';
         if (preview.warnings && preview.warnings.length) {
-            html += '<div class="alert alert-warning py-1" style="font-size:11px">' + preview.warnings.map(escHtml).join('; ') + '</div>';
+            html += '<div class="alert alert-warning py-2" style="font-size:12px; border-radius:6px;"><i class="fa fa-exclamation-triangle"></i> ' + preview.warnings.map(escHtml).join('<br>') + '</div>';
         }
         if (!preview.headers || preview.headers.length === 0) {
-            html += '<p class="text-muted">La consulta no devolvió columnas.</p>';
+            html += '<p class="text-muted text-center mt-4">La consulta no devolvió columnas.</p>';
         } else {
-            html += '<table class="table table-sm table-bordered" style="font-size:11px; max-height:340px; overflow:auto;">';
-            html += '<thead><tr>' + preview.headers.map(escHtml).map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead>';
+            html += '<div class="table-responsive"><table class="table table-sm table-striped table-bordered" style="font-size:12px; background:#fff; margin-bottom:0;">';
+            html += '<thead class="bg-light"><tr>' + preview.headers.map(escHtml).map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead>';
             html += '<tbody>';
             if (preview.rows && preview.rows.length) {
                 preview.rows.forEach(function (row) {
                     html += '<tr>' + row.map(function (c) { return '<td>' + escHtml(c) + '</td>'; }).join('') + '</tr>';
                 });
             } else {
-                html += '<tr><td colspan="' + preview.headers.length + '" class="text-center text-muted">Sin datos</td></tr>';
+                html += '<tr><td colspan="' + preview.headers.length + '" class="text-center text-muted py-4">La consulta no arrojó resultados.</td></tr>';
             }
-            html += '</tbody></table>';
+            html += '</tbody></table></div>';
             if (preview.totals) {
                 var totKeys = Object.keys(preview.totals);
                 if (totKeys.length) {
-                    html += '<div class="text-right small mt-1"><b>Totales:</b> ' + totKeys.map(function (k) {
-                        return escHtml(k) + ': ' + escHtml(preview.totals[k]);
+                    html += '<div class="text-right small mt-2 p-2 bg-light border" style="border-radius:4px;"><b>Totales:</b> ' + totKeys.map(function (k) {
+                        return escHtml(k) + ': <span class="text-success font-weight-bold">' + escHtml(preview.totals[k]) + '</span>';
                     }).join(' | ') + '</div>';
                 }
             }
         }
         $('#ai_preview_container').html(html);
     }
+    
     function escHtml(v) {
         if (v === null || v === undefined) return '';
         return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
-    // Estado: definición actual del modal
     var aiState = { definition: '', preview: null };
 
-    function setBusy(msg) { $('#ai_status').text(msg || ''); }
+    function setBusy(msg) { $('#ai_status').html('<i class="fa fa-spinner fa-spin"></i> ' + (msg || '')); }
     function setReady() { $('#ai_status').text(''); }
 
     function jsonValid(defText) {
         try { JSON.parse(defText); return true; } catch (e) { return false; }
     }
 
-    // 1. Generar definición + preview
     $('#ai_preview_go').on('click', function () {
         var req = $('#ai_prompt').val().trim();
         if (!req) { alert('Describe el informe que necesitas'); return; }
-        var btn = $(this).prop('disabled', true).text('Generando…');
-        setBusy('La IA está analizando el esquema y generando la definición…');
-        // ERPGo.csrfFetch (csrf.js) adjunta X-CSRF-Token; /guia/ está exento,
-        // /reports/custom/ai-preview no, así que usamos csrfFetch.
+        var btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> Procesando...');
+        setBusy('Analizando esquema y generando informe...');
+        
         ERPGo.csrfFetch('/reports/custom/ai-preview', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ request: req })
         }).then(function (r) { return r.json(); }).then(function (data) {
-            btn.prop('disabled', false).text('1. Generar definición + preview');
+            btn.prop('disabled', false).html('<i class="fa fa-play"></i> Generar y Previsualizar');
             setReady();
             if (data.status === 1) {
                 $('#ai_definition').val(data.definition).trigger('input');
@@ -458,13 +489,12 @@ $(function () {
                 alert(data.error || 'La IA no pudo generar el informe');
             }
         }).fail(function () {
-            btn.prop('disabled', false).text('1. Generar definición + preview');
+            btn.prop('disabled', false).html('<i class="fa fa-play"></i> Generar y Previsualizar');
             setReady();
-            alert('Error de conexión. Revise la consola.');
+            alert('Error de conexión con el servidor.');
         });
     });
 
-    // 2. Refinar con IA → abre sub-modal
     $('#ai_refine_btn').on('click', function () {
         if (!aiState.definition) { alert('Primero genera la definición'); return; }
         $('#ai_refine_prompt').val('');
@@ -475,16 +505,17 @@ $(function () {
         var feedback = $('#ai_refine_prompt').val().trim();
         if (!feedback) { alert('Describe el cambio'); return; }
         var currentDef = $('#ai_definition').val();
-        if (!jsonValid(currentDef)) { alert('La definición no es JSON válido. Edítala e intenta de nuevo.'); return; }
-        var btn = $(this).prop('disabled', true).text('Refinando…');
-        setBusy('La IA está ajustando la definición…');
+        if (!jsonValid(currentDef)) { alert('La definición JSON no es válida. Corrígela antes de refinar.'); return; }
+        var btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> Refinando...');
+        setBusy('La IA está ajustando la definición...');
         $('#aiRefineModal').modal('hide');
+        
         ERPGo.csrfFetch('/reports/custom/ai-refine', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ request: feedback, definition: currentDef })
         }).then(function (r) { return r.json(); }).then(function (data) {
-            btn.prop('disabled', false).text('Aplicar ajuste y previsualizar');
+            btn.prop('disabled', false).html('<i class="fa fa-bolt"></i> Aplicar y previsualizar');
             setReady();
             if (data.status === 1) {
                 $('#ai_definition').val(data.definition).trigger('input');
@@ -495,13 +526,12 @@ $(function () {
                 alert(data.error || 'La IA no pudo ajustar el informe');
             }
         }).fail(function () {
-            btn.prop('disabled', false).text('Aplicar ajuste y previsualizar');
+            btn.prop('disabled', false).html('<i class="fa fa-bolt"></i> Aplicar y previsualizar');
             setReady();
             alert('Error de conexión.');
         });
     });
 
-    // 3. Guardar definitivo → sub-modal nombre/desc/visibilidad
     $('#ai_save_final_btn').on('click', function () {
         if (!aiState.definition) { alert('Primero genera la definición'); return; }
         $('#ai_save_name').val($('#ai_save_name').val() || '');
@@ -509,7 +539,6 @@ $(function () {
         $('#aiSaveModal').modal('show');
     });
 
-    // Cargar roles para el selector de visibilidad (una vez)
     var rolesCache = [];
     function cargarRolesSelect() {
         if (rolesCache.length) { poblarSelect(); return; }
@@ -517,7 +546,7 @@ $(function () {
             .then(function (list) {
                 rolesCache = list || [];
                 poblarSelect();
-            }).fail(function () { /* sin roles: informe público */ });
+            }).fail(function () { /* sin roles */ });
     }
     function poblarSelect() {
         var sel = $('#ai_save_roles');
@@ -532,26 +561,27 @@ $(function () {
     }
     $('#aiSaveModal').on('show.bs.modal', cargarRolesSelect);
 
-    // Confirmar guardado definitivo
     $('#ai_save_confirm').on('click', function () {
         var name = $('#ai_save_name').val().trim();
         if (!name) { alert('El nombre es obligatorio'); return; }
         var definition = $('#ai_definition').val().trim();
         if (!jsonValid(definition)) { alert('La definición JSON no es válida'); return; }
         var roleIDs = $('#ai_save_roles').val().map(function (v) { return parseInt(v, 10); });
-        var btn = $(this).prop('disabled', true).text('Guardando…');
+        var btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> Guardando...');
+        
         var saveData = {
             name: name,
             description: $('#ai_save_desc').val().trim(),
             definition: definition,
             role_ids: roleIDs
         };
+        
         ERPGo.csrfFetch('/reports/custom/ai-save', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(saveData)
         }).then(function (r) { return r.json(); }).then(function (data) {
-            btn.prop('disabled', false).text('Guardar y abrir editor');
+            btn.prop('disabled', false).html('<i class="fa fa-check-circle"></i> Confirmar y abrir editor');
             if (data.status === 1 && data.redirect) {
                 $('#aiSaveModal').modal('hide');
                 $('#aiCreateModal').modal('hide');
@@ -560,46 +590,13 @@ $(function () {
                 alert(data.error || 'No se pudo guardar el informe');
             }
         }).fail(function () {
-            btn.prop('disabled', false).text('Guardar y abrir editor');
+            btn.prop('disabled', false).html('<i class="fa fa-check-circle"></i> Confirmar y abrir editor');
             alert('Error de conexión.');
         });
     });
-
-    // Escáner de definición JSON: se mantiene por si el usuario pega texto con
-    // markdown. El servidor usa aiExtraerDefinicion (misma lógica).
-    function extraerDefinicionJS(texto) {
-        for (var i = 0; i < texto.length; i++) {
-            if (texto[i] !== '{') { continue; }
-            var depth = 0, enCadena = false, esc = false;
-            for (var j = i; j < texto.length; j++) {
-                var c = texto[j];
-                if (enCadena) {
-                    if (esc) { esc = false; }
-                    else if (c === '\\') { esc = true; }
-                    else if (c === '"') { enCadena = false; }
-                    continue;
-                }
-                if (c === '"') { enCadena = true; }
-                else if (c === '{') { depth++; }
-                else if (c === '}') {
-                    depth--;
-                    if (depth === 0) {
-                        var cand = texto.slice(i, j + 1);
-                        try { var o = JSON.parse(cand); if (o && o.sql) { return cand; } }
-                        catch (e) { /* probar siguiente '{' */ }
-                        break;
-                    }
-                }
-            }
-        }
-        return null;
-    }
 });
 
 function aiHelp() {
-    // "Ayuda rápida": abre el modal interactivo. Si el textarea de definición
-    // ya tiene contenido (un borrador manual), lo ofrecemos como prompt
-    // inicial; si no, el prompt queda vacío para escribir desde cero.
     var defText = $('#tpl_def').val().trim();
     var prompt = defText ? defText.substring(0, 220) + '...' : '';
     $('#ai_prompt').val(prompt);

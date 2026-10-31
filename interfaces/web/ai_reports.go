@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -303,8 +304,28 @@ func (s *Server) executeReportDefinition(sess *SessionData, definition, from, to
 		// Se pidió este total y no se pudo calcular. Sin aviso, el informe sale
 		// con las mismas filas y sin cifras, y quien lo lee no tiene por qué
 		// sospechar que le falta el dato más importante.
+		//
+		// Por qué se incluyen los aliases reales del SELECT: el agente suele
+		// declarar "total_ventas" como key pero el SELECT usa "total". Listar
+		// las columnas que SÍ aparecen acelera la corrección: el feedback va en
+		// el warning que se muestra en la pantalla, no en un log de servidor.
+		disponibles := make([]string, 0, len(cols))
+		for i := range cols {
+			k := cols[i]
+			if k == "" {
+				continue
+			}
+			// Si el agente declaró un key distinto al alias del SELECT, se
+			// muestra "key (SELECT: alias)" para que el mismatch salte a la vista.
+			if i < len(declaradas) && declaradas[i] != "" && declaradas[i] != k {
+				disponibles = append(disponibles, declaradas[i]+" (SELECT: "+k+")")
+			} else {
+				disponibles = append(disponibles, k)
+			}
+		}
 		res.Warnings = append(res.Warnings, fmt.Sprintf(
-			"no se pudo calcular el total de la columna %q: no aparece en el resultado de la consulta", key))
+			"no se pudo calcular el total de la columna %q: no aparece en el resultado de la consulta. Columnas disponibles: %s",
+			key, strings.Join(disponibles, ", ")))
 	}
 	return res, nil
 }
@@ -385,6 +406,13 @@ func (s *Server) registerAIReportRoutes() {
 // extraída del texto del agente. SEPARADO de iaPreviewDefinition porque varios
 // callers ya tienen el JSON (crearInformeDesdeRespuestaIA, tests) y no deben
 // gastar una corrida de agente de más solo para re-validar.
+//
+// POR QUÉ LOS WARNINGS NO SON ERROR aquí: el preview es para ITERAR, no para
+// guardar. Un total que no se puede calcular (por un alias desincronizado) se
+// devuelve como warning en el reportResult para que el usuario lo vea y pida
+// un refine. El bloqueo definitivo es ai-save (executeDefinitionPreview +
+// revisión de warnings). Antes se convertía el warning en error, el handler
+// devolvía 502 y el agente no recibía preview alguno: imposible auto-corregir.
 func (s *Server) previewDefinitionFromJSON(sess *SessionData, jsonText string) (def reportDefShape, preview *reportResult, err error) {
 	if err = json.Unmarshal([]byte(jsonText), &def); err != nil {
 		err = fmt.Errorf("la definición no es JSON válido: %v", err)
@@ -397,11 +425,6 @@ func (s *Server) previewDefinitionFromJSON(sess *SessionData, jsonText string) (
 	pre, execErr := s.executeDefinitionPreview(sess, jsonText)
 	if execErr != nil {
 		err = fmt.Errorf("la definición no pasa la prueba de ejecución: %v", execErr)
-		return
-	}
-	if len(pre.Warnings) > 0 {
-		err = fmt.Errorf("la definición no pasa la prueba de ejecución: %s. corrígela antes de guardar",
-			strings.Join(pre.Warnings, "; "))
 		return
 	}
 	preview = pre
@@ -457,8 +480,15 @@ func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string) (def
 		err = fmt.Errorf("la respuesta de la IA no contiene una definición JSON con «sql»")
 		return
 	}
+	// Log de debug: el servidor registra la definición extraída y el preview de
+	// la IA en stderr. Antes, cuando el preview fallaba por totals mal hechos,
+	// no había forma rápida de ver qué JSON generó la IA sin reconstruir la
+	// corrida; esto acelera el diagnóstico.
+	log.Printf("AI report preview: agente=%s definición_extraída=%s",
+		aiAgentUsername(sess, agent), jsonText)
 	def, preview, err = s.previewDefinitionFromJSON(sess, jsonText)
 	if err != nil {
+		log.Printf("AI report preview FALLÓ: %v", err)
 		return
 	}
 	name = strings.TrimSpace(def.Title)
@@ -468,8 +498,20 @@ func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string) (def
 
 // aiPreviewInstruction arma la instrucción para pedir al agente una definición.
 // Usa el mapa de tablas (MCP) como contexto y cierra el contrato JSON.
+//
+// POR QUÉ EL CONTRATO ES ESTRICTO: el agente tiende a declarar columns con
+// keys inventadas ("total_ventas") que no son los alias del SELECT, y el
+// preview falla con "no se pudo calcular el total" porque el motor suma por
+// la key declarado. La regla "key = alias exacto del SELECT (con AS)" evita
+// que el agente se saltee validar columna a columna.
 func aiPreviewInstruction(request string) string {
-	return request + "\n\nCONTRATO DE RESPUESTA: responde ÚNICAMENTE con la definición del informe como objeto JSON con las claves \"title\" (nombre corto), \"sql\" (un único SELECT de lectura sobre las tablas del mapa), \"columns\" ([{key,label}...]) y \"totals\" (claves declaradas en columns). Usa :desde/:hasta para fechas. Sin markdown, sin vallado de código, sin texto fuera del objeto."
+	return request + "\n\nCONTRATO DE RESPUESTA (¡ESCRÍBELO BIEN LA PRIMERA VEZ!):\n" +
+		"Responde ÚNICAMENTE con la definición del informe como objeto JSON con estas claves:\n" +
+		`  "title" : nombre corto del informe.\n` +
+		`  "sql"   : un ÚNICO SELECT de lectura sobre las tablas del mapa.\n` +
+		`  "columns": [{key,label}...]. IMPORTANTE: el "key" de CADA columna DEBE ser EXACTAMENTE el alias que usaste en el SELECT con "AS". Si no usas AS, el key debe ser el nombre de la columna de la tabla tal cual aparece en el mapa.\n` +
+		`  "totals": ["clave1", "clave2"...]. CADA total DEBE ser una "key" que ya declaraste en "columns". Si una columna no aparece en el resultado del SELECT, el total no se puede calcular.\n` +
+		`Reglas: Usa :desde/:hasta para fechas. Sin markdown, sin vallado de código, sin texto fuera del objeto. Verifica que cada "key" en columns coincide con un alias/AS del SELECT antes de devolver.`
 }
 
 // crearInformeDesdeRespuestaIA extrae la definición del texto del agente, la
@@ -485,9 +527,18 @@ func (s *Server) crearInformeDesdeRespuestaIA(r *http.Request, sess *SessionData
 	if !ok {
 		return 0, "", fmt.Errorf("la respuesta de la IA no contiene una definición JSON con «sql»")
 	}
-	d, _, err := s.previewDefinitionFromJSON(sess, def)
+	d, pre, err := s.previewDefinitionFromJSON(sess, def)
 	if err != nil {
 		return 0, "", fmt.Errorf("la definición de la IA no pasa la prueba de ejecución: %v", err)
+	}
+	// Este helper GUARDA directamente (flujo antiguo de un solo paso), así que
+	// respeta los warnings del preview: un total que no se puede calcular deja
+	// el informe vacío y es mejor bloquear aquí. El flujo INTERACTIVO moderno
+	// (ai-preview → ai-refine → ai-save) muestra los warnings en pantalla y
+	// los resuelve con un refine, pero el save final también los rechaza.
+	if len(pre.Warnings) > 0 {
+		return 0, "", fmt.Errorf("la definición no pasa la prueba de ejecución: %s. Corrígela antes de guardar",
+			strings.Join(pre.Warnings, "; "))
 	}
 	nombre := strings.TrimSpace(d.Title)
 	if nombre == "" {
