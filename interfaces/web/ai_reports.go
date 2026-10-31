@@ -394,17 +394,26 @@ func (s *Server) previewDefinitionFromJSON(sess *SessionData, jsonText string) (
 		err = fmt.Errorf("la definición no pasa el guardián: %v", vErr)
 		return
 	}
-	preview, execErr := s.executeReportDefinition(sess, jsonText, "", "")
+	pre, execErr := s.executeDefinitionPreview(sess, jsonText)
 	if execErr != nil {
 		err = fmt.Errorf("la definición no pasa la prueba de ejecución: %v", execErr)
 		return
 	}
-	if len(preview.Warnings) > 0 {
+	if len(pre.Warnings) > 0 {
 		err = fmt.Errorf("la definición no pasa la prueba de ejecución: %s. corrígela antes de guardar",
-			strings.Join(preview.Warnings, "; "))
+			strings.Join(pre.Warnings, "; "))
 		return
 	}
+	preview = pre
 	return def, preview, nil
+}
+
+// executeDefinitionPreview ejecuta una definición como preview de prueba con
+// fechas válidas (mes actual), para que :desde/:hasta no fallen con "".
+// El guardián estático (validateReportDefinition) no valida valores de fecha;
+// el preview ejecuta el SQL real y necesita fechas concretas.
+func (s *Server) executeDefinitionPreview(sess *SessionData, jsonText string) (*reportResult, error) {
+	return s.executeReportDefinition(sess, jsonText, aiFirstOfMonth(), today())
 }
 
 // iaPreviewDefinition es el núcleo compartido de ai-preview y ai-refine:
@@ -657,7 +666,7 @@ func (s *Server) reportTemplateAISave(w http.ResponseWriter, r *http.Request) {
 	}
 	// Re-ejecutar como chequeo final (el agente pudo haber ajustado algo entre
 	// el preview y el save). Un warning aquí bloquea el guardado.
-	preview, execErr := s.executeReportDefinition(sess, req.Definition, "", "")
+	preview, execErr := s.executeDefinitionPreview(sess, req.Definition)
 	if execErr != nil {
 		jsonError(w, "la definición falló al ejecutar: "+execErr.Error(), http.StatusBadRequest)
 		return

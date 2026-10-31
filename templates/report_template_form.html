@@ -173,10 +173,10 @@
                 <div class="modal-title"><i class="fa fa-magic"></i> Crear informe con la IA — definición + preview interactivo</div>
                 <button type="button" class="close" data-dismiss="modal" aria-label="Cerrar" id="aiCreateModalClose"><span aria-hidden="true">&times;</span></button>
             </div>
-            <div class="modal-body p-0" style="height: 540px; display: flex; flex-direction: column;">
-                <div class="row m-0" style="height: 100%; flex: 1;">
+            <div class="modal-body p-0" style="max-height: calc(90vh - 140px); display: flex; flex-direction: column;">
+                <div class="row m-0 flex-grow-1" style="height: 100%; min-height: 0;">
                     <!-- Columna izquierda: prompt + acciones -->
-                    <div class="col-md-3 p-3" style="border-right: 1px solid #ddd; display: flex; flex-direction: column;">
+                    <div class="col-md-3 p-3" style="border-right: 1px solid #ddd; display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0;">
                         <h6 style="margin-top:0"><i class="fa fa-edit"></i> Describe el informe</h6>
                         <textarea class="form-control mb-2" id="ai_prompt" rows="4"
                             placeholder="Ej: un informe de ventas por cliente del mes actual con el total general, filtrable por fecha"></textarea>
@@ -195,13 +195,13 @@
                         <div id="ai_status" class="text-muted small mt-2" style="min-height: 20px;"></div>
                     </div>
                     <!-- Columna centro: JSON definición (editable) -->
-                    <div class="col-md-4 p-3" style="border-right: 1px solid #ddd; display: flex; flex-direction: column;">
+                    <div class="col-md-4 p-3" style="border-right: 1px solid #ddd; display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0;">
                         <h6 style="margin-top:0"><i class="fa fa-code"></i> Definición JSON <small class="text-muted">(editable)</small></h6>
                         <textarea class="form-control font-monospace" id="ai_definition" rows="22"
                             spellcheck="false" style="font-size:12px; flex: 1 1 auto; resize: none;"></textarea>
                     </div>
                     <!-- Columna derecha: preview (tabla) -->
-                    <div class="col-md-5 p-3" style="display: flex; flex-direction: column;">
+                    <div class="col-md-5 p-3" style="display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0;">
                         <h6 style="margin-top:0"><i class="fa fa-table"></i> Vista previa (ejecución real)</h6>
                         <div id="ai_preview_container" class="text-muted small" style="flex: 1; overflow:auto;">
                             <p class="text-center my-4">Genera la definición para ver la vista previa.</p>
