@@ -69,8 +69,8 @@
                         <button type="submit" name="action" value="save" class="btn btn-primary">Guardar</button>
                         <button type="submit" name="action" value="save_exit" class="btn btn-default">Guardar y Salir</button>
                         <button type="button" class="btn btn-info" id="btnHelpModal"><i class="fa fa-book"></i> Guía de informes</button>
-                        <button type="button" class="btn btn-warning" onclick="aiHelp()"><i class="fa fa-magic"></i> Ayúdame con la IA</button>
-                    <button type="button" class="btn btn-success" id="ai_crear"><i class="fa fa-check"></i> Crear el informe con la IA (lo guarda)</button>
+                        <button type="button" class="btn btn-warning" onclick="aiHelp()">Ayuda rápida con IA</button>
+                        <button type="button" class="btn btn-success" id="aiOpenCreate"><i class="fa fa-magic"></i> Crear con ayuda de la IA</button>
                         <a class="btn btn-default" href="/reports/custom">Cancelar</a>
                     </div>
                 </form>
@@ -163,24 +163,109 @@
     </div>
 </div>
 
-<!-- Modal de ayuda IA -->
-<div class="modal fade" id="aiModal" tabindex="-1" role="dialog">
+<!-- Modal: crear informe con ayuda de la IA (flujo interactivo) -->
+<!-- Tres paneles: (1) prompt, (2) JSON editable, (3) vista previa. -->
+<!-- Itera con "Refinar con IA" y confirma con "Guardar definitivo". -->
+<div class="modal fade" id="aiCreateModal" tabindex="-1" role="dialog" data-backdrop="static" data-keyboard="false">
+    <div class="modal-dialog modal-xl" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title"><i class="fa fa-magic"></i> Crear informe con la IA — definición + preview interactivo</div>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Cerrar" id="aiCreateModalClose"><span aria-hidden="true">&times;</span></button>
+            </div>
+            <div class="modal-body p-0" style="height: 540px; display: flex; flex-direction: column;">
+                <div class="row m-0" style="height: 100%; flex: 1;">
+                    <!-- Columna izquierda: prompt + acciones -->
+                    <div class="col-md-3 p-3" style="border-right: 1px solid #ddd; display: flex; flex-direction: column;">
+                        <h6 style="margin-top:0"><i class="fa fa-edit"></i> Describe el informe</h6>
+                        <textarea class="form-control mb-2" id="ai_prompt" rows="4"
+                            placeholder="Ej: un informe de ventas por cliente del mes actual con el total general, filtrable por fecha"></textarea>
+                        <div class="mb-2">
+                            <button class="btn btn-sm btn-primary w-100" id="ai_preview_go">1. Generar definición + preview</button>
+                        </div>
+                        <div class="mb-2">
+                            <button class="btn btn-sm btn-warning w-100" id="ai_refine_btn" disabled>2. Refinar con IA</button>
+                        </div>
+                        <div class="mb-2">
+                            <button class="btn btn-sm btn-success w-100" id="ai_save_final_btn" disabled>3. Guardar definitivo</button>
+                        </div>
+                        <div class="mt-auto">
+                            <button type="button" class="btn btn-link btn-sm w-100" data-dismiss="modal">Cancelar</button>
+                        </div>
+                        <div id="ai_status" class="text-muted small mt-2" style="min-height: 20px;"></div>
+                    </div>
+                    <!-- Columna centro: JSON definición (editable) -->
+                    <div class="col-md-4 p-3" style="border-right: 1px solid #ddd; display: flex; flex-direction: column;">
+                        <h6 style="margin-top:0"><i class="fa fa-code"></i> Definición JSON <small class="text-muted">(editable)</small></h6>
+                        <textarea class="form-control font-monospace" id="ai_definition" rows="22"
+                            spellcheck="false" style="font-size:12px; flex: 1 1 auto; resize: none;"></textarea>
+                    </div>
+                    <!-- Columna derecha: preview (tabla) -->
+                    <div class="col-md-5 p-3" style="display: flex; flex-direction: column;">
+                        <h6 style="margin-top:0"><i class="fa fa-table"></i> Vista previa (ejecución real)</h6>
+                        <div id="ai_preview_container" class="text-muted small" style="flex: 1; overflow:auto;">
+                            <p class="text-center my-4">Genera la definición para ver la vista previa.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Cancelar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Sub-modal: feedback para refinar -->
+<div class="modal fade" id="aiRefineModal" tabindex="-1" role="dialog">
     <div class="modal-dialog" role="document">
         <div class="modal-content">
             <div class="modal-header">
-                <button type="button" class="close" data-dismiss="modal">&times;</button>
-                <h4 class="modal-title">Pedir borrador a la IA</h4>
+                <div class="modal-title"><i class="fa fa-sliders"></i> Ajustar informe con IA</div>
+                <button type="button" class="close" data-dismiss="modal"><span aria-hidden="true">&times;</span></button>
+            </div>
+            <div class="modal-body">
+                <label for="ai_refine_prompt">¿Qué quieres cambiar?</label>
+                <textarea class="form-control" id="ai_refine_prompt" rows="3"
+                    placeholder="Ej: agrega la columna de margen, el total por categoría y un gráfico de barras"></textarea>
+                <div class="form-text mt-1">La IA recibe la definición actual y aplica solo este ajuste.</div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="ai_refine_go">Aplicar ajuste y previsualizar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Sub-modal: guardar definitivo (nombre, descripción, visibilidad) -->
+<div class="modal fade" id="aiSaveModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title"><i class="fa fa-save"></i> Guardar informe definitivo</div>
+                <button type="button" class="close" data-dismiss="modal"><span aria-hidden="true">&times;</span></button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label>Describe el informe que necesitas</label>
-                    <textarea class="form-control" id="ai_req" rows="4" placeholder="Ej: un informe de ventas por cliente del mes actual con el total general"></textarea>
+                    <label>Nombre del informe *</label>
+                    <input type="text" class="form-control" id="ai_save_name">
                 </div>
-                <pre id="ai_out" style="white-space:pre-wrap;max-height:300px;overflow:auto;display:none;font-size:12px"></pre>
+                <div class="form-group">
+                    <label>Descripción</label>
+                    <input type="text" class="form-control" id="ai_save_desc">
+                </div>
+                <div class="form-group">
+                    <label>Visibilidad (¿quién puede ver este informe?)</label>
+                    <div class="form-text mb-1">Si no seleccionas roles, <b>el informe será visible para todos</b> los usuarios. Selecciona roles para restringir.</div>
+                    <select class="form-control" id="ai_save_roles" multiple style="height: auto;">
+                        <!-- Opciones cargadas vía AJAX desde /reports/custom/roles -->
+                    </select>
+                </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-primary" id="ai_go">Generar borrador</button>
-                <button type="button" class="btn btn-default" data-dismiss="modal">Cerrar</button>
+                <button type="button" class="btn btn-default" data-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="ai_save_confirm">Guardar y abrir editor</button>
             </div>
         </div>
     </div>
@@ -282,76 +367,241 @@ $(function () {
             $buttons.prop('disabled', false);
         });
     });
-});
-function aiHelp() { $('#aiModal').modal('show'); }
-// crearConIA guarda el informe DE VERDAD: el servidor extrae la definición,
-// la valida con el guardián y la deja en report_template; aquí solo ya se
-// navega a la pantalla de edición del informe creado.
-$('#ai_crear').on('click', function () {
-    var req = $('#ai_req').val().trim();
-    if (!req) { alert('Describe el informe primero'); return; }
-    var btn = $(this).prop('disabled', true).text('Creando el informe…');
-    $.post('/reports/custom/ai-create', JSON.stringify({ request: req }), function (r) {
-        btn.prop('disabled', false).text('Crear el informe con la IA (lo guarda)');
-        if (r.status === 1 && r.redirect) { window.location = r.redirect; }
-        else { btn.prop('disabled', false); alert(r.error || 'La IA no pudo crear el informe'); }
-    }).fail(function (xhr) {
-        btn.prop('disabled', false).text('Crear el informe con la IA (lo guarda)');
-        var msg = 'No hay agentes IA disponibles o el proveedor falló.';
-        try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
-        alert(msg);
-    });
-});
-$('#ai_go').on('click', function () {
-    var req = $('#ai_req').val().trim();
-    if (!req) { alert('Describe el informe primero'); return; }
-    var btn = $(this).prop('disabled', true).text('Consultando a la IA…');
-    $.post('/reports/custom/ai-help', JSON.stringify({ request: req }), function (r) {
-        btn.prop('disabled', false).text('Generar borrador');
-        if (r.status === 1) {
-            $('#ai_out').show().text(r.report);
-            // El escáner empareja llaves (como el servidor en aiExtraerDefinicion)
-            // en vez del regex /\{[\s\S]*"sql"[\s\S]*\}/, que es greedy y se come
-            // desde el primer { de la prosa hasta el último }. Con el escáner, el
-            // primer objeto que tenga "sql" se extrae sin comerse la prosa ajena.
-            var extr = extraerDefinicionJS(r.report);
-            if (extr && !$('#tpl_def').val().trim()) { $('#tpl_def').val(extr).trigger('input'); }
-        } else { alert(r.error || 'La IA no pudo responder'); }
-    }).fail(function (xhr) {
-        btn.prop('disabled', false).text('Generar borrador');
-        alert('No hay agentes IA disponibles o el proveedor falló.');
-    });
-});
 
-// extraerDefinicionJS replica en JS el algoritmo de aiExtraerDefinicion (server):
-// devuelve el primer objeto JSON {…} que decodifique y tenga clave "sql". Respetan
-// comillas y escapes, así las llaves dentro del SQL no desalinean el emparejado.
-function extraerDefinicionJS(texto) {
-    for (var i = 0; i < texto.length; i++) {
-        if (texto[i] !== '{') { continue; }
-        var depth = 0, enCadena = false, esc = false;
-        for (var j = i; j < texto.length; j++) {
-            var c = texto[j];
-            if (enCadena) {
-                if (esc) { esc = false; }
-                else if (c === '\\') { esc = true; }
-                else if (c === '"') { enCadena = false; }
-                continue;
+    /* ---------------------- Modal: crear con IA (interactivo) ---------------------- */
+
+    // Abrir el modal interactivo desde el botón "Crear con ayuda de la IA"
+    $('#aiOpenCreate').on('click', function () {
+        $('#ai_prompt').val('');
+        $('#ai_definition').val('');
+        $('#ai_preview_container').html('<p class="text-center my-4">Genera la definición para ver la vista previa.</p>');
+        $('#ai_refine_btn, #ai_save_final_btn').prop('disabled', true);
+        $('#ai_status').text('');
+        $('#aiCreateModal').modal({backdrop: 'static', keyboard: false});
+    });
+
+    // Renderiza la vista previa (tabla) desde {title, headers, rows, totals, warnings}
+    function renderPreview(preview) {
+        if (!preview) {
+            $('#ai_preview_container').html('<p class="text-center my-4 text-muted">Sin vista previa.</p>');
+            return;
+        }
+        var html = '';
+        if (preview.title) html += '<h6 class="mt-0">' + escHtml(preview.title) + '</h6>';
+        if (preview.warnings && preview.warnings.length) {
+            html += '<div class="alert alert-warning py-1" style="font-size:11px">' + preview.warnings.map(escHtml).join('; ') + '</div>';
+        }
+        if (!preview.headers || preview.headers.length === 0) {
+            html += '<p class="text-muted">La consulta no devolvió columnas.</p>';
+        } else {
+            html += '<table class="table table-sm table-bordered" style="font-size:11px; max-height:340px; overflow:auto;">';
+            html += '<thead><tr>' + preview.headers.map(escHtml).map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead>';
+            html += '<tbody>';
+            if (preview.rows && preview.rows.length) {
+                preview.rows.forEach(function (row) {
+                    html += '<tr>' + row.map(function (c) { return '<td>' + escHtml(c) + '</td>'; }).join('') + '</tr>';
+                });
+            } else {
+                html += '<tr><td colspan="' + preview.headers.length + '" class="text-center text-muted">Sin datos</td></tr>';
             }
-            if (c === '"') { enCadena = true; }
-            else if (c === '{') { depth++; }
-            else if (c === '}') {
-                depth--;
-                if (depth === 0) {
-                    var cand = texto.slice(i, j + 1);
-                    try { var o = JSON.parse(cand); if (o && o.sql) { return cand; } }
-                    catch (e) { /* no es JSON válido: probar siguiente '{' */ }
-                    break; // cerró un objeto sin sql: seguir con el próximo '{'
+            html += '</tbody></table>';
+            if (preview.totals) {
+                var totKeys = Object.keys(preview.totals);
+                if (totKeys.length) {
+                    html += '<div class="text-right small mt-1"><b>Totales:</b> ' + totKeys.map(function (k) {
+                        return escHtml(k) + ': ' + escHtml(preview.totals[k]);
+                    }).join(' | ') + '</div>';
                 }
             }
         }
+        $('#ai_preview_container').html(html);
     }
-    return null;
+    function escHtml(v) {
+        if (v === null || v === undefined) return '';
+        return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // Estado: definición actual del modal
+    var aiState = { definition: '', preview: null };
+
+    function setBusy(msg) { $('#ai_status').text(msg || ''); }
+    function setReady() { $('#ai_status').text(''); }
+
+    function jsonValid(defText) {
+        try { JSON.parse(defText); return true; } catch (e) { return false; }
+    }
+
+    // 1. Generar definición + preview
+    $('#ai_preview_go').on('click', function () {
+        var req = $('#ai_prompt').val().trim();
+        if (!req) { alert('Describe el informe que necesitas'); return; }
+        var btn = $(this).prop('disabled', true).text('Generando…');
+        setBusy('La IA está analizando el esquema y generando la definición…');
+        // ERPGo.csrfFetch (csrf.js) adjunta X-CSRF-Token; /guia/ está exento,
+        // /reports/custom/ai-preview no, así que usamos csrfFetch.
+        ERPGo.csrfFetch('/reports/custom/ai-preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ request: req })
+        }).then(function (r) { return r.json(); }).then(function (data) {
+            btn.prop('disabled', false).text('1. Generar definición + preview');
+            setReady();
+            if (data.status === 1) {
+                $('#ai_definition').val(data.definition).trigger('input');
+                renderPreview(data.preview);
+                aiState.definition = data.definition;
+                aiState.preview = data.preview;
+                $('#ai_refine_btn, #ai_save_final_btn').prop('disabled', false);
+                $('#ai_save_name').val(data.title || '');
+                $('#ai_save_desc').val(data.description || '');
+            } else {
+                alert(data.error || 'La IA no pudo generar el informe');
+            }
+        }).fail(function () {
+            btn.prop('disabled', false).text('1. Generar definición + preview');
+            setReady();
+            alert('Error de conexión. Revise la consola.');
+        });
+    });
+
+    // 2. Refinar con IA → abre sub-modal
+    $('#ai_refine_btn').on('click', function () {
+        if (!aiState.definition) { alert('Primero genera la definición'); return; }
+        $('#ai_refine_prompt').val('');
+        $('#aiRefineModal').modal('show');
+    });
+
+    $('#ai_refine_go').on('click', function () {
+        var feedback = $('#ai_refine_prompt').val().trim();
+        if (!feedback) { alert('Describe el cambio'); return; }
+        var currentDef = $('#ai_definition').val();
+        if (!jsonValid(currentDef)) { alert('La definición no es JSON válido. Edítala e intenta de nuevo.'); return; }
+        var btn = $(this).prop('disabled', true).text('Refinando…');
+        setBusy('La IA está ajustando la definición…');
+        $('#aiRefineModal').modal('hide');
+        ERPGo.csrfFetch('/reports/custom/ai-refine', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ request: feedback, definition: currentDef })
+        }).then(function (r) { return r.json(); }).then(function (data) {
+            btn.prop('disabled', false).text('Aplicar ajuste y previsualizar');
+            setReady();
+            if (data.status === 1) {
+                $('#ai_definition').val(data.definition).trigger('input');
+                renderPreview(data.preview);
+                aiState.definition = data.definition;
+                aiState.preview = data.preview;
+            } else {
+                alert(data.error || 'La IA no pudo ajustar el informe');
+            }
+        }).fail(function () {
+            btn.prop('disabled', false).text('Aplicar ajuste y previsualizar');
+            setReady();
+            alert('Error de conexión.');
+        });
+    });
+
+    // 3. Guardar definitivo → sub-modal nombre/desc/visibilidad
+    $('#ai_save_final_btn').on('click', function () {
+        if (!aiState.definition) { alert('Primero genera la definición'); return; }
+        $('#ai_save_name').val($('#ai_save_name').val() || '');
+        $('#ai_save_desc').val($('#ai_save_desc').val());
+        $('#aiSaveModal').modal('show');
+    });
+
+    // Cargar roles para el selector de visibilidad (una vez)
+    var rolesCache = [];
+    function cargarRolesSelect() {
+        if (rolesCache.length) { poblarSelect(); return; }
+        ERPGo.csrfFetch('/reports/custom/roles').then(function (r) { return r.json(); })
+            .then(function (list) {
+                rolesCache = list || [];
+                poblarSelect();
+            }).fail(function () { /* sin roles: informe público */ });
+    }
+    function poblarSelect() {
+        var sel = $('#ai_save_roles');
+        sel.empty();
+        if (!rolesCache.length) {
+            sel.append('<option value="">(sin roles disponibles — informe público)</option>');
+        } else {
+            rolesCache.forEach(function (r) {
+                sel.append('<option value="' + r.id + '">' + escHtml(r.type) + ' (' + escHtml(r.level || '') + ')</option>');
+            });
+        }
+    }
+    $('#aiSaveModal').on('show.bs.modal', cargarRolesSelect);
+
+    // Confirmar guardado definitivo
+    $('#ai_save_confirm').on('click', function () {
+        var name = $('#ai_save_name').val().trim();
+        if (!name) { alert('El nombre es obligatorio'); return; }
+        var definition = $('#ai_definition').val().trim();
+        if (!jsonValid(definition)) { alert('La definición JSON no es válida'); return; }
+        var roleIDs = $('#ai_save_roles').val().map(function (v) { return parseInt(v, 10); });
+        var btn = $(this).prop('disabled', true).text('Guardando…');
+        var saveData = {
+            name: name,
+            description: $('#ai_save_desc').val().trim(),
+            definition: definition,
+            role_ids: roleIDs
+        };
+        ERPGo.csrfFetch('/reports/custom/ai-save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(saveData)
+        }).then(function (r) { return r.json(); }).then(function (data) {
+            btn.prop('disabled', false).text('Guardar y abrir editor');
+            if (data.status === 1 && data.redirect) {
+                $('#aiSaveModal').modal('hide');
+                $('#aiCreateModal').modal('hide');
+                window.location = data.redirect;
+            } else {
+                alert(data.error || 'No se pudo guardar el informe');
+            }
+        }).fail(function () {
+            btn.prop('disabled', false).text('Guardar y abrir editor');
+            alert('Error de conexión.');
+        });
+    });
+
+    // Escáner de definición JSON: se mantiene por si el usuario pega texto con
+    // markdown. El servidor usa aiExtraerDefinicion (misma lógica).
+    function extraerDefinicionJS(texto) {
+        for (var i = 0; i < texto.length; i++) {
+            if (texto[i] !== '{') { continue; }
+            var depth = 0, enCadena = false, esc = false;
+            for (var j = i; j < texto.length; j++) {
+                var c = texto[j];
+                if (enCadena) {
+                    if (esc) { esc = false; }
+                    else if (c === '\\') { esc = true; }
+                    else if (c === '"') { enCadena = false; }
+                    continue;
+                }
+                if (c === '"') { enCadena = true; }
+                else if (c === '{') { depth++; }
+                else if (c === '}') {
+                    depth--;
+                    if (depth === 0) {
+                        var cand = texto.slice(i, j + 1);
+                        try { var o = JSON.parse(cand); if (o && o.sql) { return cand; } }
+                        catch (e) { /* probar siguiente '{' */ }
+                        break;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+});
+
+function aiHelp() {
+    // "Ayuda rápida": abre el modal interactivo con el prompt ya escrito.
+    var req = $('#ai_req').val().trim();
+    // Si existe un #ai_req antiguo (formulario manual), moverlo al prompt del modal.
+    $('#ai_prompt').val(req || $('#tpl_def').val().trim().substring(0, 200) + '...');
+    $('#aiOpenCreate').trigger('click');
 }
 </script>
 {{end}}

@@ -24,12 +24,70 @@ type reportTemplate struct {
 	Status      int
 }
 
-// loadReportTemplates lista las plantillas activas.
+// loadReportTemplates lista las plantillas que el usuario puede ver.
+//
+// Visibilidad: SIN filas en report_template_acl → todos ven (compatibilidad
+// con informes pre-migration). SI hay filas → el usuario ve el informe si alguna
+// fila coincide con su role_id o user_id, o si la fila es "pública explícita"
+// (role_id IS NULL AND user_id IS NULL). Master ver todo siempre.
+//
+// Si la tabla report_template_acl no existe todavía (instalación sin aplicar
+// la migración), la query falla: se devuelve la lista SIN filtrar (comportamiento
+// legado) en vez de 500. La tabla se crea en el arranque normal vía migrations.
 func (s *Server) loadReportTemplates(sess *SessionData) []reportTemplate {
-	rows, err := s.dbForSession(sess).Query(`SELECT id, name, IFNULL(description,''), definition, IFNULL(created_by,''), status
-		FROM report_template WHERE status = 1 ORDER BY name`)
-	if err != nil {
+	db := s.dbForSession(sess)
+	if db == nil {
 		return []reportTemplate{}
+	}
+	// Master ve todo de todas formas.
+	level := "employee"
+	if sess != nil {
+		level, _ = loadUserRole(db, sess.UserID)
+		if level == "" {
+			if ctl, cerr := s.controlStore(); cerr == nil {
+				level, _ = loadUserRole(ctl, sess.UserID)
+			}
+		}
+	}
+	if level == "master" || sess == nil {
+		// Master y usuarios sin rol con nivel: ver todo (comportamiento legado).
+		// Los sin rol aparecen como employee en el frontend; si no son master,
+		// la query de abajo filtra por ACL. Se deja master ver todo.
+	}
+	roleID := int64(0)
+	if sess != nil {
+		roleID = s.sessionRoleID(sess)
+	}
+	userID := ""
+	if sess != nil {
+		userID = sessUserID(sess)
+	}
+	query := `SELECT rt.id, rt.name, IFNULL(rt.description,''), rt.definition, IFNULL(rt.created_by,''), rt.status
+		FROM report_template rt
+		WHERE rt.status = 1
+		  AND (
+		    NOT EXISTS (SELECT 1 FROM report_template_acl WHERE report_template_id = rt.id)
+		    OR EXISTS (
+		      SELECT 1 FROM report_template_acl
+		      WHERE report_template_id = rt.id
+		        AND (
+		          (role_id = ? AND ? > 0)
+		          OR user_id = ?
+		          OR (role_id IS NULL AND user_id IS NULL)
+		        )
+		    )
+		  )
+		ORDER BY rt.name`
+	rows, err := db.Query(query, roleID, roleID, userID)
+	if err != nil {
+		// La tabla report_template_acl no existe aún (pre-migration):
+		// devolver todo sin filtrar, como antes.
+		fallback := `SELECT id, name, IFNULL(description,''), definition, IFNULL(created_by,''), status
+			FROM report_template WHERE status = 1 ORDER BY name`
+		rows, err = db.Query(fallback)
+		if err != nil {
+			return []reportTemplate{}
+		}
 	}
 	defer rows.Close()
 	list := []reportTemplate{}
@@ -43,6 +101,30 @@ func (s *Server) loadReportTemplates(sess *SessionData) []reportTemplate {
 		return []reportTemplate{}
 	}
 	return list
+}
+
+// sessionRoleID devuelve el role_id (sec_role.id) de la sesión, con fallback a
+// la BD de control. sec_userrole vive en control, y el rol global del usuario
+// también allí; la BD de empresa puede no tenerlo en empresas nuevas.
+func (s *Server) sessionRoleID(sess *SessionData) int64 {
+	if sess == nil {
+		return 0
+	}
+	// 1. BD de empresa activa (si tiene sec_userrole).
+	if db := s.db; db != nil {
+		var id int64
+		if err := db.QueryRow(`SELECT roleid FROM sec_userrole WHERE user_id = ? LIMIT 1`, sess.UserID).Scan(&id); err == nil && id > 0 {
+			return id
+		}
+	}
+	// 2. BD de control.
+	if ctl, err := s.controlStore(); err == nil && ctl != nil {
+		var id int64
+		if err := ctl.QueryRow(`SELECT roleid FROM sec_userrole WHERE user_id = ? LIMIT 1`, sess.UserID).Scan(&id); err == nil && id > 0 {
+			return id
+		}
+	}
+	return 0
 }
 
 // reportDefShape es la estructura de una definición de informe.
@@ -287,84 +369,117 @@ func (s *Server) registerAIReportRoutes() {
 	s.mux.HandleFunc("POST /reports/custom/delete/{id}", s.reportTemplateDelete)
 	s.mux.HandleFunc("GET /reports/custom/run/{id}", s.reportTemplateRun)
 	s.mux.HandleFunc("POST /reports/custom/ai-help", s.reportTemplateAIHelp)
-	s.mux.HandleFunc("POST /reports/custom/ai-create", s.reportTemplateAICreate)
+	// ai-preview: IA genera definición + ejecución previa (NO guarda). Devuelve
+	// {definition, name, description, preview} para el modal interactivo.
+	s.mux.HandleFunc("POST /reports/custom/ai-preview", s.reportTemplateAIPreview)
+	// ai-refine: IA ajusta la definición con feedback del usuario → preview.
+	s.mux.HandleFunc("POST /reports/custom/ai-refine", s.reportTemplateAIRefine)
+	// ai-save: guarda el informe con visibilidad (ACL por role_id/user_id).
+	s.mux.HandleFunc("POST /reports/custom/ai-save", s.reportTemplateAISave)
+	// ai-roles: lista los roles (sec_role) para el selector de visibilidad del
+	// modal de creación asistida. Master ver todo; los roles son de la BD de control.
+	s.mux.HandleFunc("GET /reports/custom/roles", s.reportTemplateRoles)
 }
 
-// reportTemplateAICreate convierte el pedido en un informe REAL: el agente
-// redacta la definición y el servidor —no la IA— la pasa por el guardián SQL y
-// guarda la fila en report_template. El botón anterior («Ayúdame con la IA»)
-// solo mostraba un borrador y rellenaba el textarea si estaba vacío: el informe
-// «creado por la IA» quedaba a mitad de camino porque nada lo guardaba.
-func (s *Server) reportTemplateAICreate(w http.ResponseWriter, r *http.Request) {
-	sess := s.sessionFromRequest(r)
+// previewDefinitionFromJSON valida y ejecuta la previa una definición JSON ya
+// extraída del texto del agente. SEPARADO de iaPreviewDefinition porque varios
+// callers ya tienen el JSON (crearInformeDesdeRespuestaIA, tests) y no deben
+// gastar una corrida de agente de más solo para re-validar.
+func (s *Server) previewDefinitionFromJSON(sess *SessionData, jsonText string) (def reportDefShape, preview *reportResult, err error) {
+	if err = json.Unmarshal([]byte(jsonText), &def); err != nil {
+		err = fmt.Errorf("la definición no es JSON válido: %v", err)
+		return
+	}
+	if vErr := s.validateReportDefinition(jsonText); vErr != nil {
+		err = fmt.Errorf("la definición no pasa el guardián: %v", vErr)
+		return
+	}
+	preview, execErr := s.executeReportDefinition(sess, jsonText, "", "")
+	if execErr != nil {
+		err = fmt.Errorf("la definición no pasa la prueba de ejecución: %v", execErr)
+		return
+	}
+	if len(preview.Warnings) > 0 {
+		err = fmt.Errorf("la definición no pasa la prueba de ejecución: %s. corrígela antes de guardar",
+			strings.Join(preview.Warnings, "; "))
+		return
+	}
+	return def, preview, nil
+}
+
+// iaPreviewDefinition es el núcleo compartido de ai-preview y ai-refine:
+// pide al agente una definición JSON (excluyendo report.save_template), la
+// valida con el guardián, la ejecuta como preview y devuelve todo junto.
+// El caller decide qué hacer con el resultado (mostrar en modal, guardar, etc.).
+//
+// Por qué existe como helper y no se repite: el preview y el refine comparten
+// validación + ejecución, y un bug arreglado en uno (p.ej. "warning en totales")
+// debe propagarse al otro sin que se lo vuelva a buscar en dos sitios.
+func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string) (def reportDefShape, name, desc string, preview *reportResult, err error) {
 	if sess == nil {
-		jsonError(w, "Sesión no iniciada", 401)
+		err = fmt.Errorf("sesión no iniciada")
 		return
 	}
-	var req struct {
-		Request string `json:"request"`
-	}
-	body, err := readAllLimit(r, 1<<20)
-	if err != nil {
-		jsonError(w, "Cuerpo inválido", 400)
-		return
-	}
-	if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Request) == "" {
-		jsonError(w, "Describe el informe que necesitas", 400)
-		return
-	}
-	agent, ok := s.aiDefaultITAgent(s.sessionFromRequest(r))
+	agent, ok := s.aiDefaultITAgent(sess)
 	if !ok {
-		jsonError(w, "No hay agentes IA activos. Crea uno en Agentes IA.", 503)
+		err = fmt.Errorf("no hay agentes IA activos. crea uno en Agentes IA")
 		return
 	}
-	// El encargo de una sola pasada: el contrato es cerrado porque la respuesta
-	// se va a GUARDAR, no a leer una persona. Prosa fuera del objeto entorpece;
-	// la extracción lo tolera, pero el contrato la reduce.
-	instruccion := req.Request + "\n\nCONTRATO DE RESPUESTA: responde ÚNICAMENTE con la definición del informe como objeto JSON con las claves \"title\" (nombre corto), \"sql\" (un único SELECT de lectura sobre las tablas del mapa), \"columns\" ([{\"key\":...,\"label\":...}...]) y \"totals\" (solo claves declaradas en columns). Sin markdown, sin vallado de código, sin texto fuera del objeto."
-	// RespuestaJSON=true hace que el runner varíe la regla 6 del sistema y el
-	// sufijo del prompt para pedir JSON (ver aiReglasDelSistema). Sin esto el
-	// modelo recibía "entrega un informe en Markdown" y la definición nunca se
-	// extraía: la corrida se gastaba en tokens y no quedaba el informe.
-	//
-	// HerramientasExcluidas quita report.save_template DE ESTA corrida: el
-	// guardado lo hace el servidor al final, y si el agente guardara por su
-	// cuenta se duplicaría la fila.
+	// El agente usa el MCP (herramienta con el mapa de tablas) PARA ENTENDER la
+	// solicitud: no memoriza esquemas; consulta el introspector con aiSchemaMap.
+	// La instrucción cierra el contrato: JSON puro, sin markdown ni prosa, para
+	// que aiExtraerDefinicion no tenga que adivinar.
 	task := aiTask{
-		AgentID:             agent.ID,
-		Name:                "Creación de informe",
-		Instructions:        instruccion,
+		AgentID:               agent.ID,
+		Name:                "Diseño de informe (preview)",
+		Instructions:        instruction,
 		RespuestaJSON:       true,
-		HerramientasExcluidas: []string{"report.save_template"},
+		HerramientasExcluidas: []string{"report.save_template"}, // el save lo hace el servidor
 	}
-	// Ámbito propio por invocación, por el mismo motivo de reportTemplateAIHelp:
-	// es interactiva y de una sola pasada.
 	journal := &aiRunJournal{scope: "adhoc:" + now()}
 	steps := []aiStep{}
-	resp, runErr := s.aiRunLoop(s.sessionFromRequest(r), agent, task, &steps, journal)
+	resp, runErr := s.aiRunLoop(sess, agent, task, &steps, journal)
 	if runErr != nil {
-		jsonError(w, runErr.Error(), 502)
+		err = fmt.Errorf("la IA falló: %w", runErr)
 		return
 	}
-	id, nombre, crearErr := s.crearInformeDesdeRespuestaIA(r, sess, req.Request, resp)
-	if crearErr != nil {
-		jsonError(w, crearErr.Error(), 502)
+	jsonText, ok := aiExtraerDefinicion(resp)
+	if !ok {
+		err = fmt.Errorf("la respuesta de la IA no contiene una definición JSON con «sql»")
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "id": id, "name": nombre,
-		"redirect": "/reports/custom/edit/" + strconv.FormatInt(id, 10)})
+	def, preview, err = s.previewDefinitionFromJSON(sess, jsonText)
+	if err != nil {
+		return
+	}
+	name = strings.TrimSpace(def.Title)
+	desc = strings.TrimSpace(def.Title) // el description se sugiere; el caller lo puede sobreescribir
+	return def, name, desc, preview, nil
+}
+
+// aiPreviewInstruction arma la instrucción para pedir al agente una definición.
+// Usa el mapa de tablas (MCP) como contexto y cierra el contrato JSON.
+func aiPreviewInstruction(request string) string {
+	return request + "\n\nCONTRATO DE RESPUESTA: responde ÚNICAMENTE con la definición del informe como objeto JSON con las claves \"title\" (nombre corto), \"sql\" (un único SELECT de lectura sobre las tablas del mapa), \"columns\" ([{key,label}...]) y \"totals\" (claves declaradas en columns). Usa :desde/:hasta para fechas. Sin markdown, sin vallado de código, sin texto fuera del objeto."
 }
 
 // crearInformeDesdeRespuestaIA extrae la definición del texto del agente, la
-// valida con el mismo guardián que un guardado manual y guarda la fila con la
-// marca ia: en created_by, para que la auditoría diga quién escribió de verdad.
+// valida y ejecuta (preview) y guarda la fila con la marca ia: en created_by,
+// para que la auditoría diga quién escribió de verdad.
+//
+// Este helper existe para los tests que ya tienen la respuesta del agente en
+// mano (sin gastar una corrida). El flujo productivo interactivo usa
+// iaPreviewDefinition + reportTemplateAISave, pero la lógica de validación y
+// ejecución previa es idéntica (delegada a previewDefinitionFromJSON).
 func (s *Server) crearInformeDesdeRespuestaIA(r *http.Request, sess *SessionData, pedido, respuesta string) (int64, string, error) {
 	def, ok := aiExtraerDefinicion(respuesta)
 	if !ok {
 		return 0, "", fmt.Errorf("la respuesta de la IA no contiene una definición JSON con «sql»")
 	}
-	var d reportDefShape
-	_ = json.Unmarshal([]byte(def), &d) // aiExtraerDefinicion ya garantizó que decodifica
+	d, _, err := s.previewDefinitionFromJSON(sess, def)
+	if err != nil {
+		return 0, "", fmt.Errorf("la definición de la IA no pasa la prueba de ejecución: %v", err)
+	}
 	nombre := strings.TrimSpace(d.Title)
 	if nombre == "" {
 		nombre = strings.TrimSpace(pedido)
@@ -372,22 +487,274 @@ func (s *Server) crearInformeDesdeRespuestaIA(r *http.Request, sess *SessionData
 	if cortado := []rune(nombre); len(cortado) > 80 {
 		nombre = string(cortado[:80])
 	}
-	if err := s.validateReportDefinition(def); err != nil {
-		return 0, "", fmt.Errorf("la definición de la IA no pasa el guardián: %v", err)
-	}
-	// Antes de GUARDAR, el informe se ejecuta una vez como lo haría un técnico:
-	// el guardián estático valida sintaxis, pero no que el SQL devuelva las
-	// columnas declaradas, que los totales tengan sentido, o que la tabla
-	// exista. Un SELECT contra una tabla que no ve el agente (departamento mal
-	// elegido) aquí tira 400 y no guarda una plantilla que explota al abrirse.
-	if res, preErr := s.executeReportDefinition(sess, def, "", ""); preErr != nil {
-		return 0, "", fmt.Errorf("la definición de la IA no pasa la prueba de ejecución: %v", preErr)
-	} else if len(res.Warnings) > 0 {
-		return 0, "", fmt.Errorf("la definición de la IA no pasa la prueba de ejecución: %s. Corrígela antes de guardar",
-			strings.Join(res.Warnings, "; "))
-	}
 	id, err := s.insertarInforme(r, sess, nombre, strings.TrimSpace(pedido), def, "ia:"+sessUserID(sess))
 	return id, nombre, err
+}
+
+// reportTemplateAICreate mantiene el endpoint original (ya no en routing, pero
+// aún llamado por tests). Valida el request, pide la definición al agente, la
+// guarda de una sola vez (visibilidad pública: sin ACL). Reemplazado en el
+// frontend interactivo por ai-preview + ai-save, pero preservado para compat.
+func (s *Server) reportTemplateAICreate(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionFromRequest(r)
+	if sess == nil {
+		jsonError(w, "Sesión no iniciada", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Request string `json:"request"`
+	}
+	body, err := readAllLimit(r, 1<<20)
+	if err != nil {
+		jsonError(w, "Cuerpo inválido", http.StatusBadRequest)
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Request) == "" {
+		jsonError(w, "Describe el informe que necesitas", http.StatusBadRequest)
+		return
+	}
+	agent, ok := s.aiDefaultITAgent(sess)
+	if !ok {
+		jsonError(w, "No hay agentes IA activos. Crea uno en Agentes IA.", http.StatusServiceUnavailable)
+		return
+	}
+	journal := &aiRunJournal{scope: "adhoc:" + now()}
+	steps := []aiStep{}
+	resp, runErr := s.aiRunLoop(sess, agent, aiTask{
+		AgentID:               agent.ID,
+		Name:                  "Creación de informe",
+		Instructions:          aiPreviewInstruction(req.Request),
+		RespuestaJSON:         true,
+		HerramientasExcluidas: []string{"report.save_template"},
+	}, &steps, journal)
+	if runErr != nil {
+		jsonError(w, runErr.Error(), http.StatusBadGateway)
+		return
+	}
+	id, nombre, crearErr := s.crearInformeDesdeRespuestaIA(r, sess, req.Request, resp)
+	if crearErr != nil {
+		jsonError(w, crearErr.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]interface{}{"status": 1, "id": id, "name": nombre,
+		"redirect": "/reports/custom/edit/" + strconv.FormatInt(id, 10)})
+}
+
+// reportTemplateAIPreview genera una definición por IA + preview de ejecución.
+// NO guarda: el usuario itera (refinar) o confirma (ai-save). Reemplaza al viejo
+// ai-create que guardaba en un solo paso sin dejar pulir la definición.
+func (s *Server) reportTemplateAIPreview(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionFromRequest(r)
+	if sess == nil {
+		jsonError(w, "Sesión no iniciada", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Request string `json:"request"`
+	}
+	body, err := readAllLimit(r, 1<<20)
+	if err != nil {
+		jsonError(w, "Cuerpo inválido", http.StatusBadRequest)
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Request) == "" {
+		jsonError(w, "Describe el informe que necesitas", http.StatusBadRequest)
+		return
+	}
+	def, name, desc, preview, pErr := s.iaPreviewDefinition(sess, aiPreviewInstruction(req.Request))
+	if pErr != nil {
+		jsonError(w, pErr.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]interface{}{
+		"status":   1,
+		"request":  req.Request,
+		"definition": mustJSON(def),
+		"title":    name,
+		"description": desc,
+		"preview":  previewJSON(preview),
+	})
+}
+
+// reportTemplateAIRefine ajusta la definición según el feedback del usuario y
+// devuelve una nueva vista previa. El agente recibe el JSON previo como contexto
+// (no como texto plano) para que ajuste solo lo pedido.
+func (s *Server) reportTemplateAIRefine(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionFromRequest(r)
+	if sess == nil {
+		jsonError(w, "Sesión no iniciada", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Request    string          `json:"request"`    // feedback del usuario
+		Definition json.RawMessage `json:"definition"` // JSON previo
+	}
+	body, err := readAllLimit(r, 1<<20)
+	if err != nil {
+		jsonError(w, "Cuerpo inválido", http.StatusBadRequest)
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Request) == "" {
+		jsonError(w, "Describe el ajuste que necesitas", http.StatusBadRequest)
+		return
+	}
+	if len(req.Definition) == 0 {
+		jsonError(w, "Debes generar primero el borrador (falta la definición previa)", http.StatusBadRequest)
+		return
+	}
+	// La instrucción lleva el JSON previo incrustado: el agente reajusta sobre él
+	// en vez de empezar desde cero, preservando el resto.
+	instruction := fmt.Sprintf(
+		"Ajusta la definición JSON del informe según este feedback del usuario: «%s».\n\nDEFINICIÓN PREVIA (JSON):\n%s\n\nCONTRATO DE RESPUESTA: responde ÚNICAMENTE con la definición ajustada como objeto JSON con \"title\", \"sql\", \"columns\", \"totals\". Si el feedback no cambia el SQL, repítelo idéntico. Sin markdown, sin vallado de código.",
+		req.Request, string(req.Definition))
+	def, name, desc, preview, pErr := s.iaPreviewDefinition(sess, instruction)
+	if pErr != nil {
+		jsonError(w, pErr.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]interface{}{
+		"status":        1,
+		"definition":    mustJSON(def),
+		"title":         name,
+		"description":   desc,
+		"preview":       previewJSON(preview),
+	})
+}
+
+// reportTemplateAISave guarda el informe (definición validada y ejecutada) con
+// visibilidad por role_id/user_id. El cliente ya vio el preview; aquí se valida
+// de nuevo (capa defensiva) y se persiste + la auditoría.
+func (s *Server) reportTemplateAISave(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionFromRequest(r)
+	if sess == nil {
+		jsonError(w, "Sesión no iniciada", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Name        string   `json:"name"`
+		Description string   `json:"description"`
+		Definition  string   `json:"definition"`
+		RoleIDs     []int64  `json:"role_ids"` // NULL o vacío = visible para todos
+	}
+	body, err := readAllLimit(r, 1<<20)
+	if err != nil {
+		jsonError(w, "Cuerpo inválido", http.StatusBadRequest)
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		jsonError(w, "JSON inválido", http.StatusBadRequest)
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Definition = strings.TrimSpace(req.Definition)
+	if req.Name == "" || req.Definition == "" {
+		jsonError(w, "Nombre y definition son obligatorios", http.StatusBadRequest)
+		return
+	}
+	if err := s.validateReportDefinition(req.Definition); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Re-ejecutar como chequeo final (el agente pudo haber ajustado algo entre
+	// el preview y el save). Un warning aquí bloquea el guardado.
+	preview, execErr := s.executeReportDefinition(sess, req.Definition, "", "")
+	if execErr != nil {
+		jsonError(w, "la definición falló al ejecutar: "+execErr.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(preview.Warnings) > 0 {
+		jsonError(w, "la definición tiene warnings: "+strings.Join(preview.Warnings, "; "), http.StatusBadRequest)
+		return
+	}
+	creator := "ia:" + sessUserID(sess)
+	id, err := s.insertarInforme(r, sess, req.Name, req.Description, req.Definition, creator)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.insertarReporteACL(r, sess, id, req.RoleIDs); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]interface{}{"status": 1, "id": id,
+		"redirect": "/reports/custom/edit/" + strconv.FormatInt(id, 10)})
+}
+
+// previewJSON serializa un reportResult para la respuesta del preview.
+func previewJSON(r *reportResult) map[string]interface{} {
+	if r == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"title":    r.Title,
+		"headers":  r.Headers,
+		"rows":     r.Rows,
+		"totals":   r.Totals,
+		"warnings": r.Warnings,
+	}
+}
+// insertarReporteACL graba la visibilidad de un informe en report_template_acl.
+// Si roleIDs es vacío (nil), no se insertan filas: el informe es visible para
+// TODOS (regla: SIN filas → todos ven). Esto preserva el comportamiento actual
+// de los informes existentes y da al creador control explícito al pasar roles.
+func (s *Server) insertarReporteACL(r *http.Request, sess *SessionData, reportID int64, roleIDs []int64) error {
+	db := s.dbFor(r)
+	if db == nil {
+		return fmt.Errorf("base no disponible")
+	}
+	// Vacío: el informe es público (sin filas = todos ven). Esto permite que un
+	// creador deje el informe visible a todos por defecto.
+	if len(roleIDs) == 0 {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM report_template_acl WHERE report_template_id = ?`, reportID); err != nil {
+		return err
+	}
+	for _, rid := range roleIDs {
+		if _, err := tx.Exec(`INSERT INTO report_template_acl (report_template_id, role_id, user_id) VALUES (?,?,NULL)`, reportID, rid); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// reportCanView verifica la visibilidad de un informe para un usuario/rol.
+// Regla:
+//  - SIN filas en report_template_acl para el informe → visible para TODOS.
+//  - SI hay filas → visible si alguna coincide con su role_id o user_id.
+//  - una fila con role_id=NULL y user_id=NULL → "todos los roles/usuarios" (público explícito).
+//
+// La tabla report_template_acl puede no existir todavía (pre-migration): en
+// ese caso la query de COUNT falla y se asume visible para todos (fallback seguro).
+func (s *Server) reportCanView(sess *SessionData, reportID int64) bool {
+	if sess == nil {
+		return false
+	}
+	db := s.dbForSession(sess)
+	if db == nil {
+		return false
+	}
+	// ¿hay filas de ACL para este informe? Si la tabla no existe, error → fallback "todxs ven".
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM report_template_acl WHERE report_template_id = ?`, reportID).Scan(&count); err != nil {
+		return true
+	}
+	if count == 0 {
+		return true // sin filas → visible para todos
+	}
+	roleID := s.sessionRoleID(sess)
+	userID := sessUserID(sess)
+	var match int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM report_template_acl
+		WHERE report_template_id = ?
+		  AND (role_id = ? OR user_id = ? OR (role_id IS NULL AND user_id IS NULL))`,
+		reportID, roleID, userID).Scan(&match)
+	return match > 0
 }
 
 // insertarInforme guarda la fila y escribe la auditoría. El guardado manual y
@@ -494,6 +861,37 @@ func (s *Server) reportTemplateForm(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, r, "report_template_form.html", data)
+}
+
+// reportTemplateRoles lista los roles para el selector de visibilidad del modal
+// de creación asistida. Viene de sec_role (BD de control), que es la única
+// fuente de truth para roles.
+func (s *Server) reportTemplateRoles(w http.ResponseWriter, r *http.Request) {
+	ctl, err := s.controlStore()
+	if err != nil || ctl == nil {
+		// Sin control (tests): intentar la BD de empresa.
+		ctl = s.dbFor(r)
+	}
+	if ctl == nil {
+		writeJSON(w, []interface{}{})
+		return
+	}
+	rows, err := ctl.Query(`SELECT id, type, level FROM sec_role ORDER BY id`)
+	if err != nil {
+		writeJSON(w, []interface{}{})
+		return
+	}
+	defer rows.Close()
+	list := []map[string]interface{}{}
+	for rows.Next() {
+		var id int
+		var typ, level string
+		_ = rows.Scan(&id, &typ, &level)
+		list = append(list, map[string]interface{}{
+			"id": id, "type": typ, "level": level,
+		})
+	}
+	writeJSON(w, list)
 }
 
 // reportTemplateEngineParams devuelve los filtros para una plantilla creada

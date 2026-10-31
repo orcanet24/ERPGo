@@ -79,6 +79,22 @@ CREATE TABLE IF NOT EXISTS `report_template` (
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Visibilidad por informe: un reporte puede restringirse a roles/usuarios.
+-- Regla: SIN filas en report_template_acl → visible para TODOS (compatibilidad
+-- con los reportes pre-existentes). CON filas → el usuario ve el reporte si
+-- alguna fila coincide con su role_id o user_id; si todos los valores son NULL
+-- la fila significa "todo el mundo" (equivalente a no tener filas).
+CREATE TABLE IF NOT EXISTS `report_template_acl` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `report_template_id` int NOT NULL,
+  `role_id` int NULL DEFAULT NULL,
+  `user_id` int NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_rt_acl_report` (`report_template_id`),
+  KEY `idx_rt_acl_role` (`role_id`),
+  KEY `idx_rt_acl_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 
 
 -- Menú (mismo patrón que schema_z_ai.sql; module 'ai' ya existe allí).
