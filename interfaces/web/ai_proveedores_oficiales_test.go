@@ -36,7 +36,8 @@ func nuevaBaseDeProveedores(t *testing.T) *sql.DB {
 		temperature REAL NOT NULL DEFAULT 0.7,
 		max_tokens INTEGER NOT NULL DEFAULT 400,
 		prompt_template TEXT NOT NULL DEFAULT '',
-		is_active INTEGER NOT NULL DEFAULT 0)`)
+		is_active INTEGER NOT NULL DEFAULT 0,
+		op_cache INTEGER NOT NULL DEFAULT 0)`)
 	if err != nil {
 		t.Fatalf("no se pudo crear tabla: %v", err)
 	}

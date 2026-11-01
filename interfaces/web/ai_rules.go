@@ -140,6 +140,14 @@ func aiNormalizeVendor(v string) string {
 	return v
 }
 
+// aiVendorEsPropia indica si el proveedor es la IA del sistema (ORC24). Los
+// proveedores propios aplican el cache de operaciones (ahorro de tokens) y
+// cuentan las inferencias a precio propio; los de terceros pagan el precio real
+// y no aplican ahorro de sistema.
+func aiVendorEsPropia(p aiProvider) bool {
+	return aiNormalizeVendor(p.Vendor) == "orc24"
+}
+
 // aiVendorURL ya no resuelve URLs: se mantiene solo para compatibilidad
 // con código legacy. La URL real SIEMPRE viene de la BD.
 func aiVendorURL(vendor string) string {

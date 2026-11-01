@@ -185,12 +185,35 @@ func (s *Server) buildAgentPrompt(sess *SessionData, agent aiAgent, roleName, re
 		if extra.Len() > 0 {
 			system = insertAgentPrompt(system, extra.String())
 		}
+		system = aiOpTemplateInject(s, sess, agent, system)
 		return system
 	}
 	if extra.Len() > 0 {
 		system += extra.String()
 	}
+	system = aiOpTemplateInject(s, sess, agent, system)
 	return system
+}
+
+// aiOpTemplateInject añade las plantillas de operación establecidas al prompt
+// (si el proveedor activo aplica cache). Solo ORC24 las usa; terceros pagan real.
+func aiOpTemplateInject(s *Server, sess *SessionData, agent aiAgent, system string) string {
+	if sess == nil {
+		return system
+	}
+	prov, ok := s.loadActiveProvider(sess)
+	if !ok || !prov.OpCache {
+		return system
+	}
+	rdb := s.dbForSession(sess)
+	if rdb == nil {
+		return system
+	}
+	tmpls := s.aiOpTemplateListForAgent(rdb, agent.ID)
+	if len(tmpls) == 0 {
+		return system
+	}
+	return system + aiOpTemplatePromptFragment(tmpls)
 }
 
 // insertAgentPrompt coloca el comportamiento del agente y del área ENTRE las

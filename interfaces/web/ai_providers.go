@@ -45,6 +45,7 @@ type aiProvider struct {
 	MaxTokens      int
 	PromptTemplate string
 	IsActive       bool
+	OpCache        bool // el proveedor aplica cache de operaciones del sistema (ORC24 sí, terceros no)
 }
 
 // ---------- Reading ----------
@@ -58,7 +59,7 @@ func (s *Server) loadAIProviders(sess *SessionData) []aiProvider {
 	db := s.dbForSession(sess)
 	rows, err := db.Query(`SELECT id, IFNULL(name,''), IFNULL(base_url,''), IFNULL(api_key,''),
 		IFNULL(model,''), IFNULL(temperature,0.7), IFNULL(max_tokens,400), IFNULL(prompt_template,''),
-		IFNULL(is_active,0), IFNULL(vendor,'')
+		IFNULL(is_active,0), IFNULL(vendor,''), IFNULL(op_cache,0)
 		FROM ai_providers ORDER BY is_active DESC, name ASC`)
 	if err != nil {
 		// Columna vendor aún no migrada: reintento sin ella.
@@ -77,7 +78,7 @@ func (s *Server) loadAIProviders(sess *SessionData) []aiProvider {
 				&p.Temperature, &p.MaxTokens, &p.PromptTemplate, &active); err != nil {
 				continue
 			}
-			// Sin columna vendor la fila es de la época en que solo existía OpenAI.
+			// Sin columnas vendor/op_cache: época en que solo existía OpenAI, sin cache.
 			p.Vendor = "openai"
 			p.VendorOrigen = "openai"
 			p.VendorLabel = aiVendorLabel[p.Vendor]
@@ -96,7 +97,7 @@ func (s *Server) loadAIProviders(sess *SessionData) []aiProvider {
 		var p aiProvider
 		var active int
 		if err := rows.Scan(&p.ID, &p.Name, &p.BaseURL, &p.APIKey, &p.Model,
-			&p.Temperature, &p.MaxTokens, &p.PromptTemplate, &active, &p.Vendor); err != nil {
+			&p.Temperature, &p.MaxTokens, &p.PromptTemplate, &active, &p.Vendor, &p.OpCache); err != nil {
 			continue
 		}
 		p.VendorOrigen = strings.TrimSpace(p.Vendor)
@@ -136,10 +137,10 @@ func (s *Server) loadActiveProviderRow(sess *SessionData) (aiProvider, bool) {
 	// Cargar base_url de la BD (no derivar del vendor).
 	err := db.QueryRow(`SELECT id, IFNULL(name,''), IFNULL(base_url,''), IFNULL(api_key,''),
 		IFNULL(model,''), IFNULL(temperature,0.7), IFNULL(max_tokens,400), IFNULL(prompt_template,''),
-		IFNULL(is_active,0), IFNULL(vendor,'')
+		IFNULL(is_active,0), IFNULL(vendor,''), IFNULL(op_cache,0)
 		FROM ai_providers WHERE is_active = 1 ORDER BY id LIMIT 1`).
 		Scan(&p.ID, &p.Name, &p.BaseURL, &p.APIKey, &p.Model,
-			&p.Temperature, &p.MaxTokens, &p.PromptTemplate, &active, &p.Vendor)
+			&p.Temperature, &p.MaxTokens, &p.PromptTemplate, &active, &p.Vendor, &p.OpCache)
 	if err != nil {
 		// Sin columna base_url o vendor (BD antigua): consulta legada.
 		var legacy aiProvider
@@ -605,6 +606,17 @@ func (s *Server) aiProviderActivate(w http.ResponseWriter, r *http.Request) {
 		aiJSONError(w, "No se pudo activar el proveedor: "+err.Error(), 500)
 		return
 	}
+	// Regla de negocio: ORC24 aplica cache de operaciones (ahorra, cuenta barato);
+	// terceros pagan el precio real y no aplican ahorro de sistema. Se fija al
+	// activar para que nunca quede un vendor de terceros cacheando sin querer.
+	var vendorRaw string
+	_ = s.dbFor(r).QueryRow(`SELECT IFNULL(vendor,'') FROM ai_providers WHERE id = ?`, id).Scan(&vendorRaw)
+	prov := aiProvider{Vendor: vendorRaw}
+	opCache := "0"
+	if aiVendorEsPropia(prov) {
+		opCache = "1"
+	}
+	_, _ = s.dbFor(r).Exec(`UPDATE ai_providers SET op_cache = ? WHERE id = ?`, opCache, id)
 	writeJSON(w, map[string]interface{}{"status": "success", "msg": "Proveedor activado"})
 }
 

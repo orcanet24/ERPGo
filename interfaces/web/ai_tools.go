@@ -888,7 +888,49 @@ func (s *Server) aiDispatchTool(sess *SessionData, agent aiAgent, p aiToolPayloa
 	if tool.Run == nil {
 		return string(mustJSON(aiToolError{"La herramienta '" + p.Name + "' está declarada pero aún no está disponible."})), nil
 	}
-	return tool.Run(s, sess, agent, p.Args, journal)
+	out, err := tool.Run(s, sess, agent, p.Args, journal)
+	if err == nil && s.activeCompanyID() > 0 {
+		// Si el proveedor aplica cache y la operación tiene categoría
+		// estructurada, guardamos la plantilla (el "cómo" que la IA decidió) para
+		// reutilizarla en la siguiente solicitud de la misma categoría.
+		aiOpTemplateCapture(s, sess, agent, p.Name, p.Args)
+	}
+	return out, err
+}
+
+// aiOpTemplateCapture extrae y guarda la plantilla de una operación resuesta.
+// Solo para proveedores con cache; operación con categoría; sin errores.
+func aiOpTemplateCapture(s *Server, sess *SessionData, agent aiAgent, opName string, args map[string]interface{}) {
+	if _, ok := aiOpCategoryFields[opName]; !ok {
+		return
+	}
+	prov, ok := s.loadActiveProvider(sess)
+	if !ok || !prov.OpCache {
+		return
+	}
+	key := aiOpCacheKey(opName, args)
+	if key == "" || key == opName {
+		return
+	}
+	pattern, varSchema := aiOpPatternFromArgs(opName, args)
+	if len(pattern) == 0 {
+		return
+	}
+	// Si ya existe, actualiza (la clave única garantiza que no duplica).
+	existing, found := s.aiOpTemplateGet(s.dbForSession(sess), agent.ID, opName, key)
+	needs := !found
+	_ = s.aiOpTemplatePut(s.dbForSession(sess), aiOpTemplate{
+		CompanyID:   s.activeCompanyID(),
+		AgentID:     agent.ID,
+		Operation:   opName,
+		TemplateKey: key,
+		Pattern:     pattern,
+		VarSchema:   varSchema,
+		NeedsHuman:  needs,
+	})
+	if found && existing.ID > 0 {
+		s.aiOpTemplateTouch(s.dbForSession(sess), existing.ID)
+	}
 }
 
 // ---------- db.query ----------
