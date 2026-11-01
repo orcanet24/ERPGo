@@ -485,7 +485,15 @@ func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string) (def
 	}
 	jsonText, ok := aiExtraerDefinicion(resp)
 	if !ok {
-		err = fmt.Errorf("la respuesta de la IA no contiene una definición JSON con «sql»")
+		// Se incluye un preview de la respuesta para diagnosticar sin abrir
+		// logs: el agente pudo haber respondido tool calls (content vacío),
+		// prosa sin JSON, o un JSON sin la clave «sql».
+		snippet := resp
+		if len(snippet) > 300 {
+			snippet = snippet[:300] + "..."
+		}
+		err = fmt.Errorf("la respuesta de la IA no contiene una definición JSON con «sql». Respuesta del agente: %q",
+			strings.TrimSpace(snippet))
 		return
 	}
 	// Log de debug: el servidor registra la definición extraída y el preview de
