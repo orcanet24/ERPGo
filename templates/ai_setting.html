@@ -293,14 +293,8 @@ $(function () {
         $('#vendorHint').text('URL base de la API (OpenAI-compatible). Se le agrega /chat/completions automáticamente.');
     }
 
-    // Cambiar de proveedor recarga sus modelos y visibilidad de URL.
-    $('#provider_vendor').on('change', function () {
-        cargarModelos(this.value, $('#provider_id').val(), null);
-        actualizarBaseUrlVisibility();
-    });
-
-    // Carga inicial del formulario vacío.
-    cargarModelos($('#provider_vendor').val(), 0, null);
+    // Carga inicial del formulario (los modelos no se precargan: se consultan
+    // con la URL y API key del proveedor mediante el botón «Consultar»).
     actualizarBaseUrlVisibility();
 
     $('#toggleApiKey').on('click', function (e) {
