@@ -457,31 +457,34 @@ func (s *Server) executeDefinitionPreview(sess *SessionData, jsonText string) (*
 // claves de módulo válidas. Si la clasificación falla, devuelve todos los
 // módulos para que la Fase 2 use el mapa completo (nunca se queda sin esquema).
 func (s *Server) aiReportModulesForRequest(sess *SessionData, instruction string, agent aiAgent) []string {
-	if _, ok := s.aiProviderForAgent(sess, agent); !ok {
+	prov, ok := s.aiProviderForAgent(sess, agent)
+	if !ok {
+		log.Printf("[AI report] sin proveedor activo, usando todos los módulos")
 		return allModuleKeys()
 	}
-	// Prompt de clasificación: SOLO nombres y descripciones, sin columnas ni tipos.
-	// LongCat-2.0 raza sobre ~1.5K tokens en vez de ~15K → la clasificación es
-	// rápida (3-5s) y barata.
+	// Clasificación liviana: llamada directa SIN herramientas y SIN mapa de BD.
+	// Solo el prompt con nombres de módulos (~1.5K tokens). Esto evita armar el
+	// system prompt completo del agente (que carga las 100 tablas = ~15K tokens).
 	moduleText := aiSchemaModulesPromptText()
 	prompt := "Eres un clasificador de informes para ERPGo.\n\nSOLICITUD DEL USUARIO:\n" + instruction + "\n\n" + moduleText
-	journal := &aiRunJournal{scope: "module-cls:" + now()}
-	steps := []aiStep{}
-	resp, runErr := s.aiRunLoop(sess, agent, aiTask{
-		AgentID:               agent.ID,
-		Name:                "Clasificación de módulos",
-		Instructions:        prompt,
-		RespuestaJSON:       false, // salida de texto simple (claves separadas por comas)
-		ModuleKeys:          nil,   // mapa completo para que conozca los nombres
-		HerramientasExcluidas: []string{"report.save_template", "report.run_preview", "db.query"}, // sin herramientas: solo clasifica
-	}, &steps, journal)
-	if runErr != nil || strings.TrimSpace(resp) == "" {
+	log.Printf("[AI report] Fase 1: clasificando módulos (prompt liviano, sin herramientas) para: %.80s...", instruction)
+
+	messages := []map[string]string{
+		{"role": "system", "content": "Clasificador de módulos de ERPGo. Responde SOLO con las claves separadas por comas."},
+		{"role": "user", "content": prompt},
+	}
+	// Llamada directa: sin herramientas (toolsJSON=""), sin progreso, sin reintentos de bucle.
+	resp, _, _, err := aiCallChatWithTools(prov, prov.Model, messages, "")
+	if err != nil || strings.TrimSpace(resp) == "" {
+		log.Printf("[AI report] Fase 1 falló (%v), usando todos los módulos", err)
 		return allModuleKeys()
 	}
 	keys := aiSchemaModulesFromText(resp)
 	if len(keys) == 0 {
+		log.Printf("[AI report] Fase 1 no devolvió módulos válidos (respuesta: %.120s), usando todos", strings.ReplaceAll(resp, "\n", " "))
 		return allModuleKeys()
 	}
+	log.Printf("[AI report] Fase 1 completada: módulos=%s", strings.Join(keys, ","))
 	return keys
 }
 
@@ -521,8 +524,11 @@ func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string, onPr
 	// La IA solo decide qué módulos de negocio son relevantes para el request.
 	// Esto scopa el mapa de ese la Fase 2: en vez de ~15K tokens (100 tablas),
 	// el prompt de generación lleva solo ~4K tokens (los módulos elegidos).
+	log.Printf("[AI report] === INICIO generación de informe ===")
+	log.Printf("[AI report] solicitud: %.120s", instruction)
 	if progress != nil { progress("Fase 1: clasificando módulos de negocio...") }
 	moduleKeys := s.aiReportModulesForRequest(sess, instruction, agent)
+	log.Printf("[AI report] Fase 2: generando con módulos=%s", strings.Join(moduleKeys, ","))
 	if progress != nil { progress(fmt.Sprintf("Fase 1: módulos detectados: %s", strings.Join(moduleKeys, ", "))) }
 
 	// FASE 2 — GENERACIÓN CON ESQUEMA DIRIGIDO a los módulos elegidos.
@@ -538,9 +544,11 @@ func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string, onPr
 	steps := []aiStep{}
 	resp, runErr := s.aiRunLoop(sess, agent, task, &steps, journal, progress)
 	if runErr != nil {
+		log.Printf("[AI report] Fase 2 FALLÓ: %v", runErr)
 		err = fmt.Errorf("la IA falló: %w", runErr)
 		return
 	}
+	log.Printf("[AI report] Fase 2 completada: %d pasos, respuesta=%d chars", len(steps), len(resp))
 	if progress != nil { progress("Respuesta de la IA recibida. Extrayendo definición...") }
 	jsonText, ok := aiExtraerDefinicion(resp)
 	if !ok {
@@ -551,6 +559,7 @@ func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string, onPr
 		if len(snippet) > 300 {
 			snippet = snippet[:300] + "..."
 		}
+		log.Printf("[AI report] no se extrajo JSON de la respuesta: %q", snippet)
 		err = fmt.Errorf("la respuesta de la IA no contiene una definición JSON con «sql». Respuesta del agente: %q",
 			strings.TrimSpace(snippet))
 		return
@@ -558,13 +567,21 @@ func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string, onPr
 	if progress != nil { progress("Definición extraída. Ejecutando vista previa...") }
 	def, preview, err = s.previewDefinitionFromJSON(sess, jsonText)
 	if err != nil {
-		log.Printf("AI report preview FALLÓ: %v", err)
+		log.Printf("[AI report] preview FALLÓ: %v (definición: %.200s)", err, jsonText)
 		return
 	}
 	if progress != nil { progress("Vista previa lista.") }
 	name = strings.TrimSpace(def.Title)
 	desc = strings.TrimSpace(def.Title) // el description se sugiere; el caller lo puede sobreescribir
+	log.Printf("[AI report] === INFORME GENERADO OK: %s (columnas=%d, filas=%d) ===", name, len(def.Columns), filasDePreview(preview))
 	return def, name, desc, preview, nil
+}
+
+func filasDePreview(p *reportResult) int {
+	if p == nil || p.Rows == nil {
+		return 0
+	}
+	return len(p.Rows)
 }
 
 // aiPreviewInstruction arma la instrucción para pedir al agente una definición.

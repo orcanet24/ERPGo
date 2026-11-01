@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -572,6 +573,10 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 	if model == "" {
 		model = aiModelPorDefecto(p.Vendor)
 	}
+	if task.Name != "" && (strings.Contains(task.Name, "informe") || strings.Contains(task.Name, "Diseño")) {
+		log.Printf("[AI report] system prompt: %d chars (~%d tokens), módulos=%v",
+			len(system), len(system)/4, task.ModuleKeys)
+	}
 
 	maxSteps := agent.MaxSteps
 	if maxSteps <= 0 || maxSteps > 40 {
@@ -586,7 +591,13 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 		if progress != nil {
 			progress(fmt.Sprintf("Paso %d/%d: consultando a la IA...", step, maxSteps))
 		}
+		pasoInicio := time.Now()
 		content, toolCalls, usage, err := aiCallChatWithTools(p, model, messages, aiToolsJSONExcluyendo(agent.OperatorEnabled == 1, gate, task.HerramientasExcluidas), progress)
+		pasoDuracion := time.Since(pasoInicio)
+		if task.Name != "" && (strings.Contains(task.Name, "informe") || strings.Contains(task.Name, "Diseño")) {
+			log.Printf("[AI report] paso %d: duró %.1fs, content=%d chars, tools=%d, err=%v",
+				step, pasoDuracion.Seconds(), len(content), len(toolCalls), err != nil)
+		}
 		// Se registra aunque este paso falle: los tokens gastados hasta el
 		// fallo también son consumo facturable.
 		s.recordAIUsage(s.dbForSession(sess), aiUsageEvent{
