@@ -567,6 +567,9 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 	}
 	// Una fila por llamada al modelo. Un agente da hasta maxSteps llamadas y cada
 	// una se cobra, así que el registro va justo después de cada respuesta.
+	ultimoContent := "" // acumula content no vacío: algunos modelos (ollama)
+	// responden tool calls con content="" en el mensaje final; preservar el
+	// content anterior permite recuperar el JSON que el modelo ya escribió.
 	for step := 1; step <= maxSteps; step++ {
 		content, toolCalls, usage, err := aiCallChatWithTools(p, model, messages, aiToolsJSONExcluyendo(agent.OperatorEnabled == 1, gate, task.HerramientasExcluidas))
 		// Se registra aunque este paso falle: los tokens gastados hasta el
@@ -583,10 +586,22 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 			OK:         err == nil,
 		})
 		if err != nil {
+			if strings.TrimSpace(ultimoContent) != "" {
+				return ultimoContent, nil
+			}
 			return "", err
 		}
+		if strings.TrimSpace(content) != "" {
+			ultimoContent = content
+		}
 		if len(toolCalls) == 0 {
-			// Informe final del modelo.
+			// Informe final del modelo. Si el content está vacío pero el
+			// modelo escribió content en pasos anteriores (tool calls con
+			// content=""), devolver ese content acumulado.
+			if strings.TrimSpace(content) == "" && strings.TrimSpace(ultimoContent) != "" {
+				*steps = append(*steps, aiStep{N: step, Type: "model", Output: aiTruncateSteps(ultimoContent) + " (recuperado de paso anterior)", At: aiRunnerStartedAt()})
+				return ultimoContent, nil
+			}
 			*steps = append(*steps, aiStep{N: step, Type: "model", Output: aiTruncateSteps(content), At: aiRunnerStartedAt()})
 			return content, nil
 		}
@@ -604,6 +619,9 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 			toolResults = append(toolResults, fmt.Sprintf("Resultado de %s:\n%s", payload.Name, out))
 		}
 		messages = append(messages, map[string]string{"role": "user", "content": strings.Join(toolResults, "\n\n") + "\n\nContinúa la tarea o entrega el informe final."})
+	}
+	if strings.TrimSpace(ultimoContent) != "" {
+		return ultimoContent, nil
 	}
 	return "", fmt.Errorf("se alcanzó el máximo de %d pasos sin informe final", maxSteps)
 }
