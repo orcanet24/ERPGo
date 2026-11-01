@@ -14,11 +14,19 @@ import (
 	"strings"
 )
 
-// aiAgenticMinTokens es el suelo de completion tokens del bucle agéntico:
-// un informe JSON estructurado más columnas y totales no cabe en los 400
-// tokens que trae por defecto la pantalla de Configuración IA (eso es el
-// valor pensado para el análisis simple).
-const aiAgenticMinTokens = 2000
+// Suelo y tope del presupuesto de respuesta del bucle agéntico.
+//
+// El modelo QUE PIENSE O QUE NO no depende de nosotros: en 2026 los modelos
+// que razonan son la norma y ese razonamiento llega por fuera del texto y
+// consume parte del PRESUPUESTO de respuesta (finish_reason length antes de
+// escribir el informe). El cliente no puede exigirles pensar menos: lo que
+// hace es darles holgura y, si se cortan, REPETIR la petición con un
+// presupuesto mayor hasta que el razonamiento quepa. Al pagar es igual: se
+// cobran los tokens consumidos de verdad, el tope no es una factura.
+const (
+	aiAgenticMinTokens = 2000
+	aiAgenticMaxTokens = 32768
+)
 
 // aiChatToolCall es una llamada a herramienta propuesta por el modelo.
 type aiChatToolCall struct {
@@ -47,9 +55,10 @@ type aiChatResponse struct {
 					Arguments string `json:"arguments"`
 				} `json:"function"`
 			} `json:"tool_calls"`
-			// Razonamiento que algunos modelos/motorizadores devuelven por
-			// fuera del content (p.ej. `reasoning_content`). Solo sirve para
-			// diagnosticar: el texto del informe SIEMPRE es `content`.
+			// Razonamiento que los modelos pensantes devuelven por fuera del
+			// content (`reasoning_content`). Con finish_reason "length" y
+			// content vacío significa que el presupuesto se lo comió el
+			// pensar: hay que repetir con más holgura, no rendirse.
 			Reasoning string `json:"reasoning_content"`
 			Refusal   string `json:"refusal"`
 		} `json:"message"`
@@ -69,6 +78,15 @@ type aiChatResponse struct {
 	Message string          `json:"message"`
 }
 
+// aiChatEstado dice qué pasó con la respuesta de un intento, para que el
+// bucle decida repetir o diagnosticar sin improvisar fuera.
+type aiChatEstado struct {
+	Cut       bool // se cortó por presupuesto (finish_reason=length) sin texto
+	Reasoning string
+	Refusal   string
+	Cuerpo    string // crudo de la respuesta, para el log de diagnóstico
+}
+
 // aiTruncateLog acota un cuerpo HTTP para el log de servidor: la pista de
 // diagnóstico sin convertir el log en volcado entero.
 func aiTruncateLog(s string) string {
@@ -81,13 +99,12 @@ func aiTruncateLog(s string) string {
 
 // aiCallChatWithTools envía la conversación + catálogo de herramientas y
 // devuelve el contenido y/o las llamadas a herramientas del modelo, junto con
-// los tokens reportados por el proveedor (para el metering).
+// los tokens reportados por el proveedor (para el metering), sumados de TODOS
+// los intentos porque el proveedor cobra cada llamada.
 //
-// El destino es EL MISMO que el del cliente simple (callChatCompletion):
-// aiRespanDestino, la pasarela cuando toca y el proveedor cuando no. Los dos
-// clientes iban a destinos distintos —este iba directo a la base URL y esa
-// divergencia significaba que el mismo proveedor funcionaba en un lado y no
-// en el otro—.
+// EL DESTINO: el mismo que el del cliente simple (callChatCompletion) —
+// aiRespanDestino, la pasarela cuando toca y el proveedor cuando no. Visto con
+// dos destinos que funcionaban de forma distinta con el mismo proveedor.
 func aiCallChatWithTools(p aiProvider, model string, messages []map[string]string, toolsJSON string) (string, []aiChatToolCall, aiTokenUsage, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
@@ -96,17 +113,64 @@ func aiCallChatWithTools(p aiProvider, model string, messages []map[string]strin
 	if model == "" {
 		model = aiModelPorDefecto(p.Vendor)
 	}
-	// Suelo de la corrida agéntica ANTES de tocar el valor del proveedor: el
-	// 400 que trae por defecto la pantalla de Configuración IA sirve para el
-	// análisis simple (/ai/analyze), no para un bucle con herramientas que
-	// debe entregar un informe JSON completo. Con 400, un modelo que razona
-	// antes de escribir se cortaba ANTES del texto y la corrida terminaba con
-	// content vacío («Respuesta del agente: ""»): el mismo proveedor, la
-	// culpa era de la gestión, no de él.
-	maxTokens := p.MaxTokens
-	if maxTokens < aiAgenticMinTokens {
-		maxTokens = aiAgenticMinTokens
+	// Presupuesto inicial: el que configure el proveedor siempre manda —si le
+	// puso más que el suelo, se usa el suyo—; el suelo (+2000) evita heredar
+	// el 400 pensado para el análisis simple (/ai/analyze). El bucle SOLO lo
+	// amplía si el modelo se corta pensando, nunca lo reduce.
+	presupuesto := p.MaxTokens
+	if presupuesto < aiAgenticMinTokens {
+		presupuesto = aiAgenticMinTokens
 	}
+
+	usoTotal := aiTokenUsage{Model: model}
+	for intento := 1; ; intento++ {
+		content, calls, usage, estado, err := aiPostChatWithTools(p, model, messages, toolsJSON, presupuesto)
+		usoTotal.Prompt += usage.Prompt
+		usoTotal.Completion += usage.Completion
+		if err != nil {
+			return "", nil, usoTotal, err
+		}
+		if len(calls) > 0 || strings.TrimSpace(content) != "" {
+			return content, calls, usoTotal, nil
+		}
+		// Sin texto y sin llamadas: el modelo no dijo nada. Si se cortó
+		// pensando y todavía hay margen, repetir con un presupuesto mayor —
+		// así trabaja igual un modelo que razona que uno que no—. Si no,
+		// contar la verdad con la pista del que la puede arreglar.
+		if estado.Cut && presupuesto < aiAgenticMaxTokens {
+			presupuesto = presupuesto * 4
+			if presupuesto > aiAgenticMaxTokens {
+				presupuesto = aiAgenticMaxTokens
+			}
+			log.Printf("aiCallChatWithTools: el modelo %s de %q se cortó pensando; repitiendo con %d tokens de respuesta",
+				model, p.Name, presupuesto)
+			continue
+		}
+		if estado.Refusal != "" {
+			return "", nil, usoTotal, fmt.Errorf(
+				"el proveedor %q rechazó la petición (modelo %s): %s",
+				p.Name, model, aiTrimError(estado.Refusal))
+		}
+		log.Printf("aiCallChatWithTools: proveedor %q devolvió cuerpo %s",
+			p.Name, aiTruncateLog(estado.Cuerpo))
+		if estado.Cut {
+			return "", nil, usoTotal, fmt.Errorf(
+				"el proveedor %q (modelo %s) se cortó por presupuesto (finish_reason length) incluso con %d tokens de respuesta. si el modelo piensa antes de responder, sube Max Tokens de este proveedor en Configuración IA",
+				p.Name, model, presupuesto)
+		}
+		detalle := "sin texto y sin llamadas a herramientas"
+		if estado.Reasoning != "" {
+			detalle += " (el modelo escribió razonamiento pero no texto final)"
+		}
+		return "", nil, usoTotal, fmt.Errorf(
+			"el proveedor %q (modelo %s) respondió OK pero %s",
+			p.Name, model, detalle)
+	}
+}
+
+// aiPostChatWithTools hace UNA petición al endpoint y traduce su respuesta.
+// El bucle de aiCallChatWithTools decide repetir; aquí no hay decisiones.
+func aiPostChatWithTools(p aiProvider, model string, messages []map[string]string, toolsJSON string, maxTokens int) (string, []aiChatToolCall, aiTokenUsage, aiChatEstado, error) {
 	reqBody := aiChatRequest{
 		Model:       model,
 		Messages:    messages,
@@ -118,12 +182,12 @@ func aiCallChatWithTools(p aiProvider, model string, messages []map[string]strin
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", nil, aiTokenUsage{}, fmt.Errorf("no se pudo preparar la petición: %v", err)
+		return "", nil, aiTokenUsage{}, aiChatEstado{}, fmt.Errorf("no se pudo preparar la petición: %v", err)
 	}
 	endpoint, apiKey, _ := aiRespanDestino(p)
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return "", nil, aiTokenUsage{}, fmt.Errorf("no se pudo preparar la petición: %v", err)
+		return "", nil, aiTokenUsage{}, aiChatEstado{}, fmt.Errorf("no se pudo preparar la petición: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
@@ -131,16 +195,16 @@ func aiCallChatWithTools(p aiProvider, model string, messages []map[string]strin
 	}
 	client, err := aiGuardedClient(endpoint, aiTimeout)
 	if err != nil {
-		return "", nil, aiTokenUsage{}, err
+		return "", nil, aiTokenUsage{}, aiChatEstado{}, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", nil, aiTokenUsage{}, fmt.Errorf("error de red al consultar %q: %v", p.Name, err)
+		return "", nil, aiTokenUsage{}, aiChatEstado{}, fmt.Errorf("error de red al consultar %q: %v", p.Name, err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, aiMaxBody))
 	if err != nil {
-		return "", nil, aiTokenUsage{}, fmt.Errorf("no se pudo leer la respuesta de %q: %v", p.Name, err)
+		return "", nil, aiTokenUsage{}, aiChatEstado{}, fmt.Errorf("no se pudo leer la respuesta de %q: %v", p.Name, err)
 	}
 	var parsed aiChatResponse
 	_ = json.Unmarshal(raw, &parsed)
@@ -152,40 +216,25 @@ func aiCallChatWithTools(p aiProvider, model string, messages []map[string]strin
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", nil, usage, fmt.Errorf("el proveedor %q devolvió un error (HTTP %d): %s",
+		return "", nil, usage, aiChatEstado{}, fmt.Errorf("el proveedor %q devolvió un error (HTTP %d): %s",
 			p.Name, resp.StatusCode, aiErrorText(raw, openAIResponse{Error: parsed.Error, Message: parsed.Message}))
 	}
 	if len(parsed.Choices) == 0 {
-		return "", nil, usage, fmt.Errorf("el proveedor %q devolvió una respuesta vacía", p.Name)
+		return "", nil, usage, aiChatEstado{}, fmt.Errorf("el proveedor %q devolvió una respuesta vacía", p.Name)
 	}
 	msg := parsed.Choices[0].Message
 	calls := make([]aiChatToolCall, 0, len(msg.ToolCalls))
 	for _, tc := range msg.ToolCalls {
 		calls = append(calls, aiChatToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments})
 	}
-	// Un content vacío y sin tool calls NO es un informe final: es el modelo
-	// que no dijo nada (se cortó en el razonamiento, la pasarela devolvió
-	// content null, etc.). Devolverlo "con éxito" producía el engaño de
-	// «Respuesta del agente: ""» a quien usa la IA, sin decirle ni proveedor
-	// ni porqué. Aquí se cuenta la verdad del lado del que la puede usar.
-	if strings.TrimSpace(msg.Content) == "" && len(calls) == 0 {
-		detalle := "sin texto y sin llamadas a herramientas"
-		if f := strings.TrimSpace(parsed.Choices[0].FinishReason); f != "" && f != "stop" {
-			detalle += ", finish_reason " + f
-		}
-		if strings.TrimSpace(msg.Reasoning) != "" {
-			detalle += " (el modelo escribió razonamiento fuera del texto final)"
-		}
-		if f := strings.TrimSpace(msg.Refusal); f != "" {
-			detalle += "; el proveedor dijo rechazar la petición: " + aiTrimError(f)
-		}
-		// El cuerpo crudo al log de servidor: ahí queda la pista exacta de qué
-		// forma habló este proveedor sin mostrarlo al usuario de la pantalla.
-		log.Printf("aiCallChatWithTools: proveedor %q devolvió cuerpo %s",
-			p.Name, aiTruncateLog(string(raw)))
-		return "", nil, usage, fmt.Errorf(
-			"el proveedor %q respondió con la llamada OK pero %s (modelo %s)",
-			p.Name, detalle, model)
+	estado := aiChatEstado{
+		Cut:       strings.EqualFold(parsed.Choices[0].FinishReason, "length") && strings.TrimSpace(msg.Content) == "" && len(calls) == 0,
+		Reasoning: msg.Reasoning,
+		Refusal:   msg.Refusal,
+		Cuerpo:    string(raw),
 	}
-	return msg.Content, calls, usage, nil
+	// Un content vacío y sin tool calls no es un informe: el caller decide
+	// repetir o propagar el diagnóstico; el cuerpo crudo viaja en el estado
+	// para el log sin esconder la forma en que habló este proveedor.
+	return msg.Content, calls, usage, estado, nil
 }
