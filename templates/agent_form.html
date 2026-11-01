@@ -21,10 +21,6 @@
                 {{end}}
             </div>
             <div class="form-group">
-                <label>Modelo (opcional)</label>
-                <input type="text" class="form-control" name="model_override" value="{{if .Agent}}{{.Agent.ModelOverride}}{{end}}" placeholder="usa el modelo del proveedor">
-            </div>
-            <div class="form-group">
                 <label>Rol asignado *</label>
                 <select class="form-control" name="role_id" id="ag_role" required>
                     <option value="">— seleccione —</option>

@@ -38,6 +38,14 @@ CREATE TABLE IF NOT EXISTS `ai_agent` (
   KEY `idx_agent_department` (`department`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- El modelo de un agente NO se elige a mano: lo decide el proveedor activo de
+-- Configuración IA (un proveedor, un modelo). Un override escrito por agente
+-- obligaba a reeditarlos todos con solo cambiar de proveedor. Los formularios
+-- ya no lo ofrecen y este UPDATE limpia el legacy; es idempotente porque desde
+-- esta modificación nada vuelve a escribir overrides.
+UPDATE `ai_agent` SET `model_override` = '' WHERE `model_override` <> '';
+
+
 CREATE TABLE IF NOT EXISTS `ai_task` (
   `id` int NOT NULL AUTO_INCREMENT,
   `agent_id` int NOT NULL,

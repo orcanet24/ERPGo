@@ -553,10 +553,11 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 		{"role": "system", "content": system},
 		{"role": "user", "content": userMsg},
 	}
-	model := strings.TrimSpace(agent.ModelOverride)
-	if model == "" {
-		model = strings.TrimSpace(p.Model)
-	}
+	// El modelo SIEMPRE lo decide el proveedor activo: un agente no lleva
+	// modelo propio. Un override a mano en la fila convertiría el cambio de
+	// proveedor en reeditar los agentes uno a uno. El default del vendor solo
+	// cubre proveedores sin modelo configurado.
+	model := strings.TrimSpace(p.Model)
 	if model == "" {
 		model = aiModelPorDefecto(p.Vendor)
 	}

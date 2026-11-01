@@ -202,8 +202,12 @@ func (s *Server) agentListData(w http.ResponseWriter, r *http.Request) {
 	// el activo de Configuración IA. La fila vieja de cada agente apunta a lo
 	// que sea que hubiera guardado antes y la columna mentiría.
 	vendorLabel := "—"
-	if p, ok := s.loadActiveProviderRow(s.sessionFromRequest(r)); ok && p.VendorLabel != "" {
-		vendorLabel = p.VendorLabel
+	modeloActivo := ""
+	if p, ok := s.loadActiveProviderRow(s.sessionFromRequest(r)); ok {
+		if p.VendorLabel != "" {
+			vendorLabel = p.VendorLabel
+		}
+		modeloActivo = strings.TrimSpace(p.Model)
 	}
 	for _, g := range list {
 		// El username del agente es identidad del sistema: vive en user_login
@@ -212,7 +216,7 @@ func (s *Server) agentListData(w http.ResponseWriter, r *http.Request) {
 		_ = s.authDB(r).QueryRow(`SELECT username FROM user_login WHERE user_id = ?`, g.UserID).Scan(&username)
 		out = append(out, map[string]interface{}{
 			"id": g.ID, "name": g.Name, "username": username.String, "role": g.RoleName,
-			"vendor": vendorLabel, "model": g.ModelOverride,
+			"vendor": vendorLabel, "model": modeloActivo,
 			"operator": g.OperatorEnabled == 1, "enabled": g.Enabled == 1,
 			"max_steps": g.MaxSteps, "max_rows": g.MaxRows,
 		})
@@ -336,7 +340,13 @@ func (s *Server) agentSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "Rol no encontrado", 404)
 		return
 	}
-	modelOverride := strings.TrimSpace(r.FormValue("model_override"))
+	// El modelo NO lo elige el agente: es una decisión del proveedor activo de
+	// Configuración IA (un proveedor, un modelo). Guardar un valor a mano en
+	// cada agente convertiría en trabajo manual el simple hecho de cambiar de
+	// proveedor —habría que reeditar todos los agentes uno a uno—. Por eso el
+	// formulario ya no ofrece el campo y aquí se vacía siempre, limpiando de
+	// paso cualquier override legacy que la fila conserve.
+	modelOverride := ""
 	operator := boolInt(r.FormValue("operator_enabled") == "1")
 	enabled := boolInt(r.FormValue("enabled") != "0")
 	maxSteps, stepsOK := aiAtoiSafe(r.FormValue("max_steps"))
