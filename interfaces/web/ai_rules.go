@@ -129,12 +129,15 @@ func aiValidVendor(v string) bool {
 	return ok
 }
 
-// aiNormalizeVendor devuelve un vendor válido o el default.
+// aiNormalizeVendor limpia el valor del vendor. Ya NO reinterpreta: con URL
+// base en BD, el vendor es solo una etiqueta informativa y se guarda tal cual
+// (solo cae al default si viene vacía, por instalaciones heredadas).
 func aiNormalizeVendor(v string) string {
-	if aiValidVendor(v) {
-		return strings.ToLower(strings.TrimSpace(v))
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return aiDefaultVendor
 	}
-	return aiDefaultVendor
+	return v
 }
 
 // aiVendorURL ya no resuelve URLs: se mantiene solo para compatibilidad

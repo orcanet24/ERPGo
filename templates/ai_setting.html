@@ -141,15 +141,15 @@
                     <option value="anthropic">Anthropic</option>
                     <option value="personalizado">Personalizado (API OpenAI-compatible)</option>
                 </select>
-                <small class="erp-caption" id="vendorHint">El endpoint lo resuelve el binario desde una whitelist compilada: no se puede apuntar a otra API ni verse en pantalla.</small>
+                <small class="erp-caption" id="vendorHint">Marca o etiqueta informativa: la URL base decide a qué API se le habla.</small>
             </div>
 
-            <!-- URL base: solo visible para vendor "personalizado" -->
-            <div class="input_label" id="baseUrlRow" style="display:none">
+            <!-- URL base: SIEMPRE visible y SIEMPRE se guarda en la BD. -->
+            <div class="input_label" id="baseUrlRow">
                 <label class="label_name" for="base_url">URL base *</label>
                 <input type="url" name="base_url" id="base_url"
                     placeholder="https://api.ejemplo.com/v1" class="input_section"
-                    style="width:100%" autocomplete="off">
+                    style="width:100%" autocomplete="off" required>
                 <small class="erp-caption">URL base de la API (OpenAI-compatible). Se le agrega /chat/completions automáticamente.</small>
             </div>
 
