@@ -488,7 +488,7 @@ $(function () {
             } else {
                 alert(data.error || 'La IA no pudo generar el informe');
             }
-        }).fail(function () {
+        }).catch(function () {
             btn.prop('disabled', false).html('<i class="fa fa-play"></i> Generar y Previsualizar');
             setReady();
             alert('Error de conexión con el servidor.');
@@ -525,7 +525,7 @@ $(function () {
             } else {
                 alert(data.error || 'La IA no pudo ajustar el informe');
             }
-        }).fail(function () {
+        }).catch(function () {
             btn.prop('disabled', false).html('<i class="fa fa-bolt"></i> Aplicar y previsualizar');
             setReady();
             alert('Error de conexión.');
@@ -546,7 +546,7 @@ $(function () {
             .then(function (list) {
                 rolesCache = list || [];
                 poblarSelect();
-            }).fail(function () { /* sin roles */ });
+            }).catch(function () { /* sin roles */ });
     }
     function poblarSelect() {
         var sel = $('#ai_save_roles');
@@ -589,7 +589,7 @@ $(function () {
             } else {
                 alert(data.error || 'No se pudo guardar el informe');
             }
-        }).fail(function () {
+        }).catch(function () {
             btn.prop('disabled', false).html('<i class="fa fa-check-circle"></i> Confirmar y abrir editor');
             alert('Error de conexión.');
         });
