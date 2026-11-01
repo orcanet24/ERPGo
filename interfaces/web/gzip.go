@@ -11,28 +11,64 @@ const gzipMinSize = 256 // No comprimir respuestas menores a 256 bytes
 
 // gzipResponseWriter captura la respuesta y decide si comprimir al final.
 // Bufferiza el body; en el flush decide si gzip conviene por tamaño y content-type.
+//
+// EXCEPCIÓN — streaming (text/event-stream): una respuesta SSE se escribe
+// evento por evento y el browser la consume en vivo; bufferizar la mata dos
+// veces. Primera: los eventos quedan retenidos hasta el fin del handler.
+// Segunda (la que hizo que el asistente de IA nunca diera respuesta): el
+// primer Flush ya escribía lo bufferizado y marcaba wroteGzip, y WriteToOriginal
+// nunca volvió a soltar lo que llegó DESPUÉS del primer flush —incluido el
+// evento «listo» final, que el modal necesita para pintar el informe—. Por eso
+// los handlers SSE pasan por este wrapper EN MODO DIRECTO: cada Write va
+// sin buffer y sin compresión al ResponseWriter real.
 type gzipResponseWriter struct {
 	http.ResponseWriter
-	buf       *bytes.Buffer
-	gw        *gzip.Writer
-	wroteGzip bool
-	status    int
+	buf         *bytes.Buffer
+	gw          *gzip.Writer
+	wroteGzip   bool
+	status      int
+	passthrough bool // streaming: cada Write va directo al original
 }
 
 func (g *gzipResponseWriter) WriteHeader(code int) {
+	g.chequearPassthrough()
 	g.status = code
-	// NO pasamos el header al original aún; esperamos al flush
+	if !g.passthrough {
+		// NO pasamos el header al original aún; esperamos al flush
+		return
+	}
+	// Streaming: el header sale de inmediato, que es lo que el handler pidió.
+	g.ResponseWriter.WriteHeader(code)
 }
 
 func (g *gzipResponseWriter) Write(p []byte) (int, error) {
+	g.chequearPassthrough()
+	if g.passthrough {
+		return g.ResponseWriter.Write(p)
+	}
 	if g.buf == nil {
 		g.buf = new(bytes.Buffer)
 	}
 	return g.buf.Write(p)
 }
 
+// chequearPassthrough activa el modo directo cuando el handler declaró una
+// respuesta de streaming: Content-Type text/event-stream (los handlers SSE lo
+// fija antes de escribir el cuerpo). Se invoca tanto en WriteHeader como en
+// Write porque un handler puede omitir WriteHeader (vía implícita a 200).
+func (g *gzipResponseWriter) chequearPassthrough() {
+	if g.passthrough {
+		return
+	}
+	if !strings.HasPrefix(g.Header().Get("Content-Type"), "text/event-stream") {
+		return
+	}
+	g.passthrough = true
+	g.wroteGzip = true // el cierre diferido (defer WriteToOriginal) ya no debe tocar esta respuesta: se escribió sin buffer
+}
+
 func (g *gzipResponseWriter) WriteToOriginal(compress bool) {
-	if g.wroteGzip {
+	if g.wroteGzip || g.passthrough {
 		return
 	}
 	g.wroteGzip = true
@@ -76,6 +112,13 @@ func (g *gzipResponseWriter) WriteToOriginal(compress bool) {
 }
 
 func (g *gzipResponseWriter) Flush() {
+	if g.passthrough {
+		// Streaming: el flush va directo; nada que decidir.
+		if f, ok := g.ResponseWriter.(http.Flusher); ok {
+			f.Flush()
+		}
+		return
+	}
 	g.WriteToOriginal(true)
 	if f, ok := g.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
@@ -91,6 +134,14 @@ func (g *gzipResponseWriter) Hijack() (interface{}, error) {
 		return hj.Hijack()
 	}
 	return nil, errNoHijack
+}
+
+// Unwrap expone el ResponseWriter original. http.ResponseController lo usa
+// para alcanzar los plazos de la conexión REAL (SetWriteDeadline): los
+// handlers SSE renuevan el plazo del WriteTimeout global del servidor en cada
+// evento, y sin este método el wrapper de gzip se lo taparía.
+func (g *gzipResponseWriter) Unwrap() http.ResponseWriter {
+	return g.ResponseWriter
 }
 
 var errNoHijack = http.ErrHijacked

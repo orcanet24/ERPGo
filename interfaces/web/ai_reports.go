@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // reportTemplate espeja una fila de report_template.
@@ -724,9 +725,24 @@ func (s *Server) reportTemplateAIPreview(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// aiSSEWriteGrace es el margen de escritura que cada evento SSE concede a la
+// conexión desde el instante de su flush. La brecha más larga entre dos eventos
+// es una llamada al proveedor —acotada por aiTimeout— más una consulta a la
+// base; dos veces aiTimeout la cubre con holgura y además evita que quede
+// abierta para siempre una conexión muerta.
+const aiSSEWriteGrace = 2 * aiTimeout
+
 // aiSSE escribe un evento Server-Sent-Event y hace flush.
+//
+// Antes del flush RENUEVA el plazo de escritura de la conexión: el WriteTimeout
+// global del servidor (120 s) se aplica al total de la respuesta, y el agente
+// puede tardar mucho más en diseñar un informe (Fase 1 + hasta maxSteps llamadas
+// al proveedor de 60 s cada una). Sin esta renovación, net/http cortaba la
+// conexión a los 120 s con el stream vivo y el modal nunca recibía el evento
+// «listo»: la IA gastaba sus tokens y el usuario nunca veía la respuesta.
 func aiSSE(w http.ResponseWriter, event, data string) {
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(aiSSEWriteGrace))
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
