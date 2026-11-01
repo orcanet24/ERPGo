@@ -451,6 +451,48 @@ func (s *Server) executeDefinitionPreview(sess *SessionData, jsonText string) (*
 	return s.executeReportDefinition(sess, jsonText, aiFirstOfMonth(), today())
 }
 
+// aiReportModulesForRequest ejecuta la Fase 1 del MCP inteligente: con un
+// prompt liviano (~1.5K tokens, solo nombres y descripciones de módulos), pide a
+// la IA clasificar qué módulos de negocio necesita el request. Devuelve las
+// claves de módulo válidas. Si la clasificación falla, devuelve todos los
+// módulos para que la Fase 2 use el mapa completo (nunca se queda sin esquema).
+func (s *Server) aiReportModulesForRequest(sess *SessionData, instruction string, agent aiAgent) []string {
+	if _, ok := s.aiProviderForAgent(sess, agent); !ok {
+		return allModuleKeys()
+	}
+	// Prompt de clasificación: SOLO nombres y descripciones, sin columnas ni tipos.
+	// LongCat-2.0 raza sobre ~1.5K tokens en vez de ~15K → la clasificación es
+	// rápida (3-5s) y barata.
+	moduleText := aiSchemaModulesPromptText()
+	prompt := "Eres un clasificador de informes para ERPGo.\n\nSOLICITUD DEL USUARIO:\n" + instruction + "\n\n" + moduleText
+	journal := &aiRunJournal{scope: "module-cls:" + now()}
+	steps := []aiStep{}
+	resp, runErr := s.aiRunLoop(sess, agent, aiTask{
+		AgentID:               agent.ID,
+		Name:                "Clasificación de módulos",
+		Instructions:        prompt,
+		RespuestaJSON:       false, // salida de texto simple (claves separadas por comas)
+		ModuleKeys:          nil,   // mapa completo para que conozca los nombres
+		HerramientasExcluidas: []string{"report.save_template", "report.run_preview", "db.query"}, // sin herramientas: solo clasifica
+	}, &steps, journal)
+	if runErr != nil || strings.TrimSpace(resp) == "" {
+		return allModuleKeys()
+	}
+	keys := aiSchemaModulesFromText(resp)
+	if len(keys) == 0 {
+		return allModuleKeys()
+	}
+	return keys
+}
+
+func allModuleKeys() []string {
+	keys := make([]string, 0, len(aiSchemaModules))
+	for _, m := range aiSchemaModules {
+		keys = append(keys, m.Key)
+	}
+	return keys
+}
+
 // iaPreviewDefinition es el núcleo compartido de ai-preview y ai-refine:
 // pide al agente una definición JSON (excluyendo report.save_template), la
 // valida con el guardián, la ejecuta como preview y devuelve todo junto.
@@ -474,15 +516,22 @@ func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string, onPr
 		err = fmt.Errorf("no hay agentes IA activos. crea uno en Agentes IA")
 		return
 	}
-	// El agente usa el MCP (herramienta con el mapa de tablas) PARA ENTENDER la
-	// solicitud: no memoriza esquemas; consulta el introspector con aiSchemaMap.
-	// La instrucción cierra el contrato: JSON puro, sin markdown ni prosa, para
-	// que aiExtraerDefinicion no tenga que adivinar.
+
+	// FASE 1 — CLASIFICACIÓN DE MÓDULOS (prompt liviano, ~1.5K tokens).
+	// La IA solo decide qué módulos de negocio son relevantes para el request.
+	// Esto scopa el mapa de ese la Fase 2: en vez de ~15K tokens (100 tablas),
+	// el prompt de generación lleva solo ~4K tokens (los módulos elegidos).
+	if progress != nil { progress("Fase 1: clasificando módulos de negocio...") }
+	moduleKeys := s.aiReportModulesForRequest(sess, instruction, agent)
+	if progress != nil { progress(fmt.Sprintf("Fase 1: módulos detectados: %s", strings.Join(moduleKeys, ", "))) }
+
+	// FASE 2 — GENERACIÓN CON ESQUEMA DIRIGIDO a los módulos elegidos.
 	task := aiTask{
 		AgentID:               agent.ID,
 		Name:                "Diseño de informe (preview)",
 		Instructions:        instruction,
 		RespuestaJSON:       true,
+		ModuleKeys:          moduleKeys,
 		HerramientasExcluidas: []string{"report.save_template"}, // el save lo hace el servidor
 	}
 	journal := &aiRunJournal{scope: "adhoc:" + now()}

@@ -36,6 +36,10 @@ type aiTask struct {
 	// en false: su salida es para leer un humano, no para parsearla.
 	RespuestaJSON bool
 
+	// ModuleKeys, si está puesto, scopa el mapa de esquema a esos módulos en vez
+	// de volcar todas las tablas del departamento (Fase 2 del MCP inteligente).
+	ModuleKeys []string
+
 	// HerramientasExcluidas quita herramientas del catálogo que esa corrida no
 	// debe usar. Se usa donde el SERVIDOR, no el agente, hace el guardado al
 	// final (p.ej. crear el informe con la IA): si el agente pudiera usar
@@ -543,7 +547,7 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 	// y para una salida JSON la regla hay que cambiarla para que no contradiga el
 	// contrato de la tarea (la regla y la instrucción dicen lo mismo).
 	reglas := aiReglasDelSistema(task.RespuestaJSON)
-	system := s.buildAgentPrompt(sess, agent, roleName, reglas)
+	system := s.buildAgentPrompt(sess, agent, roleName, reglas, task.ModuleKeys)
 	// El sufijo final del prompt cambia con la misma bandera: para salida JSON el
 	// «informe final» que pide la regla es el objeto JSON, no prosa. Antes se
 	// añadía siempre "responde en Markdown" y contradecía el contrato de la
