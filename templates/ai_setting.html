@@ -54,7 +54,7 @@
     <!-- Providers -->
     <div class="ai_providers_panel">
         <div class="panel_head">
-            <p class="section_titles">Proveedores oficiales (son solo 3)</p>
+            <p class="section_titles">Proveedores de IA</p>
             <button type="button" id="btnNewProvider" class="btn_new_provider">+ Nuevo proveedor</button>
         </div>
 
@@ -79,7 +79,6 @@
                     data-temperature="{{.Temperature}}"
                     data-max-tokens="{{.MaxTokens}}"
                     data-base-url="{{.BaseURL}}"
-                    data-editable-url="{{.EditableURL}}"
                     data-prompt="{{.PromptTemplate}}">
                     <td>
                         {{if .ID}}<strong>{{.Name}}</strong>{{else}}<em class="text-muted">Sin configurar</em>{{end}}
@@ -114,11 +113,10 @@
         </table>
 
         <p class="provider_hint">
-            Son exactamente <strong>tres</strong>: <strong>ORC24</strong> (inferencia propia de Orcanet),
-            <strong>OpenAI</strong> y <strong>Anthropic</strong>, y <strong>solo uno puede estar activo a la vez</strong>
-            &mdash; es el que usan todas las pantallas, los agentes y las tareas. El endpoint de cada uno está compilado
-            en el binario y <strong>no es configurable</strong> (una URL guardada en la base de datos se ignora). Cada
-            marca se registra UNA sola vez y con su propia API key.
+            Cada proveedor tiene su <strong>URL base</strong>, <strong>API Key</strong> y <strong>modelo</strong>.
+            <strong>Solo uno puede estar activo a la vez</strong> &mdash; es el que usan todas las pantallas, los agentes
+            y las tareas. La URL se guarda en la base de datos y puede apuntar a cualquier API compatible con OpenAI
+            (ORC24, OpenAI, LM Studio, Ollama, etc.).
         </p>
     </div>
 
@@ -167,8 +165,13 @@
 
             <div class="input_label">
                 <label class="label_name" for="model">Modelo</label>
-                <select name="model" id="model" class="input_section" style="width:100%"></select>
-                <small class="erp-caption" id="modelNota">Cargando modelos…</small>
+                <div style="display:flex;gap:6px">
+                    <input type="text" name="model" id="model"
+                        placeholder="gpt-4o-mini, llama3.2, orc24..." class="input_section"
+                        style="flex:1" autocomplete="off">
+                    <button type="button" class="btn btn-sm btn-default" id="btnConsultarModelos">Consultar</button>
+                </div>
+                <small class="erp-caption" id="modelNota">Escriba el modelo o pulse "Consultar" para buscar en el proveedor.</small>
             </div>
 
             <div class="input_label">
@@ -214,52 +217,80 @@ $(function () {
         $('#max_tokens').val('400');
         $('#api_key').attr('type', 'password');
         $('#providerFormTitle').text('Nuevo proveedor');
-        // El vendor se fija ANTES de pedir los modelos: la oferta de ORC24 es
-        // de otro tamaño que la de OpenAI y un cambio a medias deja el select
-        // con la lista equivocada.
-        if (vendor) { $('#provider_vendor').val(vendor); }
-        cargarModelos($('#provider_vendor').val(), 0, modelo || null);
+        $('#base_url').val('');
+        $('#api_key').val('');
+        $('#model').val('');
+        $('#modelSugerencias').remove();
         actualizarBaseUrlVisibility();
     }
 
-    // Los modelos los manda EL SERVIDOR: catálogo curado de cada proveedor y,
-    // para OpenAI y Anthropic, cruzado con su lista de modelos (GET /models).
-    // ORC24 responde de su catálogo sin salir a la red. La URL del proveedor
-    // nunca viaja aquí: la pantalla ofrece modelos, no endpoints.
-    function cargarModelos(vendor, providerId, seleccion) {
-        var $sel = $('#model').prop('disabled', true);
-        $('#modelNota').text('Cargando modelos…');
-        $.post('/ai/models', { vendor: vendor || 'orc24', provider_id: providerId || 0 }, function (r) {
-            if (!r || r.status !== 'success') {
-                $('#modelNota').text('No se pudo cargar la lista de modelos.');
-                return;
-            }
-            $sel.empty();
-            (r.models || []).forEach(function (m) {
-                $sel.append($('<option>').val(m).text(m));
+    // Consultar modelos directamente de la API del proveedor (GET {base_url}/models).
+    // El usuario escribe el modelo, pero puede pulsar "Consultar" para traer la lista.
+    var modelosCache = [];
+    function consultarModelosAPI() {
+        var baseURL = $('#base_url').val().trim();
+        var apiKey = $('#api_key').val().trim();
+        if (!baseURL) {
+            $('#modelNota').text('Escriba la URL base y la API Key antes de consultar.');
+            return;
+        }
+        if (baseURL.endsWith('/')) baseURL = baseURL.slice(0, -1);
+        $('#modelNota').text('Consultando modelos en ' + baseURL + '/models …');
+        $('#btnConsultarModelos').prop('disabled', true);
+        $.ajax({
+            url: baseURL + '/models',
+            method: 'GET',
+            headers: apiKey ? { 'Authorization': 'Bearer ' + apiKey } : {},
+        }).done(function (data) {
+            var ids = [];
+            var arr = (data && data.data) ? data.data : (Array.isArray(data) ? data : []);
+            arr.forEach(function (m) {
+                var id = typeof m === 'string' ? m : (m.id || m.name || '');
+                if (id) ids.push(id);
             });
-            if (seleccion && (r.models || []).indexOf(seleccion) >= 0) {
-                $sel.val(seleccion);
+            if (ids.length === 0) {
+                $('#modelNota').text('La consulta no devolvió modelos. Escriba el modelo manualmente.');
+            } else {
+                modelosCache = ids;
+                // Mostrar en un dropdown temporal
+                mostrarSugerencias(ids);
+                $('#modelNota').text(ids.length + ' modelos encontrados. Seleccione uno o escriba otro.');
             }
-            $('#modelNota').text(r.nota ||
-                (r.source === 'remoto'
-                    ? 'Lista consultada al proveedor y filtrada por el catálogo aprobado.'
-                    : 'Catálogo aprobado de ' + (r.vendor_label || vendor) + '.'));
-        }).fail(function () {
-            $('#modelNota').text('No se pudo cargar la lista de modelos.');
+        }).fail(function (xhr) {
+            $('#modelNota').text('No se pudo consultar: ' + (xhr.status || 'error') + '. Verifique URL y API Key. Escriba el modelo manualmente.');
         }).always(function () {
-            $sel.prop('disabled', false);
+            $('#btnConsultarModelos').prop('disabled', false);
         });
     }
 
-    // Mostrar/ocultar campo base_url según vendor.
+    // Muestra las sugerencias de modelos como un dropdown bajo el input.
+    function mostrarSugerencias(modelos) {
+        var $list = $('#modelSugerencias');
+        if ($list.length === 0) {
+            $list = $('<ul id="modelSugerencias" class="dropdown-menu" style="display:block;position:static;width:100%;margin-top:4px;max-height:200px;overflow:auto"></ul>');
+            $('#model').after($list);
+        }
+        $list.empty();
+        modelos.forEach(function (m) {
+            $('<li><a href="#">' + m + '</a></li>').on('click', function (e) {
+                e.preventDefault();
+                $('#model').val(m);
+                $list.remove();
+            }).appendTo($list);
+        });
+    }
+
+    $('#btnConsultarModelos').on('click', consultarModelosAPI);
+    // Ocultar sugerencias al hacer click fuera.
+    $(document).on('click', function (e) {
+        if (!$(e.target).closest('#model, #modelSugerencias').length) {
+            $('#modelSugerencias').remove();
+        }
+    });
+
+    // El campo base_url siempre es visible: la URL de cada proveedor se guarda en la BD.
     function actualizarBaseUrlVisibility() {
-        var vendor = $('#provider_vendor').val();
-        var editable = (vendor === 'personalizado');
-        $('#baseUrlRow').toggle(editable);
-        $('#vendorHint').text(editable
-            ? 'Proveedor personalizado: escriba la URL base de una API compatible con OpenAI.'
-            : 'El endpoint lo resuelve el binario desde una whitelist compilada: no se puede apuntar a otra API ni verse en pantalla.');
+        $('#vendorHint').text('URL base de la API (OpenAI-compatible). Se le agrega /chat/completions automáticamente.');
     }
 
     // Cambiar de proveedor recarga sus modelos y visibilidad de URL.
@@ -279,17 +310,10 @@ $(function () {
     });
 
     $('#btnNewProvider').on('click', function () {
-        // «Nuevo» significa el primer proveedor de los tres que falte por
-        // configurar; si los tres ya están, no hay un cuarto que crear.
-        var $pendiente = $('.ai_providers_table tbody tr').filter(function () {
-            var id = $(this).attr('data-id');
-            return !id || id === '0';
-        }).first();
-        if (!$pendiente.length) {
-            toastr.info('Los tres proveedores oficiales ya están configurados.');
-            return;
-        }
-        $pendiente.find('.btn_edit').trigger('click');
+        // Abrir formulario para crear un nuevo proveedor.
+        resetProviderForm('personalizado', null);
+        $('#provider_name').focus();
+        $('html, body').animate({ scrollTop: $('#providerForm').offset().top }, 300);
     });
 
     $('#providerCancel').on('click', function () {
@@ -331,23 +355,21 @@ $(function () {
         var $row = $(this).closest('tr');
         var id = $row.attr('data-id');
         if (!id || id === '0') {
-            // Marca de los tres todavía sin registrar: formulario limpio,
-            // puesto en esa marca y con su modelo por defecto ya elegido.
-            resetProviderForm($row.attr('data-vendor') || 'orc24', $row.attr('data-model'));
-            $('#providerFormTitle').text('Configurar ' + ($row.attr('data-vendorlabel') || ''));
+            // Proveedor pendiente: formulario limpio con datos de la fila.
+            resetProviderForm($row.attr('data-vendor') || 'personalizado', $row.attr('data-model'));
+            $('#providerFormTitle').text('Configurar proveedor');
             $('#api_key').focus();
             $('html, body').animate({ scrollTop: $('#providerForm').offset().top }, 300);
             return;
         }
         $('#provider_id').val(id);
         $('#provider_name').val($row.attr('data-name'));
-        $('#provider_vendor').val($row.attr('data-vendor') || 'orc24');
+        $('#provider_vendor').val($row.attr('data-vendor') || 'personalizado');
         $('#api_key').val($row.attr('data-api-key'));
         $('#base_url').val($row.attr('data-base-url') || '');
+        $('#model').val($row.attr('data-model') || '');
+        $('#modelSugerencias').remove();
         actualizarBaseUrlVisibility();
-        // Los modelos del select se cargan desde el servidor (con la clave
-        // guardada, que no viaja en la fila) y luego se marca el actual.
-        cargarModelos($('#provider_vendor').val(), $row.attr('data-id'), $row.attr('data-model'));
         $('#temperature').val($row.attr('data-temperature'));
         $('#max_tokens').val($row.attr('data-max-tokens'));
         $('#prompt_template').val($row.attr('data-prompt'));

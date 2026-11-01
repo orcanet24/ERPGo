@@ -32,8 +32,6 @@ package web
 //	go run ./tools/ai-pins -escribir  reescribe ai_pins.go con el consenso actual
 
 import (
-	neturl "net/url"
-	"sort"
 	"strings"
 )
 
@@ -68,18 +66,9 @@ var aiVendorPins = map[string][]string{
 // lista de hosts es una lista que se queda vieja sin que nadie lo note, y la
 // herramienta escribiría IPs de un proveedor que ya no existe.
 func AIProviderHosts() []string {
-	hosts := make([]string, 0, len(aiVendorBaseURL))
-	// El rango da la CLAVE (el nombre del vendor); lo que interesa es el VALOR,
-	// que es la URL de la que se saca el host.
-	for _, u := range aiVendorBaseURL {
-		parsed, err := neturl.Parse(u)
-		if err != nil || parsed.Hostname() == "" {
-			continue
-		}
-		hosts = append(hosts, normalizeAIHost(parsed.Hostname()))
-	}
-	sort.Strings(hosts)
-	return hosts
+	// Las URLs de los proveedores son configurables por el usuario (vienen de
+	// la BD, no del binario). No hay hosts fijos que devolver.
+	return []string{}
 }
 
 // aiPinsForHost devuelve las IPs fijadas de un host, ya normalizadas y

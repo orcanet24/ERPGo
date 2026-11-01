@@ -94,14 +94,11 @@ func TestLaListaDeModelosNoExponeLaUrlDelProveedor(t *testing.T) {
 	}
 }
 
-// TestVendorPersonalizadoEsValido: el vendor "personalizado" (API OpenAI-
-// compatible con URL editable) está en la whitelist y carga modelos.
+// TestVendorPersonalizadoEsValido: el vendor "personalizado" está en la
+// whitelist, no tiene URL fija (la URL siempre viene de la BD) y carga modelos.
 func TestVendorPersonalizadoEsValido(t *testing.T) {
 	if !aiValidVendor("personalizado") {
 		t.Fatal("'personalizado' debe estar en la whitelist")
-	}
-	if !aiVendorEditableURL("personalizado") {
-		t.Fatal("'personalizado' debe tener URL editable")
 	}
 	if aiVendorURL("personalizado") != "" {
 		t.Fatal("'personalizado' no debe tener URL fija derivada")

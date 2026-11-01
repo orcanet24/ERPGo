@@ -36,10 +36,9 @@ type aiProvider struct {
 	ID             int64
 	Name           string
 	Vendor         string
-	VendorOrigen   string // valor CRUDO de la columna vendor (ver aiVendorDeFila)
-	VendorLabel    string // nombre legible del proveedor ("OpenAI"), derivado de Vendor
-	BaseURL        string // URL base (derivada del vendor o leída de la BD para "personalizado")
-	EditableURL    bool   // true si la URL es editable (vendor "personalizado")
+	VendorOrigen   string // valor CRUDO de la columna vendor
+	VendorLabel    string // nombre legible del proveedor
+	BaseURL        string // URL base (SIEMPRE viene de la BD)
 	APIKey         string
 	Model          string
 	Temperature    float64
@@ -102,11 +101,10 @@ func (s *Server) loadAIProviders(sess *SessionData) []aiProvider {
 		}
 		p.VendorOrigen = strings.TrimSpace(p.Vendor)
 		p.Vendor = aiNormalizeVendor(p.Vendor)
-		p.VendorLabel = aiVendorLabel[p.Vendor]
-		p.EditableURL = aiVendorEditableURL(p.Vendor)
-		// Para vendor 'personalizado' la URL viene de la BD (editable).
-		if !p.EditableURL {
-			p.BaseURL = aiVendorURL(p.Vendor)
+		if l, ok := aiVendorLabel[p.Vendor]; ok {
+			p.VendorLabel = l
+		} else {
+			p.VendorLabel = p.Vendor
 		}
 		p.Temperature = aiRoundTemperature(p.Temperature)
 		p.IsActive = active == 1
@@ -115,50 +113,19 @@ func (s *Server) loadAIProviders(sess *SessionData) []aiProvider {
 	return list
 }
 
-// aiProveedoresOficiales devuelve EXACTAMENTE los tres proveedores del
-// sistema —ORC24, OpenAI y Anthropic— en el orden de la pantalla, cada uno con
-// la fila de la base que le corresponda y con la fila VACÍA si esa marca
-// todavía no se configuró.
-//
-// Por qué no se sirve la tabla tal cual: la tabla es un almacén, no el
-// catálogo. Una instalación trae filas heredadas con marcas y nombres que este
-// sistema ya no admite, y leerlas directamente es exactamente lo que hacía
-// parecer en Configuración IA y en el formulario de agentes que había una
-// decena de proveedores entre los que elegir. El catálogo está compilado
-// (aiOrdenVendors); la base solo aporta la clave y el modelo de cada marca.
+// aiProveedoresOficiales devuelve los proveedores de la BD (todos).
+// Compatibilidad: si la BD está vacía (instalación nueva sin semilla),
+// devuelve un proveedor "Personalizado" editable por defecto.
 func (s *Server) aiProveedoresOficiales(sess *SessionData) []aiProvider {
-	porVendor := map[string]aiProvider{}
-	for _, p := range s.loadAIProviders(sess) {
-		v := aiVendorDeFila(p.VendorOrigen)
-		if v == "" {
-			continue // fila heredada de una marca fuera de la whitelist
-		}
-		p.Vendor = v
-		p.VendorLabel = aiVendorLabel[v]
-		p.BaseURL = aiVendorURL(v)
-		p.EditableURL = aiVendorEditableURL(v)
-		// Dos filas para la misma marca: manda la activa y, a igualdad, la
-		// primera que se lea —loadAIProviders ya ordena activas primero—.
-		if guardada, existe := porVendor[v]; !existe || (p.IsActive && !guardada.IsActive) {
-			porVendor[v] = p
-		}
+	list := s.loadAIProviders(sess)
+	if len(list) > 0 {
+		return list
 	}
-
-	salida := make([]aiProvider, 0, len(aiOrdenVendors))
-	for _, v := range aiOrdenVendors {
-		if p, ok := porVendor[v]; ok {
-			salida = append(salida, p)
-			continue
-		}
-		// Marca sin registrar: existe en pantalla como «sin configurar», con su
-		// modelo por defecto ya puesto en el formulario.
-		salida = append(salida, aiProvider{
-			Vendor: v, VendorLabel: aiVendorLabel[v], BaseURL: aiVendorURL(v),
-			EditableURL: aiVendorEditableURL(v),
-			Model: aiModelPorDefecto(v),
-		})
-	}
-	return salida
+	// BD vacía: proveedor personalizado por defecto (el usuario lo configura).
+	return []aiProvider{{
+		Vendor: "personalizado", VendorLabel: "Personalizado",
+		Model: aiModelPorDefecto("personalizado"),
+	}}
 }
 
 // loadActiveProviderRow returns the single row marked is_active = 1.
@@ -166,14 +133,15 @@ func (s *Server) loadActiveProviderRow(sess *SessionData) (aiProvider, bool) {
 	db := s.dbForSession(sess)
 	var p aiProvider
 	var active int
-	err := db.QueryRow(`SELECT id, IFNULL(name,''), IFNULL(api_key,''),
+	// Cargar base_url de la BD (no derivar del vendor).
+	err := db.QueryRow(`SELECT id, IFNULL(name,''), IFNULL(base_url,''), IFNULL(api_key,''),
 		IFNULL(model,''), IFNULL(temperature,0.7), IFNULL(max_tokens,400), IFNULL(prompt_template,''),
 		IFNULL(is_active,0), IFNULL(vendor,'')
 		FROM ai_providers WHERE is_active = 1 ORDER BY id LIMIT 1`).
-		Scan(&p.ID, &p.Name, &p.APIKey, &p.Model,
+		Scan(&p.ID, &p.Name, &p.BaseURL, &p.APIKey, &p.Model,
 			&p.Temperature, &p.MaxTokens, &p.PromptTemplate, &active, &p.Vendor)
 	if err != nil {
-		// Sin columna vendor (BD aún no migrada): consulta legada.
+		// Sin columna base_url o vendor (BD antigua): consulta legada.
 		var legacy aiProvider
 		err2 := db.QueryRow(`SELECT id, IFNULL(name,''), IFNULL(api_key,''),
 			IFNULL(model,''), IFNULL(temperature,0.7), IFNULL(max_tokens,400), IFNULL(prompt_template,''),
@@ -185,13 +153,17 @@ func (s *Server) loadActiveProviderRow(sess *SessionData) (aiProvider, bool) {
 			return aiProvider{}, false
 		}
 		legacy.Vendor = "openai"
-		legacy.BaseURL = aiVendorURL(legacy.Vendor)
+		legacy.BaseURL = strings.TrimSpace(legacy.BaseURL)
 		legacy.Temperature = aiRoundTemperature(legacy.Temperature)
 		legacy.IsActive = active == 1
 		return legacy, true
 	}
 	p.Vendor = aiNormalizeVendor(p.Vendor)
-	p.BaseURL = aiVendorURL(p.Vendor)
+	if l, ok := aiVendorLabel[p.Vendor]; ok {
+		p.VendorLabel = l
+	} else {
+		p.VendorLabel = p.Vendor
+	}
 	p.Temperature = aiRoundTemperature(p.Temperature)
 	p.IsActive = active == 1
 	return p, true
@@ -247,7 +219,7 @@ func (s *Server) loadActiveProvider(sess *SessionData) (aiProvider, bool) {
 // aiProviderUsable reports whether a provider can be called as-is: con la
 // whitelist compilada la condición es simplemente tener API key.
 func aiProviderUsable(p aiProvider) bool {
-	return strings.TrimSpace(p.APIKey) != "" && aiVendorURL(p.Vendor) != ""
+	return strings.TrimSpace(p.APIKey) != "" && strings.TrimSpace(p.BaseURL) != ""
 }
 
 // aiNoProviderReason explains WHY no provider can answer, so the user is not
@@ -329,64 +301,23 @@ func aiValidateBaseURL(raw string) error {
 
 // ---------- Endpoints ----------
 
-// aiProviderList responde GET /ai/providers: lista de proveedores para la tabla
-// de Configuración. Inuye los oficiales (aunque no estén en la BD) CUALQUIER
-// proveedor personalizado creado por el usuario. Así la tabla muestra todo lo
-// que existe, y el frontend distingue oficiales de personalizados por el vendor.
+// aiProviderList responde GET /ai/providers: todos los proveedores de la BD.
+// La URL base SIEMPRE viene de la BD (columna base_url), nunca del binario.
 func (s *Server) aiProviderList(w http.ResponseWriter, r *http.Request) {
-	// 1. Oficiales (siempre presentes, vengan o no de la BD).
-	oficiales := s.aiProveedoresOficiales(s.sessionFromRequest(r))
-	porID := map[int64]map[string]interface{}{}
-	for _, p := range oficiales {
-		if p.ID <= 0 {
-			continue
-		}
-		porID[p.ID] = map[string]interface{}{
-			"id": p.ID, "name": p.Name, "vendor": p.Vendor,
-			"vendor_label": aiVendorLabel[p.Vendor],
-			"base_url":   p.BaseURL,
-			"has_key":    strings.TrimSpace(p.APIKey) != "",
-			"model":      p.Model, "temperature": p.Temperature,
-			"max_tokens": p.MaxTokens, "is_active": p.IsActive,
-			"editable_url": aiVendorEditableURL(p.Vendor),
-		}
-	}
-	// 2. Cargar TODOS los proveedores de la BD (incluye personalizados).
 	todos := s.loadAIProviders(s.sessionFromRequest(r))
-	out := make([]map[string]interface{}, 0, len(todos)+len(oficiales))
-	// Agregar oficiales primero.
-	for _, p := range oficiales {
-		out = append(out, map[string]interface{}{
-			"id": p.ID, "name": p.Name, "vendor": p.Vendor,
-			"vendor_label": aiVendorLabel[p.Vendor],
-			"base_url":   p.BaseURL,
-			"has_key":    strings.TrimSpace(p.APIKey) != "",
-			"model":      p.Model, "temperature": p.Temperature,
-			"max_tokens": p.MaxTokens, "is_active": p.IsActive,
-			"editable_url": aiVendorEditableURL(p.Vendor),
-		})
-	}
-	// Agregar los que NO son oficiales (personalizados y otros ya existentes).
-	vendorsOficiales := map[string]bool{}
-	for _, v := range aiOrdenVendors {
-		vendorsOficiales[v] = true
-	}
+	out := make([]map[string]interface{}, 0, len(todos))
 	for _, p := range todos {
-		if vendorsOficiales[p.Vendor] {
-			continue
-		}
 		out = append(out, map[string]interface{}{
 			"id":           p.ID,
 			"name":         p.Name,
 			"vendor":       p.Vendor,
-			"vendor_label": aiVendorLabel[p.Vendor],
+			"vendor_label": p.VendorLabel,
 			"base_url":     p.BaseURL,
 			"has_key":      strings.TrimSpace(p.APIKey) != "",
 			"model":        p.Model,
 			"temperature":  p.Temperature,
 			"max_tokens":   p.MaxTokens,
 			"is_active":    p.IsActive,
-			"editable_url": aiVendorEditableURL(p.Vendor),
 		})
 	}
 	writeJSON(w, out)
@@ -553,14 +484,9 @@ func (s *Server) aiProviderSave(w http.ResponseWriter, r *http.Request) {
 	}
 	id, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue("id")), 10, 64)
 	name := strings.TrimSpace(r.FormValue("name"))
-	// La URL base se deriva del vendor (whitelist compilada), excepto para
-	// vendor "personalizado" donde el usuario escribe la URL completa.
 	vendor := aiNormalizeVendor(r.FormValue("vendor"))
-	baseURL := aiVendorURL(vendor)
-	if aiVendorEditableURL(vendor) {
-		// Personalizado: la URL viene del formulario.
-		baseURL = strings.TrimSpace(r.FormValue("base_url"))
-	}
+	// La URL base SIEMPRE viene del formulario (BD). Nunca se deriva del binario.
+	baseURL := strings.TrimSpace(r.FormValue("base_url"))
 	apiKey := strings.TrimSpace(r.FormValue("api_key"))
 	model := strings.TrimSpace(r.FormValue("model"))
 	promptTemplate := strings.TrimSpace(r.FormValue("prompt_template"))
@@ -570,11 +496,11 @@ func (s *Server) aiProviderSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if baseURL == "" {
-		if aiVendorEditableURL(vendor) {
-			aiJSONError(w, "La URL base es obligatoria para el proveedor personalizado", 400)
-		} else {
-			aiJSONError(w, "Proveedor no permitido (use orc24 u openai)", 400)
-		}
+		aiJSONError(w, "La URL base es obligatoria", 400)
+		return
+	}
+	if err := aiValidateBaseURL(baseURL); err != nil {
+		aiJSONError(w, err.Error(), 400)
 		return
 	}
 	if model == "" {
@@ -582,20 +508,9 @@ func (s *Server) aiProviderSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// UN registro por marca: la pantalla es una fila fija por proveedor. Un
-	// segundo registro de OpenAI dejaría dos formas de configurar la misma cosa
-	// y dos filas peleando por estar activas, que es justo el lío que hoy se ve.
-	var repetido int
-	if id > 0 {
-		_ = s.dbFor(r).QueryRow(`SELECT COUNT(*) FROM ai_providers WHERE vendor = ? AND id <> ?`, vendor, id).Scan(&repetido)
-	} else {
-		_ = s.dbFor(r).QueryRow(`SELECT COUNT(*) FROM ai_providers WHERE vendor = ?`, vendor).Scan(&repetido)
-	}
-	if repetido > 0 {
-		aiJSONError(w, "Ya existe un proveedor "+aiVendorLabel[vendor]+
-			"; edítalo desde su fila en vez de crear otro registro.", 400)
-		return
-	}
+	// Cada proveedor es independiente (nombre + URL + key + modelo).
+	// No hay restricción de "un registro por marca": el usuario puede crear
+	// múltiples proveedores apuntando a distintas URLs.
 
 	temperature := 0.7
 	if v := strings.TrimSpace(r.FormValue("temperature")); v != "" {
