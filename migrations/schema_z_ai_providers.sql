@@ -76,6 +76,6 @@ INSERT INTO `ai_providers` (`name`, `base_url`, `api_key`, `model`, `temperature
 SELECT 'LM Studio', 'http://localhost:1234/v1', NULL, 'local-model', 0.7, 400, NULL, 0 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM (SELECT `name` FROM `ai_providers`) `t` WHERE `t`.`name` = 'LM Studio');
 
-INSERT INTO `ai_providers` (`name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`)
-SELECT 'Personalizado', 'https://api.example.com/v1', NULL, 'gpt-4o-mini', 0.7, 400, NULL, 0 FROM DUAL
+INSERT INTO `ai_providers` (`name`, `vendor`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`)
+SELECT 'Personalizado', 'personalizado', 'https://api.ejemplo.com/v1', NULL, 'gpt-4o-mini', 0.7, 400, NULL, 0 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM (SELECT `name` FROM `ai_providers`) `t` WHERE `t`.`name` = 'Personalizado');

@@ -78,6 +78,8 @@
                     data-model="{{.Model}}"
                     data-temperature="{{.Temperature}}"
                     data-max-tokens="{{.MaxTokens}}"
+                    data-base-url="{{.BaseURL}}"
+                    data-editable-url="{{.EditableURL}}"
                     data-prompt="{{.PromptTemplate}}">
                     <td>
                         {{if .ID}}<strong>{{.Name}}</strong>{{else}}<em class="text-muted">Sin configurar</em>{{end}}
@@ -139,8 +141,18 @@
                     <option value="orc24" selected>ORC24 — inferencia propia de Orcanet</option>
                     <option value="openai">OpenAI</option>
                     <option value="anthropic">Anthropic</option>
+                    <option value="personalizado">Personalizado (API OpenAI-compatible)</option>
                 </select>
-                <small class="erp-caption">El endpoint lo resuelve el binario desde una whitelist compilada: no se puede apuntar a otra API ni verse en pantalla.</small>
+                <small class="erp-caption" id="vendorHint">El endpoint lo resuelve el binario desde una whitelist compilada: no se puede apuntar a otra API ni verse en pantalla.</small>
+            </div>
+
+            <!-- URL base: solo visible para vendor "personalizado" -->
+            <div class="input_label" id="baseUrlRow" style="display:none">
+                <label class="label_name" for="base_url">URL base *</label>
+                <input type="url" name="base_url" id="base_url"
+                    placeholder="https://api.ejemplo.com/v1" class="input_section"
+                    style="width:100%" autocomplete="off">
+                <small class="erp-caption">URL base de la API (OpenAI-compatible). Se le agrega /chat/completions automáticamente.</small>
             </div>
 
             <div class="input_label">
@@ -207,6 +219,7 @@ $(function () {
         // con la lista equivocada.
         if (vendor) { $('#provider_vendor').val(vendor); }
         cargarModelos($('#provider_vendor').val(), 0, modelo || null);
+        actualizarBaseUrlVisibility();
     }
 
     // Los modelos los manda EL SERVIDOR: catálogo curado de cada proveedor y,
@@ -239,14 +252,25 @@ $(function () {
         });
     }
 
-    // Cambiar de proveedor recarga sus modelos: la oferta de uno no es la del
-    // otro (ORC24 tiene uno; OpenAI y Anthropic los suyos, curados).
+    // Mostrar/ocultar campo base_url según vendor.
+    function actualizarBaseUrlVisibility() {
+        var vendor = $('#provider_vendor').val();
+        var editable = (vendor === 'personalizado');
+        $('#baseUrlRow').toggle(editable);
+        $('#vendorHint').text(editable
+            ? 'Proveedor personalizado: escriba la URL base de una API compatible con OpenAI.'
+            : 'El endpoint lo resuelve el binario desde una whitelist compilada: no se puede apuntar a otra API ni verse en pantalla.');
+    }
+
+    // Cambiar de proveedor recarga sus modelos y visibilidad de URL.
     $('#provider_vendor').on('change', function () {
         cargarModelos(this.value, $('#provider_id').val(), null);
+        actualizarBaseUrlVisibility();
     });
 
     // Carga inicial del formulario vacío.
     cargarModelos($('#provider_vendor').val(), 0, null);
+    actualizarBaseUrlVisibility();
 
     $('#toggleApiKey').on('click', function (e) {
         e.preventDefault();
@@ -319,6 +343,8 @@ $(function () {
         $('#provider_name').val($row.attr('data-name'));
         $('#provider_vendor').val($row.attr('data-vendor') || 'orc24');
         $('#api_key').val($row.attr('data-api-key'));
+        $('#base_url').val($row.attr('data-base-url') || '');
+        actualizarBaseUrlVisibility();
         // Los modelos del select se cargan desde el servidor (con la clave
         // guardada, que no viaja en la fila) y luego se marca el actual.
         cargarModelos($('#provider_vendor').val(), $row.attr('data-id'), $row.attr('data-model'));

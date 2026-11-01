@@ -124,7 +124,7 @@ func aiSystemPrompt(roleName, schemaMap, reglas string) string {
 // `choices[]`: con el cliente original ese vendor daba 401/404 garantizado.
 // Con la capa compatible el código no cambia ni un byte, y se puede ofrecer sin
 // anunciar algo que no funciona.
-var aiAllowedVendors = []string{"openai", "anthropic", "orc24"}
+var aiAllowedVendors = []string{"openai", "anthropic", "orc24", "personalizado"}
 
 // aiOrdenVendors es el orden fijo en que la pantalla de Configuración IA
 // presenta esos tres: primero el nuestro, porque es el que se ofrece y el que
@@ -167,15 +167,24 @@ var aiVendorBaseURL = map[string]string{
 	// ORC24: plataforma de IA propia (orcanet1724.click), estándar
 	// OpenAI-compatible (chat completions + tool_calls).
 	"orc24": "https://ia.orcanet1724.click/v1",
+	// Personalizado: el usuario escribe la URL base (API OpenAI-compatible).
+	// La URL NO se deriva; se lee de la BD (columna base_url) o del formulario.
+	"personalizado": "", // vacío = editable por el usuario
 }
 
-// aiVendorLabel es el nombre para mostrar en la UI. Solo el nombre: la URL del
-// proveedor NO se muestra en ninguna pantalla ni se devuelve en ninguna
-// respuesta JSON — es un dato del binario, no del usuario.
+// aiVendorLabel es el nombre para mostrar en la UI.
 var aiVendorLabel = map[string]string{
-	"openai":    "OpenAI",
-	"anthropic": "Anthropic",
-	"orc24":     "ORC24",
+	"openai":       "OpenAI",
+	"anthropic":    "Anthropic",
+	"orc24":        "ORC24",
+	"personalizado": "Personalizado",
+}
+
+// aiVendorEditableURL indica si la URL base del vendor es editable por el usuario.
+// Para los proveedores oficiales la URL es fija (derivada del binario); para
+// "personalizado" el usuario escribe la URL completa.
+func aiVendorEditableURL(vendor string) bool {
+	return strings.ToLower(strings.TrimSpace(vendor)) == "personalizado"
 }
 
 // aiVendorModels es el catálogo CURADO de modelos por vendor. Compilado como
@@ -198,14 +207,18 @@ var aiVendorModels = map[string][]string{
 	"orc24":     {"orc24"},
 	"openai":    {"gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-5.5", "gpt-5.4"},
 	"anthropic": {"claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"},
+	// Personalizado: catálogo amplio de modelos comunes OpenAI-compatible.
+	// El usuario puede escribir cualquier modelo en el select; estos son sugerencias.
+	"personalizado": {"gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo", "llama-3.3-70b", "llama3.2", "mixtral-8x7b", "gemini-1.5-pro"},
 }
 
 // aiVendorModelPorDefecto es el modelo con el que se guarda un proveedor nuevo
 // de cada vendor (y el que sustituye a un modelo vacío en tiempo de ejecución).
 var aiVendorModelPorDefecto = map[string]string{
-	"orc24":     "orc24",
-	"openai":    "gpt-5.5",
-	"anthropic": "claude-sonnet-5-5",
+	"orc24":        "orc24",
+	"openai":       "gpt-5.5",
+	"anthropic":    "claude-sonnet-5-5",
+	"personalizado": "gpt-4o-mini", // placeholder editable por el usuario
 }
 
 // aiModelsDeVendor devuelve una copia del catálogo del vendor (nunca nil para
