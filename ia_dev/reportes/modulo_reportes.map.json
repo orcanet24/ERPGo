@@ -1,0 +1,208 @@
+[
+  {
+    "archivo": "interfaces/web/report.go",
+    "descripcion": "Reportes clásicos del sistema: ventas, compras, stock, cierre diario, impuestos, posición cambiaria.",
+    "rutas_http": [
+      "GET /reports",
+      "GET /reports/sales",
+      "/reports/sales/data",
+      "GET /reports/purchases",
+      "/reports/purchases/data",
+      "GET /reports/stock",
+      "/reports/stock/data",
+      "GET /reports/daily-closing",
+      "POST /reports/daily-closing",
+      "GET /reports/tax",
+      "GET /api/reports/currency-position",
+      "GET /api/reports/currency-exposure"
+    ],
+    "funciones": [
+      {"nombre": "registerReportRoutes()", "linea": 13, "proposito": "Registra todas las rutas de reportes clásicos.", "tablas_bd": []},
+      {"nombre": "reportsHome(w,r)", "linea": 28, "proposito": "Página principal del módulo de reportes.", "tablas_bd": []},
+      {"nombre": "reportSales(w,r)", "linea": 33, "proposito": "Formulario de reporte de ventas (filtros fecha).", "tablas_bd": []},
+      {"nombre": "reportSalesData(w,r)", "linea": 41, "proposito": "JSON con facturas/ventas en rango de fechas + totales pago/pendiente.", "tablas_bd": ["invoice", "customer_information"]},
+      {"nombre": "reportPurchases(w,r)", "linea": 77, "proposito": "Formulario de reporte de compras.", "tablas_bd": []},
+      {"nombre": "reportPurchasesData(w,r)", "linea": 85, "proposito": "JSON con compras en rango de fechas.", "tablas_bd": ["product_purchase", "supplier_information"]},
+      {"nombre": "reportStock(w,r)", "linea": 121, "proposito": "Reporte de inventario: productos con stock actual.", "tablas_bd": ["product_information", "product_category"]},
+      {"nombre": "reportStockData(w,r)", "linea": 154, "proposito": "JSON con inventario completo.", "tablas_bd": ["product_information", "product_category"]},
+      {"nombre": "reportDailyClosing(w,r)", "linea": 183, "proposito": "Cierre diario de caja: GET formulario, POST guarda cierre.", "tablas_bd": ["daily_closing", "acc_transaction"]},
+      {"nombre": "reportTax(w,r)", "linea": 253, "proposito": "Reporte de impuestos (IVA y otros).", "tablas_bd": ["invoice", "customer_information"]}
+    ]
+  },
+  {
+    "archivo": "interfaces/web/report_engine.go",
+    "descripcion": "Motor de ejecución de informes: validación de definición tipada, ejecución SQL segura, cálculo de totales, construcción de gráficos, export CSV.",
+    "rutas_http": [],
+    "funciones": [
+      {"nombre": "(d ReportDefinition) ClavesDeclaradas()", "linea": 97, "proposito": "Devuelve claves de columnas en orden.", "tablas_bd": []},
+      {"nombre": "(d *ReportDefinition) Validate()", "linea": 116, "proposito": "Valida SQL, columnas, chart, parámetros, totales, max_rows.", "tablas_bd": []},
+      {"nombre": "(d *ReportDefinition) EffectiveMaxRows()", "linea": 181, "proposito": "Límite efectivo de filas (def 20000, máx 200000).", "tablas_bd": []},
+      {"nombre": "(sqliteReportBackend) Name()", "linea": 200, "proposito": "Devuelve nombre del backend 'sqlite'.", "tablas_bd": []},
+      {"nombre": "(sqliteReportBackend) Query(rows)", "linea": 202, "proposito": "Escaneo de filas SQL normalizando []byte a string.", "tablas_bd": []},
+      {"nombre": "(s *Server) RunReportDefinition(r, def, values)", "linea": 241, "proposito": "NÚCLEO: ejecuta una plantilla (valida, sustituye params, ejecuta SQL, totales, gráfico).", "tablas_bd": []},
+      {"nombre": "buildReportChart(cfg, claves, keys, data)", "linea": 350, "proposito": "Construye dataset Chart.js para el gráfico del informe.", "tablas_bd": []},
+      {"nombre": "reportLiteral(p, raw)", "linea": 415, "proposito": "Valida valor por tipo de parámetro y devuelve literal SQL seguro.", "tablas_bd": []},
+      {"nombre": "replaceParam(sqlText, name, literal)", "linea": 450, "proposito": "Sustituye :nombre por literal SQL.", "tablas_bd": []},
+      {"nombre": "isParamChar(c)", "linea": 471, "proposito": "Determina si un carácter forma parte debb un nombre de parámetro.", "tablas_bd": []},
+      {"nombre": "ReportCSV(run)", "linea": 476, "proposito": "Genera CSV con BOM UTF-8 + fila de totales.", "tablas_bd": []},
+      {"nombre": "formatReportValue(v)", "linea": 522, "proposito": "Convierte valor de celda a string (floats con 2 decimales).", "tablas_bd": []}
+    ],
+    "tablas_bd_principales": []
+  },
+  {
+    "archivo": "interfaces/web/report_handlers.go",
+    "descripcion": "Handlers HTTP del motor de informes por plantilla: listado, ejecución, export CSV/PDF, params.",
+    "rutas_http": [
+      "GET /reports/engine",
+      "GET /reports/engine/templates",
+      "GET /reports/engine/params/{id}",
+      "POST /reports/engine/run/{id}",
+      "POST /reports/engine/export/{id}",
+      "POST /reports/engine/pdf/{id}"
+    ],
+    "funciones": [
+      {"nombre": "registerReportEngineRoutes()", "linea": 21, "proposito": "Registra rutas del motor de informes.", "tablas_bd": []},
+      {"nombre": "loadReportDefinition(r, id)", "linea": 31, "proposito": "Carga y deserializa una plantilla por ID.", "tablas_bd": ["report_template"]},
+      {"nombre": "reportEngineList(w,r)", "linea": 48, "proposito": "Renderiza pantalla 'Mis Informes'.", "tablas_bd": []},
+      {"nombre": "reportEngineTemplates(w,r)", "linea": 57, "proposito": "JSON con plantillas que pasan ReportDefinition.Validate.", "tablas_bd": ["report_template", "report_template_acl"]},
+      {"nombre": "reportTemplateParams(w,r)", "linea": 80, "proposito": "Parámetros y columnas de una plantilla (formulario ejecución).", "tablas_bd": ["report_template"]},
+      {"nombre": "reportValuesFromRequest(r, def)", "linea": 96, "proposito": "Recoge parámetros del formulario (prefijo 'p_').", "tablas_bd": []},
+      {"nombre": "reportEngineRun(w,r)", "linea": 105, "proposito": "Ejecuta plantilla → JSON con resultado.", "tablas_bd": ["report_template"]},
+      {"nombre": "reportEnginePDF(w,r)", "linea": 131, "proposito": "Ejecuta plantilla → PDF descargable.", "tablas_bd": ["report_template"]},
+      {"nombre": "subtituloDeInforme(values)", "linea": 177, "proposito": "Arma línea de contexto para el PDF.", "tablas_bd": []},
+      {"nombre": "reportEngineExport(w,r)", "linea": 205, "proposito": "Ejecuta plantilla → CSV descargable + auditoría.", "tablas_bd": ["report_template"]},
+      {"nombre": "reportRunJSON(run)", "linea": 240, "proposito": "Convierte ReportRun a JSON para DataTables.", "tablas_bd": []},
+      {"nombre": "reportSafeFilename(titulo)", "linea": 268, "proposito": "Limpia título para nombre de archivo seguro.", "tablas_bd": []}
+    ]
+  },
+  {
+    "archivo": "interfaces/web/report_pdf.go",
+    "descripcion": "Generador de PDF tabular para informes (sin librería externa, PDF handcrafted).",
+    "rutas_http": [],
+    "funciones": [
+      {"nombre": "winAnsi(s)", "linea": 72, "proposito": "Codifica a WinAnsi (cp1252), fuera de rango → '?'.", "tablas_bd": []},
+      {"nombre": "pdfEscape(s)", "linea": 99, "proposito": "Escapa caracteres reservados PDF.", "tablas_bd": []},
+      {"nombre": "(d *pdfDoc) nuevaPagina()", "linea": 116, "proposito": "Finaliza página y inicia nueva con número en pie.", "tablas_bd": []},
+      {"nombre": "(d *pdfDoc) tabla(titulo, subtitulo, encabezados, filas, totales)", "linea": 129, "proposito": "Dibuja rejilla del informe (título, subtitulo, header sombreado, filas, totales).", "tablas_bd": []},
+      {"nombre": "(d *pdfDoc) fila(celdas, anchos, y, fuente, negrita)", "linea": 194, "proposito": "Escribe una fila con alineación derecha en números.", "tablas_bd": []},
+      {"nombre": "pdfEsNumero(s)", "linea": 231, "proposito": "Determina si celda va alineada a derecha.", "tablas_bd": []},
+      {"nombre": "(d *pdfDoc) bytes()", "linea": 257, "proposito": "Ensambla PDF completo (xref, trailer, catálogo).", "tablas_bd": []},
+      {"nombre": "ReportPDF(run, subtitulo)", "linea": 341, "proposito": "API pública: genera PDF de un informe tabular.", "tablas_bd": []}
+    ]
+  },
+  {
+    "archivo": "interfaces/web/report_currency.go",
+    "descripcion": "Reportes de posición y exposición cambiaria (multimoneda VES/USD).",
+    "rutas_http": [],
+    "funciones": [
+      {"nombre": "reportCurrencyPosition(w,r)", "linea": 26, "proposito": "Posición cambiaria de una fecha: ingresos/cobros/pagos VES/USD, tasas BCV.", "tablas_bd": ["invoice", "debt_collection", "product_purchase"]},
+      {"nombre": "reportCurrencyExposure(w,r)", "linea": 62, "proposito": "Exposición cambiaria total: CXC y CXP en VES/USD + posición neta.", "tablas_bd": ["invoice", "product_purchase"]}
+    ]
+  },
+  {
+    "archivo": "interfaces/web/ai_reports.go",
+    "descripcion": "CRUD de informes personalizados + integración con IA (preview, refine, save, help). El endpoint que usa /reports/custom/add.",
+    "rutas_http": [
+      "GET /reports/custom",
+      "GET /reports/custom/data",
+      "GET /reports/custom/definition/{id}",
+      "POST /reports/custom/engine-run/{id}",
+      "POST /reports/custom/engine-export/{id}",
+      "GET /reports/custom/add",
+      "GET /reports/custom/edit/{id}",
+      "POST /reports/custom/save",
+      "POST /reports/custom/delete/{id}",
+      "GET /reports/custom/run/{id}",
+      "POST /reports/custom/ai-help",
+      "POST /reports/custom/ai-preview",
+      "POST /reports/custom/ai-preview-stream (SSE: progreso en vivo + resultado)",
+      "POST /reports/custom/ai-refine",
+      "POST /reports/custom/ai-refine-stream (SSE: progreso en vivo + resultado)",
+      "POST /reports/custom/ai-save",
+      "GET /reports/custom/roles"
+    ],
+    "funciones": [
+      {"nombre": "loadReportTemplates(sess)", "linea": 38, "proposito": "Lista plantillas visibles para un usuario (ACL role_id/user_id).", "tablas_bd": ["report_template", "report_template_acl", "sec_userrole"]},
+      {"nombre": "sessionRoleID(sess)", "linea": 110, "proposito": "role_id de la sesión (BD empresa, fallback control).", "tablas_bd": ["sec_userrole"]},
+      {"nombre": "validateReportDefinition(definition)", "linea": 155, "proposito": "Guardián de definición JSON: SELECT puro, columnas, totales declarados.", "tablas_bd": []},
+      {"nombre": "executeReportDefinition(sess, def, from, to)", "linea": 202, "proposito": "Ejecuta SQL de definición legacy (:desde/:hasta) + totales por clave.", "tablas_bd": []},
+      {"nombre": "registerAIReportRoutes()", "linea": 389, "proposito": "Registra TODAS las rutas de informes personalizados.", "tablas_bd": []},
+      {"nombre": "previewDefinitionFromJSON(sess, jsonText)", "linea": 424, "proposito": "Valida + ejecuta preview de JSON extraído de la IA (warnings no son error).", "tablas_bd": []},
+      {"nombre": "executeDefinitionPreview(sess, jsonText)", "linea": 446, "proposito": "Preview con fechas válidas (mes actual).", "tablas_bd": []},
+      {"nombre": "iaPreviewDefinition(sess, instruction)", "linea": 458, "proposito": "NÚCLEO IA: pide definición al agente → valida → preview. Lo llaman ai-preview y ai-refine.", "tablas_bd": []},
+      {"nombre": "aiPreviewInstruction(request)", "linea": 523, "proposito": "Contrato estricto para el agente (JSON puro, key=alias SELECT).", "tablas_bd": []},
+      {"nombre": "crearInformeDesdeRespuestaIA(r,sess,pedido,respuesta)", "linea": 541, "proposito": "Flujo antiguo: extrae JSON + preview + guarda (marca 'ia:').", "tablas_bd": ["report_template"]},
+      {"nombre": "reportTemplateAICreate(w,r)", "linea": 574, "proposito": "Endpoint heredado de creación IA un-paso (compatibilidad tests).", "tablas_bd": []},
+      {"nombre": "reportTemplateAIPreview(w,r)", "linea": 622, "proposito": "Genera definición por IA + preview (NO guarda).", "tablas_bd": []},
+      {"nombre": "reportTemplateAIRefine(w,r)", "linea": 658, "proposito": "Ajusta definición con feedback → nuevo preview.", "tablas_bd": []},
+      {"nombre": "reportTemplateAISave(w,r)", "linea": 703, "proposito": "Guarda informe con visibilidad (ACL).", "tablas_bd": ["report_template", "report_template_acl"]},
+      {"nombre": "insertarReporteACL(r, sess, reportID, roleIDs)", "linea": 776, "proposito": "Graba visibilidad en report_template_acl.", "tablas_bd": ["report_template_acl"]},
+      {"nombre": "reportCanView(sess, reportID)", "linea": 810, "proposito": "Verifica visibilidad de un informe.", "tablas_bd": ["report_template_acl"]},
+      {"nombre": "insertarInforme(r,sess,name,desc,def,creator)", "linea": 839, "proposito": "Guarda plantilla + auditoría (camino compartido manual e IA).", "tablas_bd": ["report_template"]},
+      {"nombre": "aiExtraerDefinicion(texto)", "linea": 858, "proposito": "Encuentra JSON de definición en texto del agente (brace-matching).", "tablas_bd": []},
+      {"nombre": "reportTemplateList(w,r)", "linea": 901, "proposito": "Renderiza lista de informes personalizados.", "tablas_bd": []},
+      {"nombre": "reportTemplateListData(w,r)", "linea": 905, "proposito": "JSON de la lista (definición parseada para título).", "tablas_bd": ["report_template", "report_template_acl"]},
+      {"nombre": "reportTemplateForm(w,r)", "linea": 924, "proposito": "Formulario creación/edición + CMap (mapa tablas para IA).", "tablas_bd": ["report_template", "report_template_acl"]},
+      {"nombre": "reportTemplateSave(w,r)", "linea": 1098, "proposito": "Guardado humano (create/update por ID).", "tablas_bd": ["report_template"]},
+      {"nombre": "reportTemplateDelete(w,r)", "linea": 1159, "proposito": "Borrado lógico por ID + auditoría.", "tablas_bd": ["report_template"]},
+      {"nombre": "reportTemplateRun(w,r)", "linea": 1175, "proposito": "Ejecuta con rango de fechas elegido → render resultado.", "tablas_bd": ["report_template", "report_template_acl"]},
+      {"nombre": "reportTemplateAIHelp(w,r)", "linea": 1209, "proposito": "Pide al agente de TI un borrador (una sola pasada).", "tablas_bd": []},
+      {"nombre": "aiDefaultITAgent(sess)", "linea": 1254, "proposito": "Agente de TI estándar o primer agente activo.", "tablas_bd": []},
+      {"nombre": "substituteReportParams(sqlText, from, to)", "linea": 1303, "proposito": "Reemplaza :desde/:hasta validando fechas.", "tablas_bd": []}
+    ],
+    "tablas_bd_principales": ["report_template", "report_template_acl"]
+  },
+  {
+    "archivo": "templates/report_template_form.html",
+    "descripcion": "Formulario de creación/edición de informes. Incluye el asistente IA completo (prompt → preview → refine → save).",
+    "endpoints_js": [
+      "POST /reports/custom/save",
+      "POST /reports/custom/ai-preview",
+      "POST /reports/custom/ai-refine",
+      "GET /reports/custom/roles",
+      "POST /reports/custom/ai-save"
+    ],
+    "modales": ["reportGuideModal", "aiCreateModal", "aiRefineModal", "aiSaveModal"],
+    "variables_plantilla": [".Title", ".Template.ID", ".Template.Name", ".Template.Description", ".Template.Definition", ".CMap"]
+  },
+  {
+    "archivo": "templates/report_template_list.html",
+    "descripcion": "Lista de informes personalizados (DataTable).",
+    "endpoints_js": ["GET /reports/custom/data", "POST /reports/custom/delete/{id}"]
+  },
+  {
+    "archivo": "templates/report_template_run.html",
+    "descripcion": "Resultado de ejecución de un informe (render server-side, filtros from/to).",
+    "variables_plantilla": [".Title", ".From", ".To", ".Err", ".Res", ".Res.Headers", ".Res.Rows", ".Res.Totals", ".TplID"]
+  },
+  {
+    "archivo": "templates/report_engine.html",
+    "descripcion": "Motor de informes clásico con params dinámicos, DataTable, Chart.js.",
+    "endpoints_js": ["/reports/engine/templates", "/reports/engine/params/{id}", "/reports/engine/run/{id}", "/reports/engine/export/{id}"],
+    "dependencias_js": ["Chart.js 2.5"]
+  },
+  {
+    "archivo": "templates/reports_home.html",
+    "descripcion": "Hub de reportes clásicos con enlaces a ventas/compras/stock/tax/etc."
+  },
+  {
+    "archivo": "templates/report_sales.html",
+    "descripcion": "Reporte de ventas (DataTable AJAX con from/to).",
+    "endpoints_js": ["/reports/sales/data"]
+  },
+  {
+    "archivo": "templates/report_purchases.html",
+    "descripcion": "Reporte de compras (DataTable AJAX con from/to).",
+    "endpoints_js": ["/reports/purchases/data"]
+  },
+  {
+    "archivo": "templates/report_stock.html",
+    "descripcion": "Reporte de inventario (render server-side, stock ≤5 en rojo).",
+    "variables_plantilla": [".Title", ".Items[]"]
+  },
+  {
+    "archivo": "templates/report_tax.html",
+    "descripcion": "Reporte de impuestos (render server-side con money()).",
+    "variables_plantilla": [".Title", ".From", ".To", ".Rows[]", ".TotalVat", ".TotalTax"]
+  }
+]

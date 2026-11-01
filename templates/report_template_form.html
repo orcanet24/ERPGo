@@ -234,14 +234,15 @@
                             spellcheck="false" style="font-size:12px; flex: 1 1 auto; resize: none; background:#fafafa;"></textarea>
                     </div>
                     <!-- Columna derecha: preview (tabla) -->
-                    <div class="col-md-5 p-4" style="display: flex; flex-direction: column; background:#f8fafc;">
-                        <h6 style="margin-top:0; font-weight:600;"><i class="fa fa-table text-info"></i> 3. Vista previa (Ejecución real)</h6>
-                        <div id="ai_preview_container" style="flex: 1 1 auto; min-height: 0; overflow:auto; background:#fff; border:1px solid #e0e4e8; border-radius:8px; padding:15px; box-shadow:inset 0 2px 5px rgba(0,0,0,0.02);">
+                    <div class="col-md-5 p-4" style="display: flex; flex-direction: column; background:#f8fafc; flex: 1 1 auto;">
+                        <h6 style="margin-top:0; font-weight:600;"><i class="fa fa-table text-info"></i> 3. Vista previa (Ejecución real) + Consola IA</h6>
+                        <div id="ai_preview_container" style="flex: 1 1 auto; min-height: 0; overflow:auto; background:#fff; border:1px solid #e0e4e8; border-radius:8px; padding:15px; box-shadow:inset 0 2px 5px rgba(0,0,0,0.02); margin-bottom:8px;">
                             <div class="text-center text-muted" style="margin-top: 25%;">
                                 <i class="fa fa-flask fa-3x mb-3" style="opacity:0.3"></i>
                                 <p>Genera la definición para cargar los datos reales del informe.</p>
                             </div>
                         </div>
+                        <pre id="ai_console" style="flex: 0 0 120px; overflow:auto; background:#1e1e1e; color:#4af626; border-radius:6px; padding:8px 12px; font-family:Consolas,Monaco,monospace; font-size:11px; line-height:1.4; margin:0; display:none;"></pre>
                     </div>
                 </div>
             </div>
@@ -464,20 +465,51 @@ $(function () {
         try { JSON.parse(defText); return true; } catch (e) { return false; }
     }
 
+    function aiConsoleMsg(msg) {
+        var c = $('#ai_console');
+        c.show();
+        var t = c.text();
+        c.text(t + '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n');
+        c.scrollTop(c[0].scrollHeight);
+    }
+    function aiReadCSRF() {
+        var m = document.cookie.match(/(?:^|;)\s*erpgo_csrf=([^;]+)/);
+        return m ? decodeURIComponent(m[1]) : '';
+    }
+
     $('#ai_preview_go').on('click', function () {
         var req = $('#ai_prompt').val().trim();
         if (!req) { alert('Describe el informe que necesitas'); return; }
         var btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> Procesando...');
-        setBusy('Analizando esquema y generando informe...');
-        
-        ERPGo.csrfFetch('/reports/custom/ai-preview', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ request: req })
-        }).then(function (r) { return r.json(); }).then(function (data) {
+        $('#ai_console').text('').hide();
+        setBusy('Procesando...');
+        aiConsoleMsg('Solicitud: ' + req);
+
+        // Bloque SSE: acumulamos líneas "event:" + "data:" y ejecutamos por evento.
+        var eventBuf = { event: '', data: '' };
+        function emitEvent() {
+            var type = eventBuf.event.trim();
+            var raw = eventBuf.data.trim();
+            eventBuf.event = ''; eventBuf.data = '';
+            if (!type || !raw) return;
+            if (type === 'progreso') {
+                aiConsoleMsg(raw);
+                setBusy(raw);
+                return;
+            }
+            // evento con JSON: listo / error
             btn.prop('disabled', false).html('<i class="fa fa-play"></i> Generar y Previsualizar');
-            setReady();
-            if (data.status === 1) {
+            try {
+                var data = JSON.parse(raw);
+                if (type === 'error' || data.status !== 1) {
+                    aiConsoleMsg('ERROR: ' + (data.error || 'Falló la IA'));
+                    alert(data.error || 'La IA no pudo generar el informe');
+                    setReady();
+                    return;
+                }
+                // listo
+                aiConsoleMsg('Completado.');
+                setReady();
                 $('#ai_definition').val(data.definition).trigger('input');
                 renderPreview(data.preview);
                 aiState.definition = data.definition;
@@ -485,13 +517,50 @@ $(function () {
                 $('#ai_refine_btn, #ai_save_final_btn').prop('disabled', false);
                 $('#ai_save_name').val(data.title || '');
                 $('#ai_save_desc').val(data.description || '');
-            } else {
-                alert(data.error || 'La IA no pudo generar el informe');
+            } catch (e) {
+                aiConsoleMsg('Respuesta no parseable: ' + raw);
+                alert('Respuesta inesperada de la IA');
+                setReady();
             }
-        }).catch(function () {
+        }
+        var sseBuf = '';
+        fetch('/reports/custom/ai-preview-stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': aiReadCSRF() },
+            body: JSON.stringify({ request: req })
+        }).then(function (resp) {
+            if (!resp.ok) {
+                aiConsoleMsg('HTTP ' + resp.status);
+                throw new Error('HTTP ' + resp.status);
+            }
+            var reader = resp.body.getReader();
+            var decoder = new TextDecoder();
+            function pump() {
+                reader.read().then(function (res) {
+                    if (res.done) { emitEvent(); setReady(); btn.prop('disabled', false).html('<i class="fa fa-play"></i> Generar y Previsualizar'); return; }
+                    sseBuf += decoder.decode(res.value, { stream: true });
+                    var parts = sseBuf.split('\n\n');
+                    sseBuf = parts.pop();
+                    parts.forEach(function (block) {
+                        var lines = block.split('\n');
+                        lines.forEach(function (ln) {
+                            if (ln.indexOf('event: ') === 0) eventBuf.event = ln.substr(7);
+                            else if (ln.indexOf('data: ') === 0) eventBuf.data += ln.substr(6);
+                        });
+                        if (eventBuf.event && eventBuf.data) emitEvent();
+                    });
+                    pump();
+                }).catch(function (err) {
+                    if (err.name !== 'AbortError') aiConsoleMsg('Stream error: ' + err.message);
+                    btn.prop('disabled', false).html('<i class="fa fa-play"></i> Generar y Previsualizar');
+                    setReady();
+                });
+            }
+            pump();
+        }).catch(function (err) {
             btn.prop('disabled', false).html('<i class="fa fa-play"></i> Generar y Previsualizar');
             setReady();
-            alert('Error de conexión con el servidor.');
+            if (err.message && err.message.indexOf('HTTP') === 0) { aiConsoleMsg('Sin conexión'); alert('Sin conexión con el servidor.'); }
         });
     });
 
@@ -507,28 +576,64 @@ $(function () {
         var currentDef = $('#ai_definition').val();
         if (!jsonValid(currentDef)) { alert('La definición JSON no es válida. Corrígela antes de refinar.'); return; }
         var btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> Refinando...');
-        setBusy('La IA está ajustando la definición...');
         $('#aiRefineModal').modal('hide');
-        
-        ERPGo.csrfFetch('/reports/custom/ai-refine', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ request: feedback, definition: currentDef })
-        }).then(function (r) { return r.json(); }).then(function (data) {
+        $('#ai_console').text('').hide();
+        aiConsoleMsg('Refinando: ' + feedback);
+        var eventBuf = { event: '', data: '' };
+        function emitEvent() {
+            var type = eventBuf.event.trim();
+            var raw = eventBuf.data.trim();
+            eventBuf.event = ''; eventBuf.data = '';
+            if (!type || !raw) return;
+            if (type === 'progreso') { aiConsoleMsg(raw); setBusy(raw); return; }
             btn.prop('disabled', false).html('<i class="fa fa-bolt"></i> Aplicar y previsualizar');
-            setReady();
-            if (data.status === 1) {
+            try {
+                var data = JSON.parse(raw);
+                if (type === 'error' || data.status !== 1) {
+                    aiConsoleMsg('ERROR: ' + (data.error || 'Falló'));
+                    alert(data.error || 'La IA no pudo ajustar el informe');
+                    setReady(); return;
+                }
+                aiConsoleMsg('Completado.'); setReady();
                 $('#ai_definition').val(data.definition).trigger('input');
                 renderPreview(data.preview);
                 aiState.definition = data.definition;
                 aiState.preview = data.preview;
-            } else {
-                alert(data.error || 'La IA no pudo ajustar el informe');
+            } catch (e) { aiConsoleMsg('Respuesta no parseable: ' + raw); setReady(); }
+        }
+        var sseBuf = '';
+        fetch('/reports/custom/ai-refine-stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': aiReadCSRF() },
+            body: JSON.stringify({ request: feedback, definition: currentDef })
+        }).then(function (resp) {
+            if (!resp.ok) { aiConsoleMsg('HTTP ' + resp.status); throw new Error('HTTP ' + resp.status); }
+            var reader = resp.body.getReader();
+            var decoder = new TextDecoder();
+            function pump() {
+                reader.read().then(function (res) {
+                    if (res.done) { emitEvent(); setReady(); btn.prop('disabled', false).html('<i class="fa fa-bolt"></i> Aplicar y previsualizar'); return; }
+                    sseBuf += decoder.decode(res.value, { stream: true });
+                    var parts = sseBuf.split('\n\n');
+                    sseBuf = parts.pop();
+                    parts.forEach(function (block) {
+                        block.split('\n').forEach(function (ln) {
+                            if (ln.indexOf('event: ') === 0) eventBuf.event = ln.substr(7);
+                            else if (ln.indexOf('data: ') === 0) eventBuf.data += ln.substr(6);
+                        });
+                        if (eventBuf.event && eventBuf.data) emitEvent();
+                    });
+                    pump();
+                }).catch(function (err) {
+                    if (err.name !== 'AbortError') aiConsoleMsg('Stream error: ' + err.message);
+                    btn.prop('disabled', false).html('<i class="fa fa-bolt"></i> Aplicar y previsualizar');
+                    setReady();
+                });
             }
-        }).catch(function () {
+            pump();
+        }).catch(function (err) {
             btn.prop('disabled', false).html('<i class="fa fa-bolt"></i> Aplicar y previsualizar');
             setReady();
-            alert('Error de conexión.');
         });
     });
 

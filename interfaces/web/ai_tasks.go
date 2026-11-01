@@ -501,10 +501,17 @@ func (s *Server) aiExecuteTask(sess *SessionData, task aiTask, runSlot string) (
 }
 
 // aiRunLoop: bucle modelo-herramientas con máxSteps. Devuelve el informe.
-func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps *[]aiStep, journal *aiRunJournal) (string, error) {
+// onProgress (opcional) recibe un string con lo que va haciendo la IA, para
+// mostrarlo en vivo en la UI. nil = sin callback (compatibilidad con callers
+// que no necesitan feedback).
+func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps *[]aiStep, journal *aiRunJournal, onProgress ...func(string)) (string, error) {
 	p, ok := s.aiProviderForAgent(sess, agent)
 	if !ok {
 		return "", fmt.Errorf("no hay proveedor de IA activo con API key: actívelo en Configuración IA")
+	}
+	var progress func(string)
+	if len(onProgress) > 0 && onProgress[0] != nil {
+		progress = onProgress[0]
 	}
 	// El rol del agente se resuelve ANTES de cambiar la sesión: aquí todavía viene
 	// la empresa (TenantCode), y el rol vive en la base de la empresa o en la de
@@ -572,7 +579,10 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 	// responden tool calls con content="" en el mensaje final; preservar el
 	// content anterior permite recuperar el JSON que el modelo ya escribió.
 	for step := 1; step <= maxSteps; step++ {
-		content, toolCalls, usage, err := aiCallChatWithTools(p, model, messages, aiToolsJSONExcluyendo(agent.OperatorEnabled == 1, gate, task.HerramientasExcluidas))
+		if progress != nil {
+			progress(fmt.Sprintf("Paso %d/%d: consultando a la IA...", step, maxSteps))
+		}
+		content, toolCalls, usage, err := aiCallChatWithTools(p, model, messages, aiToolsJSONExcluyendo(agent.OperatorEnabled == 1, gate, task.HerramientasExcluidas), progress)
 		// Se registra aunque este paso falle: los tokens gastados hasta el
 		// fallo también son consumo facturable.
 		s.recordAIUsage(s.dbForSession(sess), aiUsageEvent{
@@ -609,6 +619,9 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 		// Registra la petición del modelo y ejecuta CADA herramienta propuesta
 		// en el servidor (validada por rol en aiDispatchTool).
 		messages = append(messages, map[string]string{"role": "assistant", "content": content})
+		if progress != nil && len(toolCalls) > 0 {
+			progress(fmt.Sprintf("Ejecutando %d consulta(s) a la base de datos...", len(toolCalls)))
+		}
 		var toolResults []string
 		for _, tc := range toolCalls {
 			payload := aiToolPayload{Name: tc.Name, Args: aiArgumentosDeHerramienta(tc.Arguments, tc.Name)}

@@ -105,7 +105,11 @@ func aiTruncateLog(s string) string {
 // EL DESTINO: el mismo que el del cliente simple (callChatCompletion) —
 // aiRespanDestino, la pasarela cuando toca y el proveedor cuando no. Visto con
 // dos destinos que funcionaban de forma distinta con el mismo proveedor.
-func aiCallChatWithTools(p aiProvider, model string, messages []map[string]string, toolsJSON string) (string, []aiChatToolCall, aiTokenUsage, error) {
+func aiCallChatWithTools(p aiProvider, model string, messages []map[string]string, toolsJSON string, onProgress ...func(string)) (string, []aiChatToolCall, aiTokenUsage, error) {
+	var progress func(string)
+	if len(onProgress) > 0 && onProgress[0] != nil {
+		progress = onProgress[0]
+	}
 	model = strings.TrimSpace(model)
 	if model == "" {
 		model = strings.TrimSpace(p.Model)
@@ -138,12 +142,16 @@ func aiCallChatWithTools(p aiProvider, model string, messages []map[string]strin
 		// así trabaja igual un modelo que razona que uno que no—. Si no,
 		// contar la verdad con la pista del que la puede arreglar.
 		if estado.Cut && presupuesto < aiAgenticMaxTokens {
-			presupuesto = presupuesto * 4
-			if presupuesto > aiAgenticMaxTokens {
-				presupuesto = aiAgenticMaxTokens
+			nuevo := presupuesto * 4
+			if nuevo > aiAgenticMaxTokens {
+				nuevo = aiAgenticMaxTokens
+			}
+			if progress != nil {
+				progress(fmt.Sprintf("La IA se cortó pensando; reintentando con más tokens (%d)...", nuevo))
 			}
 			log.Printf("aiCallChatWithTools: el modelo %s de %q se cortó pensando; repitiendo con %d tokens de respuesta",
-				model, p.Name, presupuesto)
+				model, p.Name, nuevo)
+			presupuesto = nuevo
 			continue
 		}
 		if estado.Refusal != "" {

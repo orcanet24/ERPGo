@@ -401,8 +401,12 @@ func (s *Server) registerAIReportRoutes() {
 	// ai-preview: IA genera definición + ejecución previa (NO guarda). Devuelve
 	// {definition, name, description, preview} para el modal interactivo.
 	s.mux.HandleFunc("POST /reports/custom/ai-preview", s.reportTemplateAIPreview)
+	// ai-preview-stream: igual que ai-preview pero con SSE para mostrar en vivo
+	// lo que la IA hace (pasos, reintentos, vista previa).
+	s.mux.HandleFunc("POST /reports/custom/ai-preview-stream", s.reportTemplateAIPreviewStream)
 	// ai-refine: IA ajusta la definición con feedback del usuario → preview.
 	s.mux.HandleFunc("POST /reports/custom/ai-refine", s.reportTemplateAIRefine)
+	s.mux.HandleFunc("POST /reports/custom/ai-refine-stream", s.reportTemplateAIRefineStream)
 	// ai-save: guarda el informe con visibilidad (ACL por role_id/user_id).
 	s.mux.HandleFunc("POST /reports/custom/ai-save", s.reportTemplateAISave)
 	// ai-roles: lista los roles (sec_role) para el selector de visibilidad del
@@ -455,11 +459,16 @@ func (s *Server) executeDefinitionPreview(sess *SessionData, jsonText string) (*
 // Por qué existe como helper y no se repite: el preview y el refine comparten
 // validación + ejecución, y un bug arreglado en uno (p.ej. "warning en totales")
 // debe propagarse al otro sin que se lo vuelva a buscar en dos sitios.
-func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string) (def reportDefShape, name, desc string, preview *reportResult, err error) {
+func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string, onProgress ...func(string)) (def reportDefShape, name, desc string, preview *reportResult, err error) {
 	if sess == nil {
 		err = fmt.Errorf("sesión no iniciada")
 		return
 	}
+	var progress func(string)
+	if len(onProgress) > 0 && onProgress[0] != nil {
+		progress = onProgress[0]
+	}
+	if progress != nil { progress("Iniciando generación del informe...") }
 	agent, ok := s.aiDefaultITAgent(sess)
 	if !ok {
 		err = fmt.Errorf("no hay agentes IA activos. crea uno en Agentes IA")
@@ -478,11 +487,12 @@ func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string) (def
 	}
 	journal := &aiRunJournal{scope: "adhoc:" + now()}
 	steps := []aiStep{}
-	resp, runErr := s.aiRunLoop(sess, agent, task, &steps, journal)
+	resp, runErr := s.aiRunLoop(sess, agent, task, &steps, journal, progress)
 	if runErr != nil {
 		err = fmt.Errorf("la IA falló: %w", runErr)
 		return
 	}
+	if progress != nil { progress("Respuesta de la IA recibida. Extrayendo definición...") }
 	jsonText, ok := aiExtraerDefinicion(resp)
 	if !ok {
 		// Se incluye un preview de la respuesta para diagnosticar sin abrir
@@ -496,17 +506,13 @@ func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string) (def
 			strings.TrimSpace(snippet))
 		return
 	}
-	// Log de debug: el servidor registra la definición extraída y el preview de
-	// la IA en stderr. Antes, cuando el preview fallaba por totals mal hechos,
-	// no había forma rápida de ver qué JSON generó la IA sin reconstruir la
-	// corrida; esto acelera el diagnóstico.
-	log.Printf("AI report preview: agente=%s definición_extraída=%s",
-		aiAgentUsername(sess, agent), jsonText)
+	if progress != nil { progress("Definición extraída. Ejecutando vista previa...") }
 	def, preview, err = s.previewDefinitionFromJSON(sess, jsonText)
 	if err != nil {
 		log.Printf("AI report preview FALLÓ: %v", err)
 		return
 	}
+	if progress != nil { progress("Vista previa lista.") }
 	name = strings.TrimSpace(def.Title)
 	desc = strings.TrimSpace(def.Title) // el description se sugiere; el caller lo puede sobreescribir
 	return def, name, desc, preview, nil
@@ -652,6 +658,63 @@ func (s *Server) reportTemplateAIPreview(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// aiSSE escribe un evento Server-Sent-Event y hace flush.
+func aiSSE(w http.ResponseWriter, event, data string) {
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// reportTemplateAIPreviewStream genera el informe con IA y emite el progreso en
+// vivo vía SSE. Cada paso de iaPreviewDefinition llega como evento "progreso";
+// el resultado final llega como "listo" (status=1) o "error" (status!=1).
+func (s *Server) reportTemplateAIPreviewStream(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionFromRequest(r)
+	if sess == nil {
+		http.Error(w, "Sesión no iniciada", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Request string `json:"request"`
+	}
+	body, err := readAllLimit(r, 1<<20)
+	if err != nil {
+		http.Error(w, "Cuerpo inválido", http.StatusBadRequest)
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Request) == "" {
+		http.Error(w, "Describe el informe que necesitas", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
+	progress := func(msg string) {
+		aiSSE(w, "progreso", msg)
+	}
+
+	def, name, desc, preview, pErr := s.iaPreviewDefinition(sess, aiPreviewInstruction(req.Request), progress)
+	if pErr != nil {
+		aiSSE(w, "error", mustJSON(map[string]interface{}{"status": 0, "error": pErr.Error()}))
+		return
+	}
+	aiSSE(w, "listo", string(mustJSON(map[string]interface{}{
+		"status":      1,
+		"request":     req.Request,
+		"definition":  mustJSON(def),
+		"title":       name,
+		"description": desc,
+		"preview":     previewJSON(preview),
+	})))
+}
+
 // reportTemplateAIRefine ajusta la definición según el feedback del usuario y
 // devuelve una nueva vista previa. El agente recibe el JSON previo como contexto
 // (no como texto plano) para que ajuste solo lo pedido.
@@ -695,6 +758,55 @@ func (s *Server) reportTemplateAIRefine(w http.ResponseWriter, r *http.Request) 
 		"description":   desc,
 		"preview":       previewJSON(preview),
 	})
+}
+
+// reportTemplateAIRefineStream: igual que ai-refine pero con SSE.
+func (s *Server) reportTemplateAIRefineStream(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionFromRequest(r)
+	if sess == nil {
+		http.Error(w, "Sesión no iniciada", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Request    string          `json:"request"`
+		Definition json.RawMessage `json:"definition"`
+	}
+	body, err := readAllLimit(r, 1<<20)
+	if err != nil {
+		http.Error(w, "Cuerpo inválido", http.StatusBadRequest)
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Request) == "" {
+		http.Error(w, "Describe el ajuste que necesitas", http.StatusBadRequest)
+		return
+	}
+	if len(req.Definition) == 0 {
+		http.Error(w, "Debes generar primero el borrador", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	progress := func(msg string) { aiSSE(w, "progreso", msg) }
+	instruction := fmt.Sprintf(
+		"Ajusta la definición JSON del informe según este feedback del usuario: «%s».\n\nDEFINICIÓN PREVIA (JSON):\n%s\n\nCONTRATO DE RESPUESTA: responde ÚNICAMENTE con la definición ajustada como objeto JSON con \"title\", \"sql\", \"columns\", \"totals\". Si el feedback no cambia el SQL, repítelo idéntico. Sin markdown, sin vallado de código.",
+		req.Request, string(req.Definition))
+	def, name, desc, preview, pErr := s.iaPreviewDefinition(sess, instruction, progress)
+	if pErr != nil {
+		aiSSE(w, "error", mustJSON(map[string]interface{}{"status": 0, "error": pErr.Error()}))
+		return
+	}
+	aiSSE(w, "listo", string(mustJSON(map[string]interface{}{
+		"status":      1,
+		"definition":  mustJSON(def),
+		"title":       name,
+		"description": desc,
+		"preview":     previewJSON(preview),
+	})))
 }
 
 // reportTemplateAISave guarda el informe (definición validada y ejecutada) con
