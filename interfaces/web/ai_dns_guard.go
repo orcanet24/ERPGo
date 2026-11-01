@@ -1,13 +1,23 @@
 package web
 
-// ai_dns_guard.go — Validación de integridad DNS antes de hablar con un
+// ai-dns-guard.go — Validación de integridad DNS antes de hablar con un
 // proveedor de IA (anti DNS-hijacking / anti MITM silencioso).
 //
 // Idea: antes de enviar una sola petición de IA, el host del proveedor se
-// resuelve por DOS resolvers públicos independientes vía DNS-over-HTTPS
-// (Cloudflare y Google). Se toma el INTERSECCIÓN de ambos sets (lo que ambos
-// coinciden es lo auténtico) y se exige que la resolución local del sistema
-// sea un SUBCONJUNTO de ese consenso.
+// consulta por DOS resolvers públicos independientes vía DNS-over-HTTPS
+// (Cloudflare y Google). Lo que AMBOS conocen es el "consenso público":
+// una IP que ninguno de los dos haya visto jamás es casi seguro una
+// inyección local. La resolución local del sistema se verifica contra esa
+// credencial (debe estar incluida en la UNIÓN de las respuestas).
+//
+// POR QUÉ UNIÓN Y NO INTERSECCIÓN: los proveedores modernos viven detrás de
+// CDNs con DNS geográfico (p. ej. api.longcat.ai → gccdn.net), y cada
+// resolver recibe IPs de la región donde consulta el resolver. Las dos
+// respuestas legítimas pueden NO compartir ni una sola IP: exigir la
+// intersección marcaba proveedores perfectamente buenos como "secuestro".
+// La unión mantiene el argumento de seguridad: si el DNS local está
+// envenenado, la IP falsa no habrá sido servida por NINGÚN resolver público
+// y el check corta; una edge legítima del CDN sí estará en al menos uno.
 //
 // Por qué importa: el cliente HTTP de Go valida el certificado TLS contra el
 // nombre de host, así que un envenenamiento de DNS "a pelo" ya falla. Pero en
@@ -18,11 +28,12 @@ package web
 //
 // TOCTOU: validar el DNS y luego conectar con el resolver normal dejaría una
 // ventana en la que el DNS puede cambiar. Por eso, tras validar, la conexión
-// se hace con DialContext FIJADO a las IPs verificadas (DNS pinning) y el
-// TLS se sigue validando contra el dominio original (ServerName intacto): el
-// atacante tendría que controlar además el certificado.
-//
-// Los hosts están compilados (aiVendorBaseURL), no vienen de la BD.
+// se hace con DialContext FIJADO a las IPs VERIFICADAS DE LA RESOLUCIÓN
+// LOCAL (las que el sistema ya era capaz de resolver) y el TLS se sigue
+// validando contra el dominio original (ServerName intacto): el atacante
+// tendría que controlar además el certificado. Pinning a la resolución local
+// y no a las IPs remotas de los DoH: es la ruta que el CDN ya eligió para
+// esta máquina; forzar las IPs de otra región ralentiza y desincroniza.
 
 import (
 	"context"
@@ -73,7 +84,8 @@ type aiDoHResponse struct {
 	} `json:"Answer"`
 }
 
-// aiDNSGuardCacheEntry memoriza el consenso por host durante el TTL.
+// aiDNSGuardCacheEntry memoriza las IPs verificadas de la resolución local
+// por host durante el TTL.
 type aiDNSGuardCacheEntry struct {
 	ips     []string
 	expires time.Time
@@ -154,22 +166,6 @@ func aiIPSetFromStrings(ips []string) []string {
 		}
 	}
 	return aiIPSet(parsed)
-}
-
-// aiIntersect devuelve los elementos presentes en ambos sets.
-func aiIntersect(a, b []string) []string {
-	set := map[string]struct{}{}
-	for _, s := range a {
-		set[s] = struct{}{}
-	}
-	out := []string{}
-	for _, s := range b {
-		if _, ok := set[s]; ok {
-			out = append(out, s)
-		}
-	}
-	sort.Strings(out)
-	return out
 }
 
 // aiMissing devuelve los elementos de sub que NO aparecen en super.
@@ -263,9 +259,10 @@ func (g *aiDNSGuard) resolveDoHOne(ctx context.Context, epName, endpoint string)
 
 // ---------- validación ----------
 
-// verifyIPs devuelve las IPs consensus (intersección de los resolvers públicos)
-// y se asegura de que la resolución local sea un subconjunto de ese consenso.
-// Es el punto de corte: si algo no cuadra, no se habla con el proveedor.
+// verifyIPs devuelve las IPs verificadas de la RESOLUCIÓN LOCAL (las que la
+// máquina va a usar de verdad) tras comprobar que todas aparecen en la UNIÓN
+// de las respuestas de los resolvers públicos. Es el punto de corte: si algo
+// no cuadra, no se habla con el proveedor.
 func (g *aiDNSGuard) verifyIPs(ctx context.Context, host string) ([]string, error) {
 	host = strings.ToLower(strings.TrimSpace(host))
 	if host == "" {
@@ -283,7 +280,7 @@ func (g *aiDNSGuard) verifyIPs(ctx context.Context, host string) ([]string, erro
 		return entry.ips, nil
 	}
 
-	consensus, err := g.consensus(ctx, host)
+	conocidas, err := g.consensoPublico(ctx, host)
 	if err != nil {
 		return nil, err
 	}
@@ -296,56 +293,64 @@ func (g *aiDNSGuard) verifyIPs(ctx context.Context, host string) ([]string, erro
 	if len(localSet) == 0 {
 		return nil, fmt.Errorf("la resolución local de %q no devolvió direcciones IP", host)
 	}
-	if missing := aiMissing(localSet, consensus); len(missing) > 0 {
+	if missing := aiMissing(localSet, conocidas); len(missing) > 0 {
 		return nil, fmt.Errorf(
-			"validación de seguridad fallida para %q: la resolución local (IP %s) no coincide con "+
-				"el consenso público de Cloudflare y Google (IP %s). Posible interceptación de DNS o "+
+			"validación de seguridad fallida para %q: la resolución local (IP %s) no aparece en "+
+				"las respuestas de Cloudflare ni de Google (IP %s). Posible interceptación de DNS o "+
 				"proxy de inspección en la red. Se corta la conexión con el proveedor de IA para no "+
 				"exponer los datos del negocio. Si estás en una red corporativa con proxy, configura "+
 				"%s=off y avisa al administrador.",
-			host, strings.Join(localSet, ", "), strings.Join(consensus, ", "), aiDNSGuardEnv)
+			host, strings.Join(localSet, ", "), strings.Join(conocidas, ", "), aiDNSGuardEnv)
 	}
 
+	// Se fijan las IPs locales verificadas: es la ruta que el CDN ya eligió
+	// para esta máquina; fijar las IPs que respondió un resolver remoto
+	// desincronizaría la conexión (otra región, otro edge).
 	g.mu.Lock()
-	g.cache[host] = aiDNSGuardCacheEntry{ips: consensus, expires: time.Now().Add(aiDNSCacheTTL)}
+	g.cache[host] = aiDNSGuardCacheEntry{ips: localSet, expires: time.Now().Add(aiDNSCacheTTL)}
 	g.mu.Unlock()
-	return consensus, nil
+	return localSet, nil
 }
 
-// consensus interroga a todos los resolvers y devuelve la intersección de sus
-// respuestas. Exige al menos dos coincidencias: con una sola respuesta no hay
-// consenso y no se puede validar nada.
-func (g *aiDNSGuard) consensus(ctx context.Context, host string) ([]string, error) {
+// consensoPublico consulta a todos los resolvers y devuelve la UNIÓN de sus
+// respuestas: la credencial de "esto es de dominio público", no una copia
+// exacta (con CDN geográfico las respuestas legítimas ya difieren). Exige que
+// al menos DOS resolvers hayan respondido con registros: con una sola
+// respuesta un secuestro del propio resolver pasaría indetectado.
+func (g *aiDNSGuard) consensoPublico(ctx context.Context, host string) ([]string, error) {
 	if len(g.endpoints) < 2 {
 		return nil, fmt.Errorf("validación de DNS no disponible: se requieren al menos 2 resolvers públicos")
 	}
-	results := make([][]string, 0, len(g.endpoints))
+	conocidas := map[string]struct{}{}
+	resolversOK := 0
 	var lastErr error
 	for _, ep := range g.endpoints {
 		ips, err := g.resolveDoH(ctx, ep, host)
 		if err != nil {
-			return nil, err
+			lastErr = err
+			continue
 		}
 		if len(ips) == 0 {
 			lastErr = fmt.Errorf("%s: sin registros A/AAAA", ep.Name)
 			continue
 		}
-		results = append(results, ips)
+		resolversOK++
+		for _, ip := range ips {
+			conocidas[ip] = struct{}{}
+		}
 	}
-	if len(results) < 2 {
+	if resolversOK < 2 {
 		if lastErr == nil {
 			lastErr = fmt.Errorf("respondieron menos de 2 resolvers")
 		}
 		return nil, fmt.Errorf("validación de DNS no disponible para %q: %v", host, lastErr)
 	}
-	common := results[0]
-	for _, r := range results[1:] {
-		common = aiIntersect(common, r)
+	union := make([]string, 0, len(conocidas))
+	for ip := range conocidas {
+		union = append(union, ip)
 	}
-	if len(common) == 0 {
-		return nil, fmt.Errorf("validación de DNS no disponible para %q: los resolvers públicos no coinciden entre sí", host)
-	}
-	return common, nil
+	sort.Strings(union)
+	return union, nil
 }
 
 // ---------- cliente HTTP fijado a las IPs validadas ----------
