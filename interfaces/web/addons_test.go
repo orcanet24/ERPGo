@@ -927,6 +927,62 @@ func TestElCicloCompletoDelAddonDemo(t *testing.T) {
 	h.parar()
 }
 
+// TestElLanzamientoRealResuelveRutasRelativas fija el defecto descubierto en
+// vivo sobre Windows (2026-11-01): lanzarReal con binario y Dir RELATIVOS
+// ("addons\\hola\\erp-addon-hola.exe" + Dir "addons\\hola") fallaba con
+// "The system cannot find the path specified", porque CreateProcess resuelve
+// el ejecutable en el directorio de trabajo del HIJO, no el del ERP. El ciclo
+// completo de arriba no lo veía porque compila con t.TempDir (absoluto).
+func TestElLanzamientoRealResuelveRutasRelativas(t *testing.T) {
+	if testing.Short() {
+		t.Skip("el ciclo completo: con -short se salta")
+	}
+	raiz := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(raiz, "addons", "hola"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// El mismo binario del demo del repo, compilado una vez (la caché de build
+	// lo amortiza igual que en la prueba del ciclo completo).
+	binarioAbs := filepath.Join(raiz, "addons", "hola", "erp-addon-hola.exe")
+	if salida, err := exec.Command("go", "build", "-o", binarioAbs, "erpgo/addons/hola").CombinedOutput(); err != nil {
+		t.Skipf("no se pudo compilar el addon demo en este entorno: %v\n%s", err, salida)
+	}
+
+	// El arranque real del ERP horizontal: cwd = la raíz, addons/ relativa.
+	t.Chdir(raiz)
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	puerto := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+
+	h := &addonHost{parado: make(chan struct{}), ahora: time.Now}
+	p := &addonProc{
+		manifiesto: addonManifest{ID: "hola", Name: "Hola", Version: "3.0.0"},
+		dir:        filepath.Join("addons", "hola"),
+	}
+	env := append(os.Environ(),
+		// Como en el arranque real: el entorno COMPLETO del ERP más el contrato
+		// del addon. Un hijo sin SYSTEMROOT no puede abrir sockets en Windows.
+		"ERP_ADDON_PORT="+strconv.Itoa(puerto),
+		"ERP_ADDON_TOKEN="+tokenEfimero(),
+	)
+	if err := h.lanzarReal(p, filepath.Join("addons", "hola", "erp-addon-hola.exe"), env); err != nil {
+		t.Fatalf("el lanzamiento con rutas relativas debía funcionar y falló: %v", err)
+	}
+	if !esperarSalud(puerto, 5*time.Second) {
+		t.Fatal("el addon lanzado con rutas relativas no abrió /healthz: no quedó vivo")
+	}
+	if p.cmd == nil || p.cmd.Process == nil {
+		t.Fatal("el lanzamiento debía dejar p.cmd.Process disponible para el supervisor")
+	}
+	if err := p.cmd.Process.Kill(); err != nil {
+		t.Fatalf("no se pudo terminar el proceso relanzado: %v", err)
+	}
+}
+
 // ---------- Fase 3: firma, hooks y panel ----------
 
 const manifiestoHolaHooks = `{

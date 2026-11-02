@@ -74,10 +74,10 @@ var reservaDePrefijosCore = []string{
 }
 
 var (
-	addonReID     = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{1,38}$`)
-	addonReRuta   = regexp.MustCompile(`^/[a-z0-9][a-z0-9_-]{0,60}(/[a-z0-9_-]{1,60})*$`)
-	addonReTabla  = regexp.MustCompile(`^[a-z][a-z0-9_]{0,60}$`)
-	addonRePerm   = regexp.MustCompile(`^[a-z0-9][a-z0-9_]{0,60}$`)
+	addonReID    = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{1,38}$`)
+	addonReRuta  = regexp.MustCompile(`^/[a-z0-9][a-z0-9_-]{0,60}(/[a-z0-9_-]{1,60})*$`)
+	addonReTabla = regexp.MustCompile(`^[a-z][a-z0-9_]{0,60}$`)
+	addonRePerm  = regexp.MustCompile(`^[a-z0-9][a-z0-9_]{0,60}$`)
 
 	// Los hooks se nombran igual que los verbs: dominio.accion para los
 	// eventos que el núcleo emite (factura.emitida) y nombre con guiones bajos
@@ -1277,6 +1277,15 @@ func (h *addonHost) lanzarReal(p *addonProc, binario string, env []string) error
 	// archivo se lanza: se arranca directo del sistema y se envuelve en un Cmd
 	// pelado solo para conservar p.cmd.Process tal como lo usan el supervisor y
 	// los handlers (Kill / chequeo nil).
+	//
+	// Rutas absolutas, sin excepción. Descubierto en vivo sobre Windows
+	// (2026-11-01): con binario y Dir RELATIVOS ("addons\\hola\\erp-addon-hola.exe"
+	// + Dir "addons\\hola") el lanzamiento fallaba con "The system cannot find
+	// the path specified": CreateProcess resuelve el lpApplicationName sobre
+	// el directorio de trabajo del HIJO (el Dir), no el del ERP, y esa
+	// combinación buscaba el addon DENTRO de su propia carpeta. Los tests no
+	// lo veían porque usan t.TempDir (absoluto). Se resuelven las DOS rutas
+	// contra el directorio del ERP antes de arrancar.
 	lecR, lecW, err := os.Pipe()
 	if err != nil {
 		return err
@@ -1289,8 +1298,18 @@ func (h *addonHost) lanzarReal(p *addonProc, binario string, env []string) error
 	}
 	defer nulo.Close()
 
-	proc, err := os.StartProcess(binario, []string{binario}, &os.ProcAttr{
-		Dir:   p.dir,
+	// Ambas rutas se vuelven absolutas: el ejecutable y el Dir de trabajo.
+	ejecutable, err := filepath.Abs(binario)
+	if err != nil {
+		return fmt.Errorf("no se pudo resolver %q: %w", binario, err)
+	}
+	dirTrabajo, err := filepath.Abs(p.dir)
+	if err != nil {
+		return fmt.Errorf("no se pudo resolver %q: %w", p.dir, err)
+	}
+
+	proc, err := os.StartProcess(ejecutable, []string{ejecutable}, &os.ProcAttr{
+		Dir:   dirTrabajo,
 		Env:   env,
 		Files: []*os.File{nulo, lecW, lecW},
 	})
@@ -1310,7 +1329,7 @@ func (h *addonHost) lanzarReal(p *addonProc, binario string, env []string) error
 
 	// El contrato del host es p.cmd *exec.Cmd: se monta con el proceso ya
 	// vivo y aquí Start jamás se llama, solo Process.Kill.
-	cmd := &exec.Cmd{Process: proc, Path: binario, Args: []string{binario}}
+	cmd := &exec.Cmd{Process: proc, Path: ejecutable, Args: []string{ejecutable}}
 	p.cmd = cmd
 	go func(c *exec.Cmd) {
 		// Cerrando el host, se mata al hijo: nunca quedan addons huérfanos
@@ -1782,14 +1801,14 @@ func (s *Server) addonsEstado() map[string]interface{} {
 			"tables_own": m.TablesOwn, "perms": m.Perms,
 			"lectura_aviso": p.lecturaAviso,
 			// Fase 3: firma del manifiesto y suscripciones de hooks.
-			"firma": p.firma,
+			"firma":     p.firma,
 			"hooks_out": m.HooksOut, "hooks_in": m.HooksIn,
 			"concedido": map[string]bool{
 				"db_read":  len(m.DBRead) > 0 && p.lecturaOK,
 				"db_write": len(m.DBWrite) > 0,
-				"tables": len(m.TablesOwn) > 0,
-				"hooks": len(m.HooksOut) > 0 || len(m.HooksIn) > 0,
-				"firma": p.firma == "verificada",
+				"tables":   len(m.TablesOwn) > 0,
+				"hooks":    len(m.HooksOut) > 0 || len(m.HooksIn) > 0,
+				"firma":    p.firma == "verificada",
 			},
 		})
 	}
@@ -1810,8 +1829,8 @@ func (s *Server) addonsEstado() map[string]interface{} {
 		"directorio": h.directorio,
 		// Fase 3: confianza. Si la clave pública del dueño no está en addons/
 		// pubkey.ed25519, NADA se verifica y el panel lo dice de frente.
-		"firma_publica": claveConfigurada,
-		"unsigned_mode": unsigned && claveConfigurada,
+		"firma_publica":  claveConfigurada,
+		"unsigned_mode":  unsigned && claveConfigurada,
 		"historia_hooks": historia,
 	}
 }
