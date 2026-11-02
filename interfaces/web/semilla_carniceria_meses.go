@@ -229,6 +229,9 @@ func sembrarVentasDelMes(s *Server, db *sql.DB, sesion, periodo string, idx int,
 		}
 		// Al mayor se lleva el 70% del corte, a precio de lista mayor; al
 		// mostrador el resto, a precio de detalle.
+		// El chequeo de venta usa la FECHA de la venta y los lotes VIGENTES a
+		// ella, la misma verdad que el reparto FEFO aplica después.
+		fechaMayor := fechaEnDia(periodo, 4)
 		for _, cliente := range mayoristas {
 			volumen := corte.volumen
 			if idx == 3 {
@@ -237,14 +240,13 @@ func sembrarVentasDelMes(s *Server, db *sql.DB, sesion, periodo string, idx int,
 			if idx == 4 {
 				volumen *= 0.80 // enero
 			}
-			if err := comprobarStock(db, corte.producto, volumen); err != nil {
+			if err := comprobarStock(s, corte.producto, fechaMayor, volumen); err != nil {
 				// No hay para esta semana: se salta la venta y se sigue. Es
-				// real: en una carnicería hay días que no alcanza.
+				// real: en una carnicería hay días (y meses) que no alcanza.
 				continue
 			}
 			precio := precioMayor(db, corte.producto)
-			fecha := fechaEnDia(periodo, 4)
-			if _, err := sembrarVenta(s, db, sesion, cliente, fecha, corte.producto,
+			if _, err := sembrarVenta(s, db, sesion, cliente, fechaMayor, corte.producto,
 				volumen, precio, true); err != nil {
 				return 0, err
 			}
@@ -263,10 +265,10 @@ func sembrarVentasDelMes(s *Server, db *sql.DB, sesion, periodo string, idx int,
 			if i%2 == 0 {
 				volumen *= 1.2
 			}
-			if err := comprobarStock(db, corte.producto, volumen); err != nil {
+			fecha := fechaEnDia(periodo, 1+i%20)
+			if err := comprobarStock(s, corte.producto, fecha, volumen); err != nil {
 				continue
 			}
-			fecha := fechaEnDia(periodo, 1+i%20)
 			precio := precioDetalle(db, corte.producto)
 			if _, err := sembrarVenta(s, db, sesion, cliente, fecha, corte.producto,
 				volumen, precio, true); err != nil {
@@ -330,7 +332,15 @@ func sembrarVenta(s *Server, db *sql.DB, sesion string, cliente int64,
 
 	// FEFO: se consume el lote que caduca antes. Si no hay stock, `comprobarStock`
 	// ya lo avisó, así que aquí un error es un fallo de verdad.
-	reparto, _, err := s.RepartirFEFO(nil, int64(mustEntero(producto)), cantidad)
+	//
+	// La vigencia se juzga contra la FECHA DE LA VENTA, no contra el reloj del
+	// servidor: siembra meses pasados, y un lote que caducó en octubre no lo está
+	// contra una venta del 04 de septiembre.
+	vigencia, err := time.Parse("2006-01-02", fecha)
+	if err != nil {
+		return 0, fmt.Errorf("fecha de venta inválida %q: %w", fecha, err)
+	}
+	reparto, _, err := s.RepartirFEFO(nil, int64(mustEntero(producto)), cantidad, vigencia)
 	if err != nil {
 		return 0, fmt.Errorf("FEFO del %s del %s: %w", producto, fecha, err)
 	}

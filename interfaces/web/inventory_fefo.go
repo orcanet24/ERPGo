@@ -286,7 +286,12 @@ type AsignacionFEFO struct {
 // escondidas: quien llama necesita saber si puede servir la línea entera. Un
 // reparto parcial que parece completo es como se venden 300 kilos cuando solo
 // hay 200.
-func (s *Server) RepartirFEFO(r *http.Request, productID int64, cantidad float64) ([]AsignacionFEFO, float64, error) {
+//
+// asOf es la fecha de REFERENCIA para la vigencia. No siempre es hoy: los datos
+// históricos (empresa de demostración, cierre de un mes anterior) se sirven con
+// la fecha de la venta que se está registrando, y un lote vencido en cálculo
+// impacto contra el mes siguiente no lo está contra su venta.
+func (s *Server) RepartirFEFO(r *http.Request, productID int64, cantidad float64, asOf time.Time) ([]AsignacionFEFO, float64, error) {
 	if cantidad <= 0 {
 		return nil, 0, nil
 	}
@@ -294,7 +299,6 @@ func (s *Server) RepartirFEFO(r *http.Request, productID int64, cantidad float64
 	if err != nil {
 		return nil, 0, err
 	}
-	asOf := time.Now()
 
 	var plan []AsignacionFEFO
 	falta := cantidad

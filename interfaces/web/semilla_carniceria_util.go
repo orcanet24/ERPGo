@@ -195,14 +195,44 @@ func stockDisponible(db *sql.DB, producto string) float64 {
 	return q
 }
 
-// comprobarStock dice si hay para esa cantidad. Si no hay, el vendedor no
-// entrega y la venta no se registra: es lo que pasa en una carnicería de verdad,
-// y es preferible a vender mercadería que no existe.
-func comprobarStock(db *sql.DB, producto string, cantidad float64) error {
-	hay := stockDisponible(db, producto)
+// stockVigente es lo que el FEFO PODRÍA servir en una fecha dada: suma solo los
+// lotes que a esa fecha no han caducado.
+//
+// POR QUÉ EXISTE SI YA ESTÁ stockDisponible. Son la misma pregunta si y solo si
+// el stock se interroga contra «hoy». Con datos históricos se desdoblaron dos
+// verdades para la misma decisión: comprobarStock contaba también lotes ya
+// vencidos y dejaba llegar la venta hasta RepartirFEFO, que se negó con
+// «faltan N» (mes 2026-11, pollo). Una sola verdad: lo servible es la suma de
+// lotes vigentes, y el chequeo y el reparto la comparten.
+func stockVigente(s *Server, producto string, fecha string) float64 {
+	asOf, err := time.Parse("2006-01-02", fecha)
+	if err != nil {
+		return 0
+	}
+	lotes, err := s.LotesActivos(nil, int64(mustEntero(producto)))
+	if err != nil {
+		return 0
+	}
+	var hay float64
+	for _, l := range lotes {
+		if l.DaysLeft(asOf) >= 0 {
+			hay += l.QtyAvailable
+		}
+	}
+	return hay
+}
+
+// comprobarStock dice si el FEFO podría servir esa cantidad a esa fecha.
+//
+// Si no hay, el vendedor no entrega y la venta no se registra: es lo que pasa
+// en una carnicería de verdad (hay meses sin pollo), y es preferible a vender
+// mercadería que no existe. La fecha es la de la venta, no la del servidor: lo
+// mismo decide el reparto que ejecuta después.
+func comprobarStock(s *Server, producto, fecha string, cantidad float64) error {
+	hay := stockVigente(s, producto, fecha)
 	if cantidad > hay+0.009 {
-		return fmt.Errorf("stock insuficiente de %s: hay %.2f y se piden %.2f",
-			producto, hay, cantidad)
+		return fmt.Errorf("stock insuficiente de %s a %s: hay %.2f servibles y se piden %.2f",
+			producto, fecha, hay, cantidad)
 	}
 	return nil
 }
