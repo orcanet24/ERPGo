@@ -626,7 +626,7 @@ func aiPreviewInstruction(request string) string {
 		`  "sql"   : un ÚNICO SELECT de lectura sobre las tablas del mapa.\n` +
 		`  "columns": [{key,label}...]. IMPORTANTE: el "key" de CADA columna DEBE ser EXACTAMENTE el alias que usaste en el SELECT con "AS". Si no usas AS, el key debe ser el nombre de la columna de la tabla tal cual aparece en el mapa.\n` +
 		`  "totals": ["clave1", "clave2"...]. CADA total DEBE ser una "key" que ya declaraste en "columns". Si una columna no aparece en el resultado del SELECT, el total no se puede calcular.\n` +
-		`Reglas: Usa :desde/:hasta para fechas. Sin markdown, sin vallado de código, sin texto fuera del objeto. Verifica que cada "key" en columns coincide con un alias/AS del SELECT antes de devolver.`
+		`Reglas: Usa :desde/:hasta para fechas. NO uses ningún otro parámetro con nombre (:algo): el motor solo resuelve :desde y :hasta; un :param distinto hace fallar el SQL con error 1064. Sin markdown, sin vallado de código, sin texto fuera del objeto. Verifica que cada "key" en columns coincide con un alias/AS del SELECT antes de devolver.`
 }
 
 // crearInformeDesdeRespuestaIA extrae la definición del texto del agente, la
@@ -852,7 +852,7 @@ func (s *Server) reportTemplateAIRefine(w http.ResponseWriter, r *http.Request) 
 	// La instrucción lleva el JSON previo incrustado: el agente reajusta sobre él
 	// en vez de empezar desde cero, preservando el resto.
 	instruction := fmt.Sprintf(
-		"Ajusta la definición JSON del informe según este feedback del usuario: «%s».\n\nDEFINICIÓN PREVIA (JSON):\n%s\n\nCONTRATO DE RESPUESTA: responde ÚNICAMENTE con la definición ajustada como objeto JSON con \"title\", \"sql\", \"columns\", \"totals\". Si el feedback no cambia el SQL, repítelo idéntico. Sin markdown, sin vallado de código.",
+		"Ajusta la definición JSON del informe según este feedback del usuario: «%s».\n\nDEFINICIÓN PREVIA (JSON):\n%s\n\nCONTRATO DE RESPUESTA: responde ÚNICAMENTE con la definición ajustada como objeto JSON con \"title\", \"sql\", \"columns\", \"totals\". Si el feedback no cambia el SQL, repítelo idéntico. Si el SQL contiene un parámetro con nombre que no sea :desde o :hasta (como :agrupar), quítalo y usa un literal o una fórmula en su lugar: el motor solo resuelve :desde y :hasta. Sin markdown, sin vallado de código.",
 		req.Request, string(req.Definition))
 	def, name, desc, preview, pErr := s.iaPreviewDefinition(sess, instruction)
 	if pErr != nil {
@@ -901,7 +901,7 @@ func (s *Server) reportTemplateAIRefineStream(w http.ResponseWriter, r *http.Req
 	}
 	progress := func(msg string) { aiSSE(w, "progreso", msg) }
 	instruction := fmt.Sprintf(
-		"Ajusta la definición JSON del informe según este feedback del usuario: «%s».\n\nDEFINICIÓN PREVIA (JSON):\n%s\n\nCONTRATO DE RESPUESTA: responde ÚNICAMENTE con la definición ajustada como objeto JSON con \"title\", \"sql\", \"columns\", \"totals\". Si el feedback no cambia el SQL, repítelo idéntico. Sin markdown, sin vallado de código.",
+		"Ajusta la definición JSON del informe según este feedback del usuario: «%s».\n\nDEFINICIÓN PREVIA (JSON):\n%s\n\nCONTRATO DE RESPUESTA: responde ÚNICAMENTE con la definición ajustada como objeto JSON con \"title\", \"sql\", \"columns\", \"totals\". Si el feedback no cambia el SQL, repítelo idéntico. Si el SQL contiene un parámetro con nombre que no sea :desde o :hasta (como :agrupar), quítalo y usa un literal o una fórmula en su lugar: el motor solo resuelve :desde y :hasta. Sin markdown, sin vallado de código.",
 		req.Request, string(req.Definition))
 	def, name, desc, preview, pErr := s.iaPreviewDefinition(sess, instruction, progress)
 	if pErr != nil {

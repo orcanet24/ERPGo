@@ -276,6 +276,35 @@ func TestParametrosDesdeHastaSeSustituyen(t *testing.T) {
 	}
 }
 
+// TestElGuardianRechazaParametrosNoSoportados: reproduce el fallo del asistente
+// de IA con el informe de ventas por período. El modelo generó un SQL con
+// `:agrupar` (para elegir día/semana/mes/trimestre/año en un CASE). El motor
+// solo resuelve :desde y :hasta; :agrupar llegaba literal a MySQL y la base
+// contestaba «Error 1064 ... near ':agrupar'», perdiendo la corrida completa.
+// El guardián debe rechazarlo ANTES de llegar a la base, con un error que el
+// agente pueda entender y corregir.
+func TestElGuardianRechazaParametrosNoSoportados(t *testing.T) {
+	// Caso del informe: CASE con :agrupar.
+	sqlConAgrupar := "SELECT CASE :agrupar WHEN 'dia' THEN DATE_FORMAT(fecha,'%Y-%m-%d') END AS periodo FROM ventas"
+	if _, err := aiValidateSQLSelect(sqlConAgrupar, aiHardMaxRows); err == nil {
+		t.Fatal("un :agrupar debe ser rechazado por el guardián (el motor no lo resuelve)")
+	}
+	// Un :cliente tampoco está soportado.
+	if _, err := aiValidateSQLSelect("SELECT * FROM ventas WHERE cliente_id = :cliente", aiHardMaxRows); err == nil {
+		t.Fatal("un :cliente debe ser rechazado por el guardián")
+	}
+	// Los parámetros soportados siguen pasando.
+	for _, ok := range []string{
+		"SELECT * FROM ventas WHERE fecha BETWEEN :desde AND :hasta",
+		"SELECT DATE_FORMAT(fecha, '%Y-%m') AS mes FROM ventas",
+		"SELECT * FROM ventas WHERE nota = 'pago: completado'", // : dentro de un literal NO cuenta
+	} {
+		if _, err := aiValidateSQLSelect(ok, aiHardMaxRows); err != nil {
+			t.Errorf("SQL válido rechazado: %v\nSQL: %s", err, ok)
+		}
+	}
+}
+
 // TestTotalsNoDependenDeOrdenColumns: reproduce el bug del usuario en el que
 // el agente reordena columns respecto a los aliases del SELECT (ej: declara
 // "mes" antes que "trimestre" pero el SELECT devuelve "trimestre" antes que

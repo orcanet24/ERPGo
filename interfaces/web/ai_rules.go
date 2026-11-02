@@ -233,6 +233,28 @@ func aiStripSQLCommentsAndLiterals(sql string) string {
 	return s
 }
 
+// aiParamPattern captura un parámetro con nombre en el SQL limpio.
+var aiParamPattern = regexp.MustCompile(`:[a-z_]+`)
+
+// aiParamsNoSoportados devuelve los :param del SQL que NO sean :desde o
+// :hasta. Recibe el SQL ya limpiado de literales y comentarios (stripped),
+// para que un ':algo' dentro de un string no cuente como parámetro.
+func aiParamsNoSoportados(stripped string) []string {
+	matches := aiParamPattern.FindAllString(strings.ToLower(stripped), -1)
+	var malos []string
+	vistos := map[string]bool{}
+	for _, m := range matches {
+		if m == ":desde" || m == ":hasta" {
+			continue
+		}
+		if !vistos[m] {
+			vistos[m] = true
+			malos = append(malos, m)
+		}
+	}
+	return malos
+}
+
 // aiValidateSQLSelect aplica el guardián a un SELECT generado por el modelo.
 // Devuelve el SQL saneado (con límite forzado) o un error explicativo.
 func aiValidateSQLSelect(raw string, maxRows int) (string, error) {
@@ -266,6 +288,15 @@ func aiValidateSQLSelect(raw string, maxRows int) (string, error) {
 	}
 	if strings.Contains(low, "into") && (strings.Contains(low, "table") || strings.Contains(low, "outfile") || strings.Contains(low, "dumpfile")) {
 		return "", fmt.Errorf("sentencia no permitida para agentes de solo lectura")
+	}
+	// Parámetros con nombre: el motor de informes SOLO resuelve :desde y
+	// :hasta (substituteReportParams). Un :agrupar, :cliente, etc. llega
+	// literal a MySQL, que falla con «Error 1064 ... near ':agrupar'» y la
+	// IA pierde la corrida sin saber por qué. Rechazarlo aquí da un error
+	// claro en el preview y el agente lo corrige en el siguiente paso.
+	if malos := aiParamsNoSoportados(stripped); len(malos) > 0 {
+		return "", fmt.Errorf("parámetro no soportado %s: el motor de informes solo permite :desde y :hasta; quita el :param o usa un literal",
+			strings.Join(malos, ", "))
 	}
 	// LIMIT forzado.
 	if maxRows <= 0 || maxRows > aiHardMaxRows {
