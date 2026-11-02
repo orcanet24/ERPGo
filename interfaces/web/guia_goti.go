@@ -259,47 +259,130 @@ func ensureGuiaTables(db *sql.DB) error {
 		return fmt.Errorf("no se pudieron crear las tablas de GOti: %w", err)
 	}
 
-	// Siembra idempotente del contenido. Se borra lo sembrado de cada tour antes
-	// de volver a insertar, para que el texto se pueda actualizar sin romper el
-	// progreso (guia_progreso va por paso_id y no se toca aquí). DELETE+INSERT
-	// es portable en MySQL y en SQLite, que no entiende ON DUPLICATE KEY.
+	// Siembra IDEMPOTENTE con ids ESTABLES de los pasos.
+	//
+	// POR QUÉ NO DELETE+INSERT como antes: el DELETE borraba los pasos y el
+	// INSERT los re-creaba con ids AUTO_INCREMENT nuevos en cada arranque del
+	// proceso. guia_progreso va por paso_id (sin FK), así que el progreso
+	// quedaba referido a ids que ya no existen: cada reinicio del ERP
+	// RESETEABA el tour de todos los usuarios. Ahora el paso existente recibe
+	// UPDATE y conserva su id — el identificador duradero de un paso es su
+	// (tour_id, orden) —, solo nacen los pasos que falten y se retiran los que
+	// la semilla ya no declara (con el progreso que les quedó huérfano). El
+	// contenido se puede seguir actualizando sin tocar el progreso: guia_paso
+	// guarda el TEXTO, guia_progreso guarda el estado, y nunca se cruzan.
 	for _, t := range guiToursDemo {
 		var tourID int64
 		err := db.QueryRow(`SELECT id FROM guia_tour WHERE code = ?`, t.Code).Scan(&tourID)
-		if err == nil {
-			_, _ = db.Exec(`DELETE FROM guia_paso WHERE tour_id = ?`, tourID)
-			_, _ = db.Exec(`DELETE FROM guia_tour WHERE code = ?`, t.Code)
-		}
-		res, err := db.Exec(`INSERT INTO guia_tour (code, label, rol, status)
-			VALUES (?, ?, ?, 1)`, t.Code, t.Label, t.Rol)
-		if err != nil {
+		switch {
+		case err == sql.ErrNoRows:
+			res, err := db.Exec(`INSERT INTO guia_tour (code, label, rol, status)
+				VALUES (?, ?, ?, 1)`, t.Code, t.Label, t.Rol)
+			if err != nil {
+				return err
+			}
+			tourID, _ = res.LastInsertId()
+		case err != nil:
 			return err
-		}
-		tourID, _ = res.LastInsertId()
-
-		for _, p := range t.Pasos {
-			depends := sql.NullInt64{}
-			if p.DependsOnOrden > 0 {
-				var depID int64
-				if e := db.QueryRow(`SELECT id FROM guia_paso WHERE tour_id = ? AND orden = ?`, tourID, p.DependsOnOrden).Scan(&depID); e == nil {
-					depends = sql.NullInt64{Int64: depID, Valid: true}
-				}
-			}
-			check := sql.NullString{}
-			if p.CheckSQL != "" {
-				check = sql.NullString{String: p.CheckSQL, Valid: true}
-			}
-			checkMsg := sql.NullString{}
-			if p.CheckMsg != "" {
-				checkMsg = sql.NullString{String: p.CheckMsg, Valid: true}
-			}
-			if _, err := db.Exec(`INSERT INTO guia_paso
-				(tour_id, orden, url, selector, titulo, mensaje, depends_on, check_sql, check_msg)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				tourID, p.Orden, p.Url, p.Selector, p.Titulo, p.Mensaje, depends, check, checkMsg); err != nil {
+		default:
+			if _, err := db.Exec(`UPDATE guia_tour SET label = ?, rol = ? WHERE id = ?`, t.Label, t.Rol, tourID); err != nil {
 				return err
 			}
 		}
+
+		// La semilla declara los pasos CON su dependiente después del paso
+		// del que depende, así que al procesar en orden el paso previo ya
+		// existe (creado o conservado) cuando se resuelve depends_on.
+		seedOrden := map[int]bool{}
+		for _, p := range t.Pasos {
+			seedOrden[p.Orden] = true
+			var pasoID int64
+			err := db.QueryRow(`SELECT id FROM guia_paso WHERE tour_id = ? AND orden = ?`, tourID, p.Orden).Scan(&pasoID)
+			switch {
+			case err == sql.ErrNoRows:
+				// Nace por primera vez: igual que siempre, resolviendo la
+				// dependencia contra el paso previo ya sembrado.
+				depends := sql.NullInt64{}
+				if p.DependsOnOrden > 0 {
+					var depID int64
+					if e := db.QueryRow(`SELECT id FROM guia_paso WHERE tour_id = ? AND orden = ?`, tourID, p.DependsOnOrden).Scan(&depID); e == nil {
+						depends = sql.NullInt64{Int64: depID, Valid: true}
+					}
+				}
+				check := sql.NullString{}
+				if p.CheckSQL != "" {
+					check = sql.NullString{String: p.CheckSQL, Valid: true}
+				}
+				checkMsg := sql.NullString{}
+				if p.CheckMsg != "" {
+					checkMsg = sql.NullString{String: p.CheckMsg, Valid: true}
+				}
+				res, err := db.Exec(`INSERT INTO guia_paso
+					(tour_id, orden, url, selector, titulo, mensaje, depends_on, check_sql, check_msg)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					tourID, p.Orden, p.Url, p.Selector, p.Titulo, p.Mensaje, depends, check, checkMsg)
+				if err != nil {
+					return err
+				}
+				pasoID, _ = res.LastInsertId()
+			case err != nil:
+				return err
+			default:
+				// Conserva su id, actualizo solo el contenido.
+				dependsOn := sql.NullInt64{}
+				if p.DependsOnOrden > 0 {
+					var depID int64
+					if e := db.QueryRow(`SELECT id FROM guia_paso WHERE tour_id = ? AND orden = ?`, tourID, p.DependsOnOrden).Scan(&depID); e == nil {
+						dependsOn = sql.NullInt64{Int64: depID, Valid: true}
+					}
+				}
+				check := sql.NullString{}
+				if p.CheckSQL != "" {
+					check = sql.NullString{String: p.CheckSQL, Valid: true}
+				}
+				checkMsg := sql.NullString{}
+				if p.CheckMsg != "" {
+					checkMsg = sql.NullString{String: p.CheckMsg, Valid: true}
+				}
+				if _, err := db.Exec(`UPDATE guia_paso SET url = ?, selector = ?, titulo = ?, mensaje = ?, depends_on = ?, check_sql = ?, check_msg = ?
+					WHERE id = ?`,
+					p.Url, p.Selector, p.Titulo, p.Mensaje, dependsOn, check, checkMsg, pasoID); err != nil {
+					return err
+				}
+			}
+		}
+
+		// Retirar los pasos de ESTE tour que la semilla ya no declara, y el
+		// progreso que les quedó huérfano tras el cambio de semilla.
+		rows, err := db.Query(`SELECT id, orden FROM guia_paso WHERE tour_id = ?`, tourID)
+		if err != nil {
+			return err
+		}
+		var retirar []int64
+		for rows.Next() {
+			var id, orden int64
+			if err := rows.Scan(&id, &orden); err == nil && !seedOrden[int(orden)] {
+				retirar = append(retirar, id)
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, id := range retirar {
+			if _, err := db.Exec(`DELETE FROM guia_progreso WHERE paso_id = ?`, id); err != nil {
+				return err
+			}
+			if _, err := db.Exec(`DELETE FROM guia_paso WHERE id = ?`, id); err != nil {
+				return err
+			}
+		}
+	}
+	// Barrido de progreso huérfano HISTÓRICO: bases ya instaladas cuyo guia_progreso
+	// quedó referido a pasos borrados por el DELETE+INSERT de versiones anteriores
+	// (ids que ya no vuelven a existir nunca). Cubre a todos los tours de golpe.
+	if _, err := db.Exec(`DELETE FROM guia_progreso WHERE paso_id NOT IN (SELECT id FROM guia_paso)`); err != nil {
+		return err
 	}
 	return nil
 }
@@ -347,9 +430,13 @@ func (s *Server) guiaActive(w http.ResponseWriter, r *http.Request) {
 		guiaTabla_mu.Unlock()
 	}
 
-	// Tours activos según rol del usuario.
-	rolQuery := "*"
-	rows, err := db.Query(`SELECT id, code, label FROM guia_tour WHERE status = 1 AND rol IN ('*', ?) ORDER BY id`, rolQuery)
+	// Tours activos según el ROL REAL del usuario. El parámetro que viaja es el
+	// rol de la sesión; antes la query pasaba a sí misma el literal '*' como
+	// único argumento (rol IN ('*', '*')) y el UserLevel de la sesión nunca
+	// participaba: cualquier tour activo le salía a todo el mundo pase el
+	// permiso que tuviera. rol='*' sigue siendo el comodín para todos.
+	rolUsuario := strings.TrimSpace(sess.UserLevel)
+	rows, err := db.Query(`SELECT id, code, label FROM guia_tour WHERE status = 1 AND rol IN ('*', ?) ORDER BY id`, rolUsuario)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -419,13 +506,22 @@ func (s *Server) guiaPasosDelTour(db *sql.DB, tourID int64, userID string) ([]ma
 	return pasos, rows.Err()
 }
 
-// guiaPasoActual: el primer paso no done/skip (o ” si el tour terminó).
+// guiaPasoActual: el primer paso no done/skipped/hidden (o 0 si el tour ya no
+// tiene nada que mostrar).
+//
+// HIDDEN TAMBIÉN SE SALTA, y es la segunda mitad del arreglo “No volver a
+// mostrar”: antes el paso marcado hidden seguía siendo el “actual” — salta a
+// este paso en cada recarga, con el tour estancado en él y el globo reapareciendo
+// — porque done/skipped eran los únicos dos estados que avanzaban.
 func (s *Server) guiaPasoActual(pasos []map[string]interface{}) int64 {
 	for _, p := range pasos {
 		if b, _ := p["done"].(bool); b {
 			continue
 		}
 		if b, _ := p["skipped"].(bool); b {
+			continue
+		}
+		if b, _ := p["hidden"].(bool); b {
 			continue
 		}
 		return toInt(p["id"])
@@ -552,7 +648,7 @@ func (s *Server) guiaEjecutarCheck(db *sql.DB, checkSQL string) (bool, string) {
 	}
 	var valor int
 	if err := db.QueryRow(sqlLimpio).Scan(&valor); err != nil {
-		return false, "El check de GOti esta fallo: consulta inválida"
+		return false, "El check de GOti falló al ejecutar: consulta inválida"
 	}
 	if valor > 0 {
 		return true, ""

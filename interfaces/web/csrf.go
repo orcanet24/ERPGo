@@ -107,17 +107,12 @@ func (s *Server) enforceCSRF(w http.ResponseWriter, r *http.Request, next http.H
 		next.ServeHTTP(w, r)
 		return
 	}
-	// /guia/: instructor demo. Sólo carga en empresa demo (GuiDemo, en el
-	// render) y sólo el JS de la app lo llama (goti.js lee la cookie CSRF).
-	// Se exime por robustez: si el token no viaja (p.ej. fetch nativo en vez
-	// de ERPGo.csrfFetch), el POST sigue funcionando. El daño posible está
-	// limitado a marcar progreso de un tour demo (guia_progreso), NADA de
-	// datos contables. El permissionMiddleware sigue validando sesión y acceso
-	// a la empresa: no es una puerta abierta.
-	if strings.HasPrefix(r.URL.Path, "/guia/") {
-		next.ServeHTTP(w, r)
-		return
-	}
+	// /guia/ YA NO está exento: es la misma regla que cualquier mutación de
+	// la app. El motivo por el que se eximió era un caso que ya no existe:
+	// goti.js usa ERPGo.csrfFetch desde el primer día y adjunta el token en
+	// el POST /guia/progress. Que la exención fuera barata aquí (solo cambiaba
+	// el progreso del tour demo) es exactamente el camino a una exención
+	// «barata» donde ya no lo es: la protección se aplica uniforme.
 	if sess == nil {
 		// Todavía no hay sesión: no hay nada que falsificar. El login es el
 		// caso legítimo.

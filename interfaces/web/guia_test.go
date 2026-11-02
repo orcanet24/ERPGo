@@ -5,6 +5,7 @@ package web
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -34,13 +35,24 @@ func baseGuia(t *testing.T) (*Server, *sql.DB) {
 
 	// Pre-crea las tablas de GOti con DDL SQLite-compatible. Las pruebas usan
 	// SQLite; en producción son MySQL. guiaDDLSentencias detecta el dialecto y
-	// AplicarEsquema tolera que las tablas ya existan. El semillado (DELETE+INSERT)
-	// sigue ejecutándose en ensureGuiaTables, así que los tours quedan poblados.
+	// AplicarEsquema tolera que las tablas ya existan.
 	for _, q := range guiaDDLForTest() {
 		if _, err := db.Exec(q); err != nil {
 			t.Fatal(err)
 		}
 	}
+
+	// La caché de tenantEsDemo y el marcador guiaTablaOk son GLOBALES al
+	// proceso de pruebas: otro test del paquete (o el test GOti anterior)
+	// pudo haber grabado default→no-demo, o default→tablas-ya-preparadas con
+	// SU base; entonces el test actual recibiría {"active":false} o una base
+	// sin sembrar. Cada test de GOti arranca con ambos registros limpios.
+	guiaDemoCacheMu.Lock()
+	delete(guiaDemoCache, "default")
+	guiaDemoCacheMu.Unlock()
+	guiaTabla_mu.Lock()
+	delete(guiaTablaOk, "default")
+	guiaTabla_mu.Unlock()
 
 	return s, db
 }
@@ -136,48 +148,137 @@ func TestGuiaDDLUsaDialectoCorrecto(t *testing.T) {
 	}
 }
 
-// TestGuiaProgressNoEsBloqueadoPorCSRF: GOti solo carga en empresa demo y su
-// JS (goti.js) no siempre adjunta el token CSRF. EnforceCSRF exime /guia/ para
-// que el POST /guia/progress no caiga en 403 "Token de seguridad inválido".
-func TestGuiaProgressNoEsBloqueadoPorCSRF(t *testing.T) {
+// TestGuiaProgressExigeTokenCSRF: /guia/ ya NO está exento del CSRF. El
+// POST /guia/progress cambia estado (guia_progreso) y se pide igual que
+// cualquier mutación de la app; goti.js lo manda correctamente vía
+// ERPGo.csrfFetch, así que la exención histórica solo quitaba protección.
+func TestGuiaProgressExigeTokenCSRF(t *testing.T) {
+	s := &Server{}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Con sesión y token en ella, POST /guia/progress SIN la cabecera → 403.
+	req := httptest.NewRequest(http.MethodPost, "/guia/progress", nil)
+	res := httptest.NewRecorder()
+	s.enforceCSRF(res, req, next, &SessionData{CSRFToken: "token-de-sesion"})
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("/guia/progress sin token debe dar 403; dio %d: %s", res.Code, res.Body.String())
+	}
+
+	// Con la cabecera correcta pasa: es el camino de goti.js + csrfFetch.
+	reqOK := httptest.NewRequest(http.MethodPost, "/guia/progress", nil)
+	reqOK.Header.Set(csrfHeader, "token-de-sesion")
+	resOK := httptest.NewRecorder()
+	s.enforceCSRF(resOK, reqOK, next, &SessionData{CSRFToken: "token-de-sesion"})
+	if resOK.Code != http.StatusOK {
+		t.Fatalf("/guia/progress con el token de la sesión debe pasar; dio %d: %s", resOK.Code, resOK.Body.String())
+	}
+
+	// Y un token INCORRECTO también cae: la comparación es contra el de la sesión.
+	reqMal := httptest.NewRequest(http.MethodPost, "/guia/progress", nil)
+	reqMal.Header.Set(csrfHeader, "otro-valor")
+	resMal := httptest.NewRecorder()
+	s.enforceCSRF(resMal, reqMal, next, &SessionData{CSRFToken: "token-de-sesion"})
+	if resMal.Code != http.StatusForbidden {
+		t.Fatalf("/guia/progress con token ajeno debe dar 403; dio %d", resMal.Code)
+	}
+}
+
+// TestGuiaProgresoSuperviveReinicio: el ciclo completo de progreso de un
+// usuario del tour, con el RE-SEMBRADO en medio (lo que cada reinicio del
+// ERP hace contra la misma base). El defecto que originó este test: el
+// DELETE+INSERT de la siembra re-creaba los pasos con ids nuevos y el
+// progreso — que va por paso_id — quedaba huérfano: el usuario arrancaba de
+// cero en cada reinicio del servidor.
+func TestGuiaProgresoSuperviveReinicio(t *testing.T) {
 	s, db := baseGuia(t)
 	sess := &SessionData{UserID: "7", Username: "usuario", UserLevel: "admin"}
 
-	// POST /guia/progress SIN token CSRF: enforCSRF lo exime, llega al handler.
-	// El handler valida sess y tenantEsDemo, así que no se cae en 403 de CSRF.
-	req := httptest.NewRequest(http.MethodPost, "/guia/progress", nil)
-	req = withScope(req, &scope{tenant: "default", db: db, sess: sess})
-	res := httptest.NewRecorder()
-	s.guiaProgress(res, req)
-
-	// No debe ser 403 de CSRF (token inválido). El action vacío → 400, no 403.
-	if res.Code == http.StatusForbidden {
-		t.Fatalf("/guia/progress no debe dar 403 (CSRF bloqueado): %s", res.Body.String())
+	// (0) GET inicial: el tour arranca en el paso 1.
+	idsDe := func(pasos []map[string]interface{}) map[int]int64 {
+		m := map[int]int64{}
+		for _, p := range pasos {
+			m[int(toInt(p["orden"]))] = toInt(p["id"])
+		}
+		return m
+	}
+	resp := func() (map[string]interface{}, map[int]int64) {
+		req := httptest.NewRequest(http.MethodGet, "/guia/active", nil)
+		req = withScope(req, &scope{tenant: "default", db: db, sess: sess})
+		res := httptest.NewRecorder()
+		s.guiaActive(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("guia/active respondió %d: %s", res.Code, res.Body.String())
+		}
+		raw := map[string]interface{}{}
+		if err := json.Unmarshal(res.Body.Bytes(), &raw); err != nil {
+			t.Fatal(err)
+		}
+		if raw["active"] != true {
+			t.Fatalf("guia/active no activo: %s", res.Body.String())
+		}
+		pasos, _ := raw["pasos"].([]interface{})
+		normalizada := []map[string]interface{}{}
+		for _, p := range pasos {
+			normalizada = append(normalizada, p.(map[string]interface{}))
+		}
+		return raw, idsDe(normalizada)
+	}
+	progresa := func(pasoID int64, accion string) {
+		t.Helper()
+		cuerpo := fmt.Sprintf(`{"paso_id":%d,"action":"%s"}`, pasoID, accion)
+		req := httptest.NewRequest(http.MethodPost, "/guia/progress", strings.NewReader(cuerpo))
+		req = withScope(req, &scope{tenant: "default", db: db, sess: sess})
+		res := httptest.NewRecorder()
+		s.guiaProgress(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("guia/progress %s del paso %d dio %d: %s", accion, pasoID, res.Code, res.Body.String())
+		}
 	}
 
-	// Verificar directamente que enforCSRF exime /guia/
-	sinSess := &Server{}
-	req2 := httptest.NewRequest(http.MethodPost, "/guia/progress", nil)
-	res2 := httptest.NewRecorder()
-	// enforceCSRF con sess nil: normalmente exime (login) → next.
-	// Pero con sess nil, caería en redirect de authMiddleware, no en 403 de CSRF.
-	// La exención /guia/ significa que ni siquiera se valida el token:
-	sinSess.enforceCSRF(res2, req2, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}), nil)
-	if res2.Code != http.StatusOK {
-		t.Fatalf("enforceCSRF debe eximir /guia/ (200 esperado); dio %d", res2.Code)
+	_, ids1 := resp()
+	if len(ids1) != 6 {
+		t.Fatalf("el tour sembrado debe tener 6 pasos; tiene %d", len(ids1))
+	}
+	// (1) El usuario marca skip el paso 1, oculta el 2 y hecho el 3.
+	progresa(ids1[1], "skip")
+	progresa(ids1[2], "hide")
+	progresa(ids1[3], "done")
+	// El actual ya es el paso 4: skip del 1, hidden del 2 (¡también avanza!) y
+	// done del 3. Este es el primer punto de verificación del ciclo.
+	if raw, _ := resp(); toInt(raw["actual_id"]) != ids1[4] {
+		t.Fatalf("antes del re-sembrado el actual debe ser el paso 4 (%d); dio %v", ids1[4], raw["actual_id"])
+	}
+	// (2) Re-sembrado: es exactamente lo que hace el arranque del proceso con
+	// la misma base. El cache del proceso se limpia para forzar el camino.
+	guiaTabla_mu.Lock()
+	delete(guiaTablaOk, "default")
+	guiaTabla_mu.Unlock()
+	if err := ensureGuiaTables(db); err != nil {
+		t.Fatalf("re-sembrado: %v", err)
 	}
 
-	// Una ruta NO exenta con POST y sess nil también exime (porque sess es nil),
-	// así que probamos con sess NO nil para confirmar que /guia/ sí exime:
-	sConSess := &Server{}
-	req3 := httptest.NewRequest(http.MethodPost, "/guia/progress", nil)
-	res3 := httptest.NewRecorder()
-	sConSess.enforceCSRF(res3, req3, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}), &SessionData{CSRFToken: "token"})
-	if res3.Code != http.StatusOK {
-		t.Fatalf("enforceCSRF debe eximir /guia/ incluso con sess y token; dio %d: %s", res3.Code, res3.Body.String())
+	// (3) Los ids SE CONSERVAN: el progreso quedó referido a los mismos pasos.
+	_, ids2 := resp()
+	for orden, id1 := range ids1 {
+		if ids2[orden] != id1 {
+			t.Fatalf("el paso de orden %d cambió de id tras el re-sembrado: %d → %d", orden, id1, ids2[orden])
+		}
+	}
+
+	// (4) Y el estado sobrevive: el actual ahora es el paso 4 (el 1 va skip, el
+	// 2 hidden — ¡también avanza! — y el 3 done).
+	raw, _ := resp()
+	if actual := toInt(raw["actual_id"]); actual != ids2[4] {
+		t.Fatalf("después de skip+hide+done el actual debe ser el paso de orden 4 (%d); dio %d", ids2[4], actual)
+	}
+
+	// (5) El paso con check (orden 5) refusa done sin la factura de respaldo: la
+	// verificación determinista corre y sin datos no pasa, así que no se marca.
+	progresa(ids2[5], "done")
+	raw, _ = resp()
+	if actual := toInt(raw["actual_id"]); actual != ids2[4] {
+		t.Fatalf("el done sin check pasado no debe avanzar el paso (actual sigue en el 4); dio %d", actual)
 	}
 }
