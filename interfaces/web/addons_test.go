@@ -161,6 +161,7 @@ const manifiestoHola = `{
 
 func hostDeAddon(t *testing.T, dir string) (*Server, *addonHost) {
 	t.Helper()
+	t.Cleanup(stopOrchestrators)
 	s, db := basePrueba(t)
 	if _, err := db.Exec(`CREATE TABLE modules (id TEXT PRIMARY KEY, name TEXT, version TEXT,
 		description TEXT, is_core INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1, path TEXT,

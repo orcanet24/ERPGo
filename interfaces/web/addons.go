@@ -37,6 +37,7 @@ import (
 	"encoding/json"
 	"erpgo/infrastructure/persistence"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -1121,15 +1122,25 @@ func (p *addonProc) buscarBinario() string {
 	nombre := "erp-addon-" + p.manifiesto.ID
 	var candidatos []string
 	if runtime.GOOS == "windows" {
-		candidatos = []string{nombre + ".exe"}
+		candidatos = []string{nombre + ".exe", nombre}
 	} else {
 		candidatos = []string{nombre, nombre + ".exe"}
 	}
 	for _, c := range candidatos {
 		completo := filepath.Join(p.dir, c)
-		if st, err := os.Stat(completo); err == nil && st.Mode()&0111 != 0 {
-			return completo
+		st, err := os.Stat(completo)
+		if err != nil || !st.Mode().IsRegular() {
+			continue
 		}
+		// El bit de ejecución (0111) solo existe en POSIX: Windows no lo
+		// reporta — os.Stat devuelve 0666 para todo archivo regular — y con esa
+		// prueba NINGÚN binario pasaba en Windows: siempre «sin binario». Allá
+		// un archivo regular con el nombre del binario es tan lanzable como su
+		// par .exe; la prueba de ejecutabilidad se queda donde significa algo.
+		if runtime.GOOS != "windows" && st.Mode()&0111 == 0 {
+			continue
+		}
+		return completo
 	}
 	return ""
 }
@@ -1258,15 +1269,48 @@ func (h *addonHost) resolverLectura(p *addonProc) []string {
 
 // lanzarReal ejecuta el binario como proceso hijo con su logging etiquetado.
 func (h *addonHost) lanzarReal(p *addonProc, binario string, env []string) error {
-	cmd := exec.Command(binario)
-	cmd.Env = env
-	cmd.Dir = p.dir
-	logW := log.New(os.Stderr, "[addon:"+p.manifiesto.ID+"] ", 0)
-	cmd.Stdout = logW.Writer()
-	cmd.Stderr = logW.Writer()
-	if err := cmd.Start(); err != nil {
+	// Sin exec.Cmd{Path...} ni su Start: en Windows ese camino SIEMPRE pasa de
+	// nuevo por lookExtensions (exec/exec.go, Start de cualquier Cmd, directo o
+	// no) y descarta un PE sin extensión .exe, aunque CreateProcess — que es lo
+	// que CreateProcessW resuelve por sí solo — sí lo corre (probado: os.StartProcess
+	// de un binario sin .exe salió exit 0). buscarBinario ya verificó qué
+	// archivo se lanza: se arranca directo del sistema y se envuelve en un Cmd
+	// pelado solo para conservar p.cmd.Process tal como lo usan el supervisor y
+	// los handlers (Kill / chequeo nil).
+	lecR, lecW, err := os.Pipe()
+	if err != nil {
 		return err
 	}
+	nulo, err := os.Open(os.DevNull)
+	if err != nil {
+		_ = lecR.Close()
+		_ = lecW.Close()
+		return err
+	}
+	defer nulo.Close()
+
+	proc, err := os.StartProcess(binario, []string{binario}, &os.ProcAttr{
+		Dir:   p.dir,
+		Env:   env,
+		Files: []*os.File{nulo, lecW, lecW},
+	})
+	// El lado de escritura del registro vive en el hijo: se cierra aqui,
+	// corra o no, porque el lector es quien lo seguirá.
+	_ = lecW.Close()
+	if err != nil {
+		_ = lecR.Close()
+		return err
+	}
+
+	logW := log.New(os.Stderr, "[addon:"+p.manifiesto.ID+"] ", 0)
+	go func() {
+		_, _ = io.Copy(logW.Writer(), lecR)
+		_ = lecR.Close()
+	}()
+
+	// El contrato del host es p.cmd *exec.Cmd: se monta con el proceso ya
+	// vivo y aquí Start jamás se llama, solo Process.Kill.
+	cmd := &exec.Cmd{Process: proc, Path: binario, Args: []string{binario}}
 	p.cmd = cmd
 	go func(c *exec.Cmd) {
 		// Cerrando el host, se mata al hijo: nunca quedan addons huérfanos
