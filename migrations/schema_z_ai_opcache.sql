@@ -36,6 +36,14 @@ ALTER TABLE `ai_providers` ADD COLUMN IF NOT EXISTS `op_cache` TINYINT NOT NULL 
 -- pattern:       JSON con la parte FIJA que la IA decidió (cuentas, tasas,
 --                formato de líneas, formato de descripción).
 -- var_schema:    JSON con los nombres de los campos que VARÍAN y deben pedirse.
+--                SIN DEFAULT: MySQL 8 rechaza un literal DEFAULT sobre
+--                MEDIUMTEXT/BLOB (Error 1101 "BLOB, TEXT ... can't have a
+--                default value") y con él la tabla entera no se creaba nunca
+--                en una instalación MySQL. El valor por omisión no protegía
+--                nada: el escritor (ai_op_cache.go, aiOpTemplatePut) SIEMPRE
+--                inserta var_schema explícito (json.Marshal de un slice no-nil,
+--                al menos "[]") y el lector ya tolera cualquier contenido
+--                vacío.
 -- usos:          cuántas veces se ha reutilizado (para LRU y para estadística).
 -- needs_human:   1 los primeros usos (revisión obligatoria), 0 cuando ya validada.
 -- last_usado_en: para el TTL de expiración (90 días sin uso → basura).
@@ -46,7 +54,7 @@ CREATE TABLE IF NOT EXISTS `ai_op_template` (
   `operation`     VARCHAR(64) NOT NULL,
   `template_key`  VARCHAR(191) NOT NULL,
   `pattern`       MEDIUMTEXT NOT NULL,              -- JSON: parte FIJA que la IA decidió
-  `var_schema`    MEDIUMTEXT NOT NULL DEFAULT '[]', -- JSON: campos que VARÍAN
+  `var_schema`    MEDIUMTEXT NOT NULL,              -- JSON: campos que VARÍAN (sin DEFAULT; ver comentario de arriba)
   `usos`          INT NOT NULL DEFAULT 0,
   `needs_human`   TINYINT NOT NULL DEFAULT 1,
   `creado_en`     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
