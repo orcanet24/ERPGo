@@ -18,3 +18,15 @@ logs/
 !/doc/seguimiento-auditoria-tecnica-2026-10-29.md
 
 server.exe
+
+# Binario del ERP compilado localmente (build.bat): nunca al repositorio
+erpgo.exe
+erpgo.exe~
+
+# Binario de addons compilados para pruebas locales
+addons/*/erp-addon-*.exe
+
+# Carpetas de ejecucion en vivo: logs, bases de la prueba e2e y capturas de pantalla
+.e2e/
+screenshots/
+data/escrituras/
