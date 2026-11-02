@@ -233,10 +233,118 @@ con el token efímero del arranque. Son dos canales distintos:
     (`__master` para el super administrador).
 
 **Firma del manifiesto (fase 3).** El manifiesto lleva una firma ed25519
-verificada contra una clave pública embebida en el binario. Sin firma válida
-no arranca en producción; en desarrollo se permite con `ADDONS_UNSIGNED=dev`
-y la pantalla Módulos lo muestra como «sin verificar». El modo seguro de
-`scripts/build.sh` compila la clave pública de producción dentro del binario.
+verificada contra la clave pública del dueño, guardada en `addons/pubkey.ed25519`
+(hex) y leída por el núcleo en el arranque. Con clave configurada, un addon sin
+`manifest.sig` no carga salvo en modo de desarrollo (`ADDONS_UNSIGNED=1`, marca
+«sin verificar»); una firma PRESENTE e inválida no carga en ningún modo. El
+ciclo completo — generar la pareja, firmar, rotar la clave y el modo sin firma
+— está en §4.1. Nadie compila la clave dentro del binario: la frontera la lee
+del disco en cada arranque, así que cambiarla no exige recompilar el ERP.
+
+### 4.1 El ciclo de firma: `tools/firmaraddon`, la rotación de `pubkey.ed25519` y `ADDONS_UNSIGNED`
+
+La firma se genera y se aplica con `tools/firmaraddon` (la herramienta del
+dueño) y se verifica en `interfaces/web/addons.go` con la política del
+núcleo (`addonClavePublica` y `verificarFirmaAddon`). El ciclo completo de
+una instalación:
+
+1. **Generar la pareja (una vez):**
+
+   ```sh
+   go run ./tools/firmaraddon clave
+   ```
+
+   Deja la clave PRIVADA en `firmaraddon.key` del directorio corriente
+   (hex, permiso 0600) e imprime por pantalla la pública, que es la que
+   debe acabar en `<raíz>/addons/pubkey.ed25519`. La privada es la firma
+   personal del dueño: JAMÁS al repositorio ni a la carpeta de addons
+   (ahí solo vive la pública). Si no se quiere depender de `firmaraddon.key`
+   en el directorio, las órdenes de firmar la toman de la variable de
+   entorno `FIRMARADDON_KEY`, práctica habitual para firmar desde otro
+   equipo o desde CI.
+2. **Firmar cada addon:**
+
+   ```sh
+   go run ./tools/firmaraddon firmar addons/<id>
+   ```
+
+   Firma los bytes EXACTOS del `manifest.json` de la carpeta con la privada
+   y escribe el resultado (hex) en `addons/<id>/manifest.sig`. La regla de
+   oro es firmar cuando el manifiesto ya es definitivo: si después se
+   cambia una coma del `manifest.json`, la firma deja de corresponder, el
+   núcleo rechaza el addon con «la firma NO corresponde al manifest.json
+   actual» y toca firmar de nuevo.
+3. **Verificar fuera del ERP (opcional, para el dueño):**
+
+   ```sh
+   go run ./tools/firmaraddon verificar addons/<id>
+   ```
+
+   Reproduce la MISMA política del núcleo: lee la pública del directorio
+   padre de la carpeta, exige `manifest.sig` y verifica. Sirve para saber
+   si la firma está bien antes de que el ERP lo diga; sin clave pública en
+   el disco, avisa que el núcleo correría «sin verificar», y con firma
+   mala, dice exactamente por qué.
+
+El núcleo no inventa nada aparte: en cada arranque y en cada «Re-escanear
+addons» (`addonsIniciar` / `escanear`) lee la pública de
+`addons/pubkey.ed25519` y verifica manifiesto y `manifest.sig` de cada addon.
+
+**Los tres estados de la firma, todos fail-closed** (`verificarFirmaAddon`):
+
+- **Sin `addons/pubkey.ed25519`:** no hay verificación posible y todo corre
+  «sin verificar»; el log lo avisa y el panel Módulos muestra el estado en
+  cada addon. No es un candado falso: es un estado visible y declarado.
+- **Con clave, addon sin `manifest.sig`:** no carga, salvo en modo de
+  desarrollo (`ADDONS_UNSIGNED=1`), donde carga con la marca «sin
+  verificar».
+- **Con clave y firma PRESENTE pero inválida** (el manifiesto cambió después
+  de firmar, el hex de `manifest.sig` está corrupto, la firma es de otra
+  clave): NO carga en ningún modo, tampoco con `ADDONS_UNSIGNED=1`. El
+  desarrollo perdona la AUSENCIA de firma, porque nadie está iterando con
+  el aparato de firma montado; jamás perdona el DAÑO: una firma que no
+  corresponde significa que el manifiesto se manipuló después de firmar.
+
+La política completa tiene su prueba en `TestLaFirmaDelManifiestoDecideQuienCarga`
+y la lectura de la clave del disco (lo que corre en el arranque real) en
+`TestLaClavePublicaDelDiscoDecideLaVerificacion`.
+
+**Rotación de `pubkey.ed25519`.** Cambiar de pareja (pérdida sospechada de
+la privada, cambio de responsable, caducidad) es un procedimiento de cinco
+pasos:
+
+1. Guardar la privada VIEJA en un lugar seguro fuera de la instalación: es
+   lo único que permite revertir la rotación si el juego nuevo falla.
+2. `go run ./tools/firmaraddon clave`: genera la pareja NUEVA y SOBREESCRIBE
+   `firmaraddon.key` del directorio corriente; a partir de ese momento, esa
+   carpeta firma con la nueva pareja.
+3. Sustituir `addons/pubkey.ed25519` por la pública nueva que imprimió el
+   paso 2.
+4. Re-firmar TODOS los addons con la nueva privada:
+   `go run ./tools/firmaraddon firmar addons/<id>` para cada uno. Con la
+   pública nueva, las firmas de la clave retirada pasan a ser «firma
+   inválida»; re-firmar todo es lo que deja la instalación consistente,
+   sin addons firmados por la clave que se retira.
+5. **Reiniciar el ERP.**
+
+El reinicio no es descuido: el núcleo lee `pubkey.ed25519` UNA sola vez, en
+el arranque (`addonClavePublica` desde `addonsIniciar`), y de ahí en adelante
+esa es la clave de todo el proceso. Cambiar el archivo con el ERP en pie NO
+cambia la verificación en caliente: con la clave vieja aún residente, los
+addons re-firmados con la nueva darían «firma no corresponde» y los firmados
+con la vieja seguirían pasando, un estado mezclado en la misma sesión. El
+reinicio aplica el juego completo (pública y firmas) como bloque. Revertir
+la rotación es la misma receta al revés: reponer la pública vieja, re-firmar
+con la privada vieja y reiniciar.
+
+**`ADDONS_UNSIGNED=1` es el modo SOLO de desarrollo.** La variable de entorno
+se lee al arranque junto con la clave y cambia una sola regla: con la clave
+pública configurada, un addon SIN `manifest.sig` carga marcado «sin
+verificar» en lugar de quedar fuera. Sirve para iterar un addon nuevo sin
+montar el ciclo de firma en cada cambio. No resucita firmas inválidas, no
+trata la clave ausente como presente y no cambia nada en producción: la
+instalación real del dueño va con `pubkey.ed25519` bien puesto y todos los
+addons firmados, y el log deja constancia cuando el modo está activo.
 
 ---
 
