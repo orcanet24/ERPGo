@@ -144,6 +144,57 @@ hacer y el núcleo decide si se lo concede. Sin manifiesto válido no arranca.
 5. **Apagado ordenado.** Al cerrar el ERP, el núcleo manda `POST /shutdown`
    del addon y espera hasta 5 s antes de terminar el proceso.
 
+### 3.1 Cómo compilar el binario del addon (y qué acepta el núcleo en Windows)
+
+El nombre manda: el escáner busca en la carpeta del addon un binario llamado
+`erp-addon-<id>` (así lo trae `addons/hola` del repo, con la id del
+manifiesto). Los candidatos van **primero con `.exe` y después sin
+extensión**: la instalación canónica en Windows es `erp-addon-<id>.exe`.
+
+**Compilación correcta en cada plataforma** (desde la raíz del repo):
+
+- En **Windows** (binario `.exe`, la forma normal de instalar):
+
+  ```bat
+  go build -o .\addons\hola\erp-addon-hola.exe .\addons\hola
+  ```
+
+  Nunca sueltes ahí un `go build` SIN `-o`: Go nombra el producto con el
+  nombre de la carpeta (`hola.exe`), no con el que busca la frontera
+  (`erp-addon-hola.exe`), y el escáner diría «no hay binario compilado»
+  aunque la carpeta esté llena.
+- En **Linux** (ELF, la forma normal de instalar):
+
+  ```sh
+  go build -o ./addons/hola/erp-addon-hola ./addons/hola
+  ```
+
+**Qué acepta la frontera en Windows.** La prueba de «¿esto es un binario
+lanzable?» NO consulta bits de ejecución: en Windows `os.Stat` no los reporta (los archivos regulares salen con
+`0666`), y exigirlos dejaría fuera
+TODOS los binarios, con o sin `.exe`. Por eso en Windows un archivo regular
+que lleva el nombre del binario (`erp-addon-<id>.exe` o, como candidatos
+secundarios, `erp-addon-<id>`) cuenta como lanzable; en POSIX la prueba de
+bits de ejecución sigue viva. El detalle está en `buscarBinario`
+(interfaces/web/addons.go); si no encuentra nada, el log del arranque lo
+dice con la ruta real que miró.
+
+**Lanzamiento directo de PEs sin extensión.** Aunque el SO corra el PE,
+`exec.Cmd.Start` en Windows SIEMPRE resuelve extensiones (`lookExtensions`
+del runtime, en `src/os/exec/exec.go`): un binario pelado sin `.exe` jamás
+se lanzaría por ese camino. Consecuencia probada empíricamente en este
+repo: `os.StartProcess` (CreateProcess pelado) sí corre el PE sin extensión
+(código de salida 0 con el proceso real al aire). Por eso el lanzamiento
+REAL del núcleo (`lanzarReal`) no usa `exec.Command`: arranca el proceso
+hijo con `os.StartProcess` (con el `Dir` de la carpeta del addon y el `Env`
+con token, puerto y DSN) y lo envuelve en un `*exec.Cmd` construido a mano,
+de modo que todo el contrato `p.cmd.Process` que usan el supervisor y los
+handlers siga intacto (nadie llama `Wait` a esos procesos: mueren por
+`Process.Kill` o se apagan solos). El resultado práctico: en Windows un binario compilado sin `.exe` arranca
+igual que uno con `.exe`; la forma
+recomendada sigue siendo `.exe`, pero el nombre `erp-addon-<id>` es lo que
+el escáner exige y no el sufijo.
+
 ---
 
 ## 4. Seguridad: cómo conversan addon y núcleo

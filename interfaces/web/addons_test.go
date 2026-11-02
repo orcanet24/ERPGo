@@ -1105,6 +1105,106 @@ func TestLaFirmaDelManifiestoDecideQuienCarga(t *testing.T) {
 	}
 }
 
+// TestLaClavePublicaDelDiscoDecideLaVerificacion es la pieza de la firma fase
+// 3 que las demás pruebas no tocan: todas montan h.clavePub a mano, pero el
+// ARRANQUE de un ERP real (Windows incluido) la lee del disco con
+// addonClavePublica. Aquí se prueba tal como llega del disco, con su política
+// fail-closed: una clave mal puesta no se interpreta, y sin clave todo corre
+// «sin verificar» — el panel lo dice, jamás una verificación falsa.
+func TestLaClavePublicaDelDiscoDecideLaVerificacion(t *testing.T) {
+	// a) Clave bien puesta en el disco: se lee, y con ella una firma buena da
+	// «verificada» — el camino completo del arranque real.
+	raiz := addonDirPrueba(t, manifiestoHola)
+	pub, priv := parejaDePrueba(t, raiz) // deja la PÚBLICA en la raíz
+	leida, ok := addonClavePublica(raiz)
+	if !ok || !leida.Equal(pub) {
+		t.Fatalf("la clave bien puesta debía leerse del disco; ok=%v", ok)
+	}
+	contenido, err := os.ReadFile(filepath.Join(raiz, "hola", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	escribirFirma(t, raiz, priv, string(contenido))
+	h := &addonHost{clavePub: leida}
+	estado, err := h.verificarFirmaAddon(filepath.Join(raiz, "hola"), contenido)
+	if err != nil || estado != "verificada" {
+		t.Fatalf("con la clave leída del disco una firma buena debía dar «verificada»; dio %q (%v)", estado, err)
+	}
+
+	// b) Manifiesto tocado DESPUÉS de firmar: con la clave leída del disco la
+	// regla es la misma que con la inyectada: no carga en ningún modo.
+	if err := os.WriteFile(filepath.Join(raiz, "hola", "manifest.json"), []byte(string(contenido)+" "), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tocado, err := os.ReadFile(filepath.Join(raiz, "hola", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.verificarFirmaAddon(filepath.Join(raiz, "hola"), tocado); err == nil {
+		t.Fatal("el manifiesto tocado después de firmar debía seguir fuera aunque la clave venga del disco")
+	}
+
+	// c) La clave mal puesta no se interpreta: basura, longitud equivocada y
+	// archivo ausente quedan fuera (el arranque corre «sin verificar» y el log
+	// ya lo avisa — jamás una verificación falsa).
+	basura := addonDirPrueba(t, manifiestoHola)
+	if err := os.WriteFile(filepath.Join(basura, "pubkey.ed25519"), []byte("esto-no-es-hex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := addonClavePublica(basura); ok {
+		t.Fatal("basura en pubkey.ed25519 debía quedar fuera")
+	}
+	corta := addonDirPrueba(t, manifiestoHola)
+	recortada := make([]byte, 16) // 16 bytes ≠ ed25519.PublicKeySize (32)
+	if _, err := rand.Read(recortada); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(corta, "pubkey.ed25519"), []byte(hex.EncodeToString(recortada)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := addonClavePublica(corta); ok {
+		t.Fatal("una clave con la longitud equivocada debía quedar fuera")
+	}
+	sinClave := addonDirPrueba(t, manifiestoHola)
+	if _, ok := addonClavePublica(sinClave); ok {
+		t.Fatal("sin pubkey.ed25519 no hay clave que devolver")
+	}
+}
+
+// TestElHookConPayloadDemasiadoGrandeNoTocaLaCola fija el guardián del tope
+// de payload (topeHookPayload): un aviso que no cabe se descarta ANTES de la
+// cola — jamás una fila que después nadie podrá entregar — y el tope es un
+// límite de verdad, no un umbral decorativo.
+func TestElHookConPayloadDemasiadoGrandeNoTocaLaCola(t *testing.T) {
+	s, h := baseHooks(t)
+	ctl, err := s.controlStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	h.progs["hola"] = &addonProc{
+		manifiesto: addonManifest{ID: "hola", HooksOut: []string{"factura.emitida"}},
+		estado:     estadoActivo, token: "t", puerto: 1,
+	}
+	h.mu.Unlock()
+	var cantidad int
+	h.hookEncolar("factura.emitida", "acme", map[string]string{"blob": strings.Repeat("x", topeHookPayload+1)})
+	if err := ctl.QueryRow(`SELECT COUNT(*) FROM addon_hook_out`).Scan(&cantidad); err != nil {
+		t.Fatal(err)
+	}
+	if cantidad != 0 {
+		t.Fatalf("el payload sobre el tope debía descartarse antes de la cola; filas=%d", cantidad)
+	}
+	// Justo por debajo: entra. El tope es un límite real, no un off-by-one.
+	h.hookEncolar("factura.emitida", "acme", map[string]string{"blob": strings.Repeat("x", topeHookPayload-100)})
+	if err := ctl.QueryRow(`SELECT COUNT(*) FROM addon_hook_out`).Scan(&cantidad); err != nil {
+		t.Fatal(err)
+	}
+	if cantidad != 1 {
+		t.Fatalf("un payload justo por debajo del tope debía encolarse; filas=%d", cantidad)
+	}
+}
+
 // baseHooks monta el host con la cola de hooks en la base de prueba, listo
 // para encolar y entregar.
 func baseHooks(t *testing.T) (*Server, *addonHost) {
