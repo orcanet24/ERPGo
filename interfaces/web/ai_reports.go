@@ -478,67 +478,98 @@ func (s *Server) executeDefinitionPreview(sess *SessionData, jsonText string) (*
 	return s.executeReportDefinition(sess, jsonText, aiFirstOfMonth(), today())
 }
 
-// aiReportModulesForRequest ejecuta la Fase 1 del MCP inteligente: con un
-// prompt liviano (~1.5K tokens, solo nombres y descripciones de módulos), pide a
-// la IA clasificar qué módulos de negocio necesita el request. Devuelve las
-// claves de módulo válidas. Si la clasificación falla, devuelve todos los
-// módulos para que la Fase 2 use el mapa completo (nunca se queda sin esquema).
-func (s *Server) aiReportModulesForRequest(sess *SessionData, instruction string, agent aiAgent) []string {
-	prov, ok := s.aiProviderForAgent(sess, agent)
-	if !ok {
-		log.Printf("[AI report] sin proveedor activo, usando todos los módulos")
-		return allModuleKeys()
-	}
-	// Clasificación liviana: llamada directa SIN herramientas y SIN mapa de BD.
-	// Solo el prompt con nombres de módulos (~1.5K tokens). Esto evita armar el
-	// system prompt completo del agente (que carga las 100 tablas = ~15K tokens).
-	moduleText := aiSchemaModulesPromptText()
-	prompt := "Eres un clasificador de informes para ERPGo.\n\nSOLICITUD DEL USUARIO:\n" + instruction + "\n\n" + moduleText
-	log.Printf("[AI report] Fase 1: clasificando módulos (prompt liviano, sin herramientas) para: %.80s...", instruction)
+// ---------------------------------------------------------------------------
+// Generación de informes en UN SOLO PROMPT
+//
+// El flujo anterior (clasificación de módulos + paso de SQL + paso de
+// columnas/totales) gastaba 3-4 llamadas al proveedor para un solo informe,
+// y cada reintento del guardián sumaba otra más. Como el esquema COMPLETO de
+// la base queda ya cacheado por huella (ai_schema_introspect.go), la fase de
+// clasificación sobró: el modelo ve toda la base documentada de una vez y
+// redacta la definición completa (SQL + columnas + totales) en UNA llamada.
+// Si esa definición no pasa el guardián o falla la prueba de ejecución, se
+// permite UNA corrección llevando el error real en el prompt. Mejor caso:
+// 1 llamada. Peor caso: 2. Nunca un bucle de 8 pasos.
+// ---------------------------------------------------------------------------
 
-	messages := []map[string]string{
-		{"role": "system", "content": "Clasificador de módulos de ERPGo. Responde SOLO con las claves separadas por comas."},
-		{"role": "user", "content": prompt},
+// aiContratoInforme son las reglas del sistema, harcodeadas, que viajan en el
+// system prompt de la generación: el contrato del JSON de respuesta, del SQL
+// permitido y del motor de totales. No se negocia con el modelo y no depende
+// de lo que pida el usuario: es el mismo candado para todos, como el guardián.
+const aiContratoInforme = `CONTRATO DE RESPUESTA — REGLAS DEL SISTEMA (no negociables):
+1. Responde ÚNICAMENTE con UN objeto JSON: sin markdown, sin vallado de código y sin texto fuera del objeto. Sus claves exactas:
+   {"title":"<nombre corto>","sql":"<un único SELECT>","columns":[{"key":"...","label":"..."}],"totals":["<key>"]}
+2. "sql" es UN ÚNICO SELECT de lectura, con tablas y columnas del esquema entregado. Los «join» documentados en cada tabla del esquema te dicen cómo unirlas.
+3. El "key" de CADA columna de "columns" DEBE ser el alias EXACTO que usaste con "AS" en el SELECT (o el nombre de la columna, si no usaste alias). El motor del informe suma los totales por ese key.
+4. Cada elemento de "totals" DEBE ser una "key" ya declarada en "columns". Un total de una key que el SELECT no devuelve deja el informe sin cifras: se rechaza.
+5. Para fechas usa :desde y :hasta. NINGÚN otro parámetro con nombre: un :algo distinto rompe el SQL con error 1064.
+6. Si la solicitud es un ajuste sobre un SQL previo, modifícalo conservando lo que ya estaba bien.`
+
+// iaPromptInforme arma el ÚNICO prompt de generación. En el system va el
+// contrato (reglas harcodeadas); en el user van la solicitud del usuario, el
+// SQL previo si es un ajuste y el esquema completo cacheado del MCP, con la
+// documentación de cada tabla y campo, para que la IA decida todo de una vez
+// sin iterar.
+func iaPromptInforme(instruction, esquema, previousSQL string) (system, user string) {
+	system = "Eres el diseñador de informes de ERPGo (agente de TI). Escribes la definición JSON completa de un informe personalizado de negocio.\n\n" + aiContratoInforme
+	var b strings.Builder
+	b.WriteString("SOLICITUD DEL USUARIO:\n" + instruction + "\n\n")
+	if strings.TrimSpace(previousSQL) != "" {
+		b.WriteString("SQL PREVIO DEL INFORME (ajústalo según lo pedido; si ya cumple la solicitud, repítelo igual):\n" + previousSQL + "\n\n")
 	}
-	// Llamada directa: sin herramientas (toolsJSON=""), sin progreso, sin reintentos de bucle.
-	resp, _, _, err := aiCallChatWithTools(prov, prov.Model, messages, "")
-	if err != nil || strings.TrimSpace(resp) == "" {
-		log.Printf("[AI report] Fase 1 falló (%v), usando todos los módulos", err)
-		return allModuleKeys()
-	}
-	keys := aiSchemaModulesFromText(resp)
-	if len(keys) == 0 {
-		log.Printf("[AI report] Fase 1 no devolvió módulos válidos (respuesta: %.120s), usando todos", strings.ReplaceAll(resp, "\n", " "))
-		return allModuleKeys()
-	}
-	log.Printf("[AI report] Fase 1 completada: módulos=%s", strings.Join(keys, ","))
-	return keys
+	b.WriteString("ESQUEMA COMPLETO DE LA BASE DE DATOS (JSON del MCP: estructura de cada tabla, tipo de cada campo, comentarios documentados, joins y descripciones de negocio; estúdialo entero antes de decidir):\n" + esquema + "\n\n")
+	b.WriteString("Entrega la definición completa del informe: solo el objeto JSON del contrato. Si el esquema no muestra algo que necesitas, decide con lo que hay: no preguntes.")
+	return system, b.String()
 }
 
-func allModuleKeys() []string {
-	keys := make([]string, 0, len(aiSchemaModules))
-	for _, m := range aiSchemaModules {
-		keys = append(keys, m.Key)
+// iaRespuestaADefinicion convierte la respuesta del modelo en la definición,
+// garantizando solo lo mínimo (JSON + claves del contrato). La validación
+// completa (guardián + ejecución) la hace el preview. Si el modelo rodeó el
+// JSON con prosa a pesar del contrato, el escáner de objetos
+// (aiExtraerDefinicion) busca el primero que traiga «sql».
+func iaRespuestaADefinicion(resp string) (reportDefShape, error) {
+	var def reportDefShape
+	raw := aiLimpiarJSON(resp)
+	if err := json.Unmarshal([]byte(raw), &def); err != nil {
+		embedded, ok := aiExtraerDefinicion(resp)
+		if !ok {
+			return def, fmt.Errorf("la respuesta no es el objeto JSON del contrato: %v", err)
+		}
+		if err := json.Unmarshal([]byte(embedded), &def); err != nil {
+			return def, fmt.Errorf("el JSON extraído no decodifica como definición: %v", err)
+		}
 	}
-	return keys
+	if strings.TrimSpace(def.SQL) == "" || len(def.Columns) == 0 {
+		return def, fmt.Errorf("la definición recibida no trae «sql» o «columns»")
+	}
+	return def, nil
 }
 
-// iaPreviewDefinition es el n�cleo compartido de ai-preview y ai-refine:
-// genera la definici�n del informe en DOS PASOS DIRECTOS (sin agente con
-// herramientas) y la valida con el guardi�n.
-//
-// POR QU� DOS PASOS Y NO UN AGENTE: el enfoque anterior montaba un agente con
-// herramientas que recib�a el esquema de la BD y decid�a qu� consultas hacer.
-// Los modelos que razonan (LongCat-2.0) se perd�an en el razonamiento sobre el
-// esquema y las herramientas, consum�an todo el presupuesto de tokens y nunca
-// llegaban a escribir el JSON del informe. Dividir la tarea en dos pasos con
-// prompts peque�os y espec�ficos (1: SQL, 2: columnas/totales) reduce la carga
-// de razonamiento y hace que el modelo responda en segundos, no en minutos.
-//
-// El caller decide qu� hacer con el resultado (mostrar en modal, guardar, etc.).
+// aiPromptCorreccion arma el mensaje de la corrección única: el JSON que
+// produjo el modelo y el fallo REAL (guardián o prueba de ejecución), para que
+// corrija sobre su propio trabajo en vez de empezar de cero.
+func aiPromptCorreccion(falla, defJSON string) string {
+	return "TU DEFINICIÓN ANTERIOR FALLÓ.\n\nDEFINICIÓN QUE ENTREGASTE:\n" + defJSON + "\n\nEL FALLO QUE DEVOLVIÓ EL MOTOR:\n" + aiTruncar(falla, 600) + "\n\nCorrígela respetando el contrato y entrega ÚNICAMENTE el objeto JSON corregido, sin markdown ni texto fuera del objeto."
+}
+
+// aiTruncar acota un texto a n runas. Para mensajes de corrección y de log:
+// el fallo completo de una consulta puede ser kilométrico y el modelo y la
+// consola no necesitan la cabecera entera del stack de MySQL.
+func aiTruncar(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + " …(truncado)…"
+}
+
+// iaGenerarInforme es el núcleo compartido de ai-preview y ai-refine: manda el
+// prompt único, valida con el guardián, ejecuta la vista previa y —si la
+// definición falla— hace UNA corrección con el error real. El caller decide
+// qué hacer con el resultado (mostrarlo en el modal, guardar, etc.).
 func (s *Server) iaGenerarInforme(sess *SessionData, instruction, previousSQL string, onProgress ...func(string)) (def reportDefShape, name, desc string, preview *reportResult, err error) {
 	if sess == nil {
-		err = fmt.Errorf("sesi�n no iniciada")
+		err = fmt.Errorf("sesión no iniciada")
 		return
 	}
 	var progress func(string)
@@ -546,113 +577,116 @@ func (s *Server) iaGenerarInforme(sess *SessionData, instruction, previousSQL st
 		progress = onProgress[0]
 	}
 	if progress != nil {
-		progress("Iniciando generaci�n del informe...")
+		progress("Preparando el esquema completo de la base (cache del MCP)...")
 	}
 	agent, ok := s.aiDefaultITAgent(sess)
 	if !ok {
 		err = fmt.Errorf("no hay agentes IA activos. crea uno en Agentes IA")
 		return
 	}
-
-	// FASE 1 � CLASIFICACI�N DE M�DULOS (prompt liviano, ~1.5K tokens).
-	// La IA solo decide qu� m�dulos de negocio son relevantes para el request.
-	// Esto scopa el mapa de la Fase 2: en vez de ~15K tokens (100 tablas),
-	// el prompt de generaci�n lleva solo ~4K tokens (los m�dulos elegidos).
-	log.Printf("[AI report] === INICIO generaci�n de informe ===")
-	log.Printf("[AI report] solicitud: %.120s", instruction)
-	if progress != nil {
-		progress("Fase 1: clasificando m�dulos de negocio...")
-	}
-	moduleKeys := s.aiReportModulesForRequest(sess, instruction, agent)
-	log.Printf("[AI report] Fase 2: generando con m�dulos=%s", strings.Join(moduleKeys, ", "))
-	if progress != nil {
-		progress(fmt.Sprintf("Fase 1: m�dulos detectados: %s", strings.Join(moduleKeys, ", ")))
-	}
-
-	// FASE 2 � GENERACI�N DEL SQL BASE (sin agente, sin herramientas).
 	p, ok := s.aiProviderForAgent(sess, agent)
 	if !ok {
-		err = fmt.Errorf("no hay proveedor de IA activo con API key: act�velo en Configuraci�n IA")
+		err = fmt.Errorf("no hay proveedor de IA activo con API key: actívalo en Configuración IA")
 		return
 	}
 	model := strings.TrimSpace(p.Model)
 	if model == "" {
 		model = aiModelPorDefecto(p.Vendor)
 	}
-	schemaMap := s.aiSchemaMapForModules(sess, moduleKeys)
-	if progress != nil {
-		progress("Fase 2: generando el SQL del informe...")
-	}
-	sql, err := s.iaGenerateSQL(p, model, instruction, schemaMap, previousSQL, progress)
-	if err != nil {
-		log.Printf("[AI report] Fase 2 FALL�: %v", err)
-		err = fmt.Errorf("la IA fall� al generar el SQL: %w", err)
-		return
-	}
-	log.Printf("[AI report] SQL generado: %.200s...", sql)
+	esquema := s.aiEsquemaGlobalCompact(sess)
 
-	// FASE 3 � GENERACI�N DE COLUMNAS Y TOTALES (sin agente, sin herramientas).
-	if progress != nil {
-		progress("Fase 3: generando columnas y totales...")
-	}
-	colsJSON, err := s.iaGenerateColumns(p, model, instruction, sql, progress)
-	if err != nil {
-		log.Printf("[AI report] Fase 3 FALL�: %v", err)
-		err = fmt.Errorf("la IA fall� al generar las columnas: %w", err)
-		return
-	}
-	log.Printf("[AI report] Columnas generadas: %.200s...", colsJSON)
-
-	// Ensamblar la definici�n completa.
-	var defShape struct {
-		Title   string         `json:"title"`
-		Columns []reportDefCol `json:"columns"`
-		Totals  []string       `json:"totals"`
-	}
-	if err = json.Unmarshal([]byte(colsJSON), &defShape); err != nil {
-		err = fmt.Errorf("las columnas generadas no son JSON v�lido: %v", err)
-		return
-	}
-	def = reportDefShape{
-		Title:   defShape.Title,
-		SQL:     sql,
-		Columns: defShape.Columns,
-		Totals:  defShape.Totals,
+	log.Printf("[AI report] === INFORME EN UN SOLO PROMPT (esquema completo: %d bytes) pedido: %.120s ===", len(esquema), instruction)
+	system, user := iaPromptInforme(instruction, esquema, previousSQL)
+	mensajes := []map[string]string{
+		{"role": "system", "content": system},
+		{"role": "user", "content": user},
 	}
 
-	// Validar y ejecutar el preview.
-	defJSON, _ := json.Marshal(def)
 	if progress != nil {
-		progress("Definici�n extra�da. Ejecutando vista previa...")
+		progress("Consultando a la IA (un solo prompt: reglas + solicitud + esquema completo)...")
 	}
-	_, preview, err = s.previewDefinitionFromJSON(sess, string(defJSON))
+	resp, _, _, err := aiCallChatWithTools(p, model, mensajes, "")
 	if err != nil {
-		log.Printf("[AI report] preview FALL�: %v (definici�n: %.200s)", err, string(defJSON))
+		err = fmt.Errorf("no se pudo consultar a la IA: %v", err)
 		return
 	}
+
+	def, pErr := iaRespuestaADefinicion(resp)
+	falla, defJSON := "", ""
+	if pErr != nil {
+		falla = fmt.Sprintf("el modelo no entregó el objeto JSON del contrato: %v", pErr)
+		log.Printf("[AI report] El modelo no entregó JSON: %v", pErr)
+	} else {
+		defJSON = mustJSON(def)
+		_, preview, pErr = s.previewDefinitionFromJSON(sess, defJSON)
+		switch {
+		case pErr != nil:
+			falla = fmt.Sprintf("la definición no pasa el guardián o la prueba de ejecución: %v", pErr)
+			log.Printf("[AI report] La definición falló la prueba: %v", pErr)
+			preview = nil
+		case len(preview.Warnings) > 0:
+			// Avisos de totales desalineados: el contrato los prohíbe y el
+			// ai-save bloquearía por ellos, así que se corrigen aquí.
+			falla = fmt.Sprintf("la definición ejecuta pero incumple el contrato de totales: %s", strings.Join(preview.Warnings, "; "))
+			log.Printf("[AI report] Warnings del preview: %s", strings.Join(preview.Warnings, "; "))
+		}
+		// Sin fallos: preview validó bien y err queda nil.
+	}
+
+	if falla != "" {
+		// Corrección ÚNICA, en la misma conversación: el fallo real entra en el
+		// mensaje, no hay que reinyectar el esquema (el contexto ya lo tiene).
+		if progress != nil {
+			progress("La definición no pasó la prueba. Corrección única con el error real...")
+		}
+		log.Printf("[AI report] Corrección única por: %.200s", falla)
+		withCorreccion := append(mensajes,
+			map[string]string{"role": "assistant", "content": resp},
+			map[string]string{"role": "user", "content": aiPromptCorreccion(falla, aiTruncar(defJSON, 8000))})
+		resp2, _, _, err2 := aiCallChatWithTools(p, model, withCorreccion, "")
+		if err2 != nil {
+			err = fmt.Errorf("la corrección tampoco se pudo consultar: %v", err2)
+			return
+		}
+		def, err = iaRespuestaADefinicion(resp2)
+		if err != nil {
+			err = fmt.Errorf("la corrección tampoco entregó el objeto JSON del contrato: %v", err)
+			return
+		}
+		preview = nil
+		_, preview, err = s.previewDefinitionFromJSON(sess, mustJSON(def))
+		if err != nil {
+			err = fmt.Errorf("el informe falló también con la corrección: %v", err)
+			return
+		}
+		// En el preview interactivo los avisos de la corrección no bloquean:
+		// se muestran en el modal y el usuario ajusta; el bloqueo definitivo
+		// está en ai-save.
+	}
+
 	if progress != nil {
 		progress("Vista previa lista.")
 	}
 	name = strings.TrimSpace(def.Title)
 	desc = strings.TrimSpace(def.Title)
-	log.Printf("[AI report] === INFORME GENERADO OK: %s (columnas=%d, filas=%d) ===", name, len(def.Columns), filasDePreview(preview))
+	log.Printf("[AI report] === INFORME OK (un solo prompt, %d llamada(s)): %s (columnas=%d, filas=%d) ===", len(mensajes)/2, name, len(def.Columns), filasDePreview(preview))
 	return def, name, desc, preview, nil
 }
 
-// iaPreviewDefinition es el camino del borrador inicial: genera la definici�n
-// desde cero (previousSQL vac�o).
+// iaPreviewDefinition es el camino del borrador inicial: genera la definición
+// desde cero (previousSQL vacío).
 func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string, onProgress ...func(string)) (def reportDefShape, name, desc string, preview *reportResult, err error) {
 	return s.iaGenerarInforme(sess, instruction, "", onProgress...)
 }
 
-// iaRefineDefinition es el camino del ajuste: el modelo recibe el SQL previo y
-// lo modifica seg�n el feedback del usuario, en vez de regenerarlo desde cero.
+// iaRefineDefinition es el camino del ajuste: la IA recibe el SQL previo y lo
+// modifica según el feedback del usuario, en vez de regenerarlo desde cero.
 func (s *Server) iaRefineDefinition(sess *SessionData, instruction, previousSQL string, onProgress ...func(string)) (def reportDefShape, name, desc string, preview *reportResult, err error) {
 	return s.iaGenerarInforme(sess, instruction, previousSQL, onProgress...)
 }
 
-// iaSQLPrevioExtrae devuelve el "sql" de una definici�n JSON de informe. Vac�o
-// si la definici�n no se puede leer: en ese caso el refine se comporta como un
+// iaSQLPrevioExtrae devuelve el "sql" de una definición JSON de informe. Vacío
+// si la definición no se puede leer: en ese caso el refine se comporta como un
 // borrador (no hay previo que ajustar).
 func iaSQLPrevioExtrae(raw json.RawMessage) string {
 	var d struct {
@@ -664,75 +698,7 @@ func iaSQLPrevioExtrae(raw json.RawMessage) string {
 	return strings.TrimSpace(d.SQL)
 }
 
-// iaGenerateSQL genera el SQL base con un prompt peque�o y espec�fico. Sin
-// agente, sin herramientas: el modelo solo recibe el esquema de las tablas
-// relevantes (scopado por el MCP) y la solicitud del usuario.
-//
-// Si el SQL generado no pasa el guardi�n, se reintenta una vez con el error
-// del guardi�n en el prompt: el modelo corrige en el acto en vez de perder la
-// corrida completa.
-func (s *Server) iaGenerateSQL(p aiProvider, model, instruction, schemaMap, previousSQL string, progress ...func(string)) (string, error) {
-	sqlPrompt := "Eres un experto en SQL de MySQL para ERPGo.\n\n" +
-		"SOLICITUD DEL USUARIO:\n" + instruction + "\n\n" +
-		"ESQUEMA DE LAS TABLAS RELEVANTES:\n" + schemaMap + "\n\n"
-	if strings.TrimSpace(previousSQL) != "" {
-		sqlPrompt += "SQL PREVIO (ajústalo según el feedback; si no cambia, repítelo idéntico):\n" + previousSQL + "\n\n"
-	}
-	sqlPrompt += "CONTRATO DE RESPUESTA: responde ÚNICAMENTE con el SQL de lectura (SELECT) que responde a la solicitud. " +
-		"Sin markdown, sin vallado de código, sin texto fuera del SQL. " +
-		"Usa :desde/:hasta para fechas. NO uses ningún otro parámetro con nombre."
-	messages := []map[string]string{
-		{"role": "system", "content": "Eres un experto en SQL de MySQL. Generas consultas SELECT de lectura."},
-		{"role": "user", "content": sqlPrompt},
-	}
-	sql, _, _, err := aiCallChatWithTools(p, model, messages, "")
-	if err != nil {
-		return "", err
-	}
-	sql = aiLimpiarSQL(sql)
-	if _, err = aiValidateSQLSelect(sql, aiHardMaxRows); err != nil {
-		if progress != nil && progress[0] != nil {
-			progress[0](fmt.Sprintf("El SQL no pasó la validación (%v). Reintentando...", err))
-		}
-		log.Printf("[AI report] SQL rechazado por el guardián: %v; reintentando", err)
-		reintentoPrompt := sqlPrompt + "\n\nEL SQL ANTERIOR FALLÓ LA VALIDACIÓN: " + err.Error() + "\n\nCorrígelo y responde ÚNICAMENTE con el SQL corregido."
-		messages2 := []map[string]string{
-			{"role": "system", "content": "Eres un experto en SQL de MySQL. Generas consultas SELECT de lectura."},
-			{"role": "user", "content": reintentoPrompt},
-		}
-		sql2, _, _, err2 := aiCallChatWithTools(p, model, messages2, "")
-		if err2 != nil {
-			return "", err2
-		}
-		sql = aiLimpiarSQL(sql2)
-	}
-	return sql, nil
-}
-
-// iaGenerateColumns genera las columnas y totales con un prompt pequeño y
-// específico. Sin agente, sin herramientas: el modelo recibe el SQL generado
-// y declara las columnas y totales que lo acompañan.
-func (s *Server) iaGenerateColumns(p aiProvider, model, instruction, sql string, progress ...func(string)) (string, error) {
-	colsPrompt := "Eres un experto en informes de negocio para ERPGo.\n\n" +
-		"SOLICITUD DEL USUARIO:\n" + instruction + "\n\n" +
-		"SQL DEL INFORME:\n" + sql + "\n\n" +
-		"CONTRATO DE RESPUESTA: responde ÚNICAMENTE con un objeto JSON con estas claves:\n" +
-		`  "title": nombre corto del informe.` + "\n" +
-		`  "columns": [{key,label}...]. El "key" de CADA columna DEBE ser EXACTAMENTE el alias que usaste en el SELECT con "AS".` + "\n" +
-		`  "totals": ["clave1", "clave2"...]. CADA total DEBE ser una "key" que ya declaraste en "columns".` + "\n" +
-		"Sin markdown, sin vallado de código, sin texto fuera del objeto."
-	messages := []map[string]string{
-		{"role": "system", "content": "Eres un experto en informes de negocio. Generas definiciones de columnas y totales."},
-		{"role": "user", "content": colsPrompt},
-	}
-	colsJSON, _, _, err := aiCallChatWithTools(p, model, messages, "")
-	if err != nil {
-		return "", err
-	}
-	return aiLimpiarJSON(colsJSON), nil
-}
-
-// aiLimpiarSQL quita el vallado de c�digo markdown y texto extra del SQL.
+// aiLimpiarSQL quita el vallado de código markdown y texto extra del SQL.
 func aiLimpiarSQL(sql string) string {
 	sql = strings.TrimSpace(sql)
 	if strings.HasPrefix(sql, "```") {
@@ -744,7 +710,7 @@ func aiLimpiarSQL(sql string) string {
 	return sql
 }
 
-// aiLimpiarJSON quita el vallado de c�digo markdown del JSON.
+// aiLimpiarJSON quita el vallado de código markdown del JSON.
 func aiLimpiarJSON(jsonStr string) string {
 	jsonStr = strings.TrimSpace(jsonStr)
 	if strings.HasPrefix(jsonStr, "```") {
@@ -755,6 +721,7 @@ func aiLimpiarJSON(jsonStr string) string {
 	}
 	return jsonStr
 }
+
 func filasDePreview(p *reportResult) int {
 	if p == nil || p.Rows == nil {
 		return 0
@@ -770,10 +737,11 @@ func filasDePreview(p *reportResult) int {
 // preview falla con "no se pudo calcular el total" porque el motor suma por
 // la key declarado. La regla "key = alias exacto del SELECT (con AS)" evita
 // que el agente se saltee validar columna a columna.
-// aiSolicitudCruda devuelve la solicitud del usuario SIN contrato: el flujo de
-// dos pasos pone su PROPIO contrato en cada llamada (primero SQL, despu�s
-// columnas/totales). Reusar aqu� el contrato viejo de JSON �nica contradec�a al
-// contrato de cada paso y el modelo respond�a con JSON donde se le ped�a SQL.
+// aiSolicitudCruda devuelve la solicitud del usuario SIN contrato añadido:
+// el flujo de un solo prompt lleva su contrato harcodeado en el system
+// prompt (aiContratoInforme). Incrustar aquí otro contrato de JSON
+// contradecía al del prompt único y el modelo respondía con JSON donde se
+// le pedía otra cosa.
 func aiSolicitudCruda(request string) string {
 	return strings.TrimSpace(request)
 }
@@ -920,8 +888,8 @@ const aiSSEWriteGrace = 2 * aiTimeout
 //
 // Antes del flush RENUEVA el plazo de escritura de la conexión: el WriteTimeout
 // global del servidor (120 s) se aplica al total de la respuesta, y el agente
-// puede tardar mucho más en diseñar un informe (Fase 1 + hasta maxSteps llamadas
-// al proveedor de aiTimeout cada una). Sin esta renovación, net/http cortaba la
+// el flujo puede tardar más en diseñar un informe (hasta DOS llamadas a
+// aiTimeout cada una). Sin esta renovación, net/http cortaba la
 // conexión a los 120 s con el stream vivo y el modal nunca recibía el evento
 // «listo»: la IA gastaba sus tokens y el usuario nunca veía la respuesta.
 func aiSSE(w http.ResponseWriter, event, data string) {

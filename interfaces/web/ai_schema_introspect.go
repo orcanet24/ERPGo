@@ -669,6 +669,35 @@ func (e *EsquemaEmpresa) aiEsquemaJSONCompact() string {
 			sb.WriteString(quoteJSON(aiTipoCorto(c.Tipo)))
 		}
 		sb.WriteString("}")
+		// Documentación de campo: los comentarios de columna que la base
+		// declare viajan al prompt tal cual (solo los no vacíos, para no
+		// engordar el JSON con claves vacías). Es el mecanismo oficial para
+		// "documentar un campo": un COMMENT en el DDL se expone solo; no hay
+		// que tocar código Go para enseñárselo a la IA.
+		var comentados int
+		for _, c := range t.Columnas {
+			if strings.TrimSpace(c.Comentario) != "" {
+				comentados++
+			}
+		}
+		if comentados > 0 {
+			sb.WriteString(`,"comentarios":{`)
+			first := true
+			for _, c := range t.Columnas {
+				if strings.TrimSpace(c.Comentario) == "" {
+					continue
+				}
+				if !first {
+					sb.WriteString(",")
+				}
+				first = false
+				sb.WriteString(quoteJSON(c.Nombre))
+				sb.WriteString(":")
+				sb.WriteString(quoteJSON(c.Comentario))
+			}
+			sb.WriteString("}")
+		}
+
 		if len(t.PK) > 0 {
 			sb.WriteString(`,"pk":[`)
 			for k, p := range t.PK {

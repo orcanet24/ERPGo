@@ -186,3 +186,14 @@ func (s *Server) aiSchemaMapForModules(sess *SessionData, moduleKeys []string) s
 	}
 	return b.String()
 }
+
+// allModuleKeys devuelve las claves de todos los módulos del catálogo. Es el
+// "todo el mapa": el fallback cuando nadie dice qué módulos usar (o cuando la
+// clasificación no devolvió nada válido).
+func allModuleKeys() []string {
+	keys := make([]string, 0, len(aiSchemaModules))
+	for _, m := range aiSchemaModules {
+		keys = append(keys, m.Key)
+	}
+	return keys
+}
