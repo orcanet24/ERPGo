@@ -1,0 +1,198 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Conceptos de Nómina <small class="text-muted">el carácter salarial sale de los atributos, no del nombre</small></h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <div class="alert alert-info">
+            <i class="fa fa-gavel"></i>
+            Doctrina de la Sala de Casación Social aplicada (revision legal 2026-08):
+            la carga de probar que un pago NO es salarial es del patrono
+            (<strong>021/2022</strong>), los complementos en divisas no son salario
+            salvo pacto expreso (<strong>523/2025</strong>) y las prestaciones
+            sociales no se mezclan con el salario normal (<strong>127/2022</strong>).
+            Por eso cada concepto se clasifica con <strong>causa</strong>,
+            <strong>regularidad</strong>, <strong>moneda</strong> y
+            <strong>soporte</strong>: el sistema deriva el carácter de esos
+            atributos, jamás del nombre que le pusieron.
+        </div>
+
+        <button type="button" class="btn btn-primary" style="margin-bottom:15px" id="btnNuevo">
+            <i class="fa fa-plus"></i> Nuevo concepto
+        </button>
+
+        <table class="table table-striped table-bordered" id="conceptTable" width="100%">
+            <thead>
+                <tr>
+                    <th>Concepto</th>
+                    <th>Tipo</th>
+                    <th>Causa</th>
+                    <th>Regularidad</th>
+                    <th>Moneda</th>
+                    <th>Soporte</th>
+                    <th>Carácter salarial</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+
+<!-- Modal de alta/edición. Los selects NO son libres: el valor de cada
+     atributo define el carácter salarial y el servidor valida todo vocabulario. -->
+<div class="modal fade" id="modalConcepto" tabindex="-1">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+          <button type="button" class="close" data-dismiss="modal">&times;</button>
+          <h4 class="modal-title" id="modalTitulo">Nuevo concepto</h4>
+      </div>
+      <div class="modal-body">
+          <form id="formConcepto">
+              <input type="hidden" id="fId">
+              <div class="form-group">
+                  <label>Código *</label>
+                  <input type="text" class="form-control" id="fCode" maxlength="30" placeholder="BONO_TURNOS">
+              </div>
+              <div class="form-group">
+                  <label>Nombre *</label>
+                  <input type="text" class="form-control" id="fName" maxlength="120">
+              </div>
+              <div class="row">
+                  <div class="col-md-6 form-group">
+                      <label>Tipo</label>
+                      <select class="form-control" id="fKind">
+                          <option value="earning">Asignación</option>
+                          <option value="deduction">Deducción</option>
+                          <option value="employer_charge">Carga patronal</option>
+                      </select>
+                  </div>
+                  <div class="col-md-6 form-group">
+                      <label>Moneda</label>
+                      <select class="form-control" id="fMoneda">
+                          <option value="VES">Bolívares (VES)</option>
+                          <option value="USD">Divisa (USD)</option>
+                      </select>
+                  </div>
+              </div>
+              <div class="row">
+                  <div class="col-md-6 form-group">
+                      <label>Causa del pago</label>
+                      <select class="form-control" id="fCausa">
+                          <option value="retribucion">Retribución por servicios</option>
+                          <option value="beneficio_social">Beneficio social (prestacional)</option>
+                          <option value="reembolso">Reembolso de gastos</option>
+                      </select>
+                  </div>
+                  <div class="col-md-6 form-group">
+                      <label>Regularidad</label>
+                      <select class="form-control" id="fRegularidad">
+                          <option value="recurrente">Cada período</option>
+                          <option value="anual">Anual</option>
+                          <option value="eventual">Eventual</option>
+                      </select>
+                  </div>
+              </div>
+              <div class="checkbox">
+                  <label>
+                      <input type="checkbox" id="fSoporte"> Exige soporte documental
+                      (si no se presenta, el pago se presume salarial: 021/2022)
+                  </label>
+              </div>
+          </form>
+      </div>
+      <div class="modal-footer">
+          <button type="button" class="btn btn-default" data-dismiss="modal">Cancelar</button>
+          <button type="button" class="btn btn-primary" id="btnGuardar">Guardar</button>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    var etiqCausa = {
+        retribucion: 'Retribución por servicios',
+        beneficio_social: 'Beneficio social',
+        reembolso: 'Reembolso de gastos'
+    };
+    var etiqRegia = {
+        recurrente: 'Cada período',
+        anual: 'Anual',
+        eventual: 'Eventual'
+    };
+    var etiqTipo = { earning: 'Asignación', deduction: 'Deducción', employer_charge: 'Carga patronal' };
+    var badgeCaracter = {
+        salario_normal: '<span class="label label-success">Salario normal</span>',
+        prestacional: '<span class="label label-info">Prestación (art. 142)</span>',
+        no_salarial: '<span class="label label-default">No salarial</span>',
+        riesgo: '<span class="label label-warning">Riesgo: presunto salarial</span>',
+        '': '—'
+    };
+
+    var table = $('#conceptTable').DataTable({
+        processing: true,
+        ajax: { url: '/hr/conceptos/data', type: 'GET' },
+        columns: [
+            { data: null, render: function (d) { return d.name + ' <code>' + d.code + '</code>'; } },
+            { data: 'kind', render: function (d) { return etiqTipo[d] || d; } },
+            { data: 'causa', render: function (d) { return etiqCausa[d] || d; } },
+            { data: 'regularidad', render: function (d) { return etiqRegia[d] || d; } },
+            { data: 'moneda' },
+            { data: 'soporte_requerido', render: function (d) {
+                return d ? '<span class="label label-warning">Exige</span>'
+                         : '<span class="label label-default">No exige</span>'; } },
+            { data: null, render: function (d) { return badgeCaracter[d.salarial] || '—'; } },
+            { data: null, orderable: false, render: function (d) {
+                return '<button class="btn btn-xs btn-info do-edit" data-row=\'' +
+                    JSON.stringify(d).replace(/'/g, "&#39;") + '\'>Editar</button>'; } }
+        ]
+    });
+
+    function abrir(row) {
+        $('#modalTitulo').text(row ? 'Editar concepto' : 'Nuevo concepto');
+        $('#fId').val(row ? row.id : '');
+        $('#fCode').val(row ? row.code : '');
+        $('#fName').val(row ? row.name : '');
+        $('#fKind').val(row ? row.kind : 'earning');
+        $('#fMoneda').val(row ? row.moneda : 'VES');
+        $('#fCausa').val(row ? row.causa : 'retribucion');
+        $('#fRegularidad').val(row ? row.regularidad : 'recurrente');
+        $('#fSoporte').prop('checked', row ? !!row.soporte_requerido : false);
+        $('#modalConcepto').modal('show');
+    }
+
+    $('#btnNuevo').on('click', function () { abrir(null); });
+
+    $('#conceptTable').on('click', '.do-edit', function () {
+        abrir($(this).data('row'));
+    });
+
+    $('#btnGuardar').on('click', function () {
+        var payload = {
+            id: $('#fId').val(),
+            code: $.trim($('#fCode').val()),
+            name: $.trim($('#fName').val()),
+            kind: $('#fKind').val(),
+            causa: $('#fCausa').val(),
+            regularidad: $('#fRegularidad').val(),
+            moneda: $('#fMoneda').val(),
+            soporte_requerido: $('#fSoporte').is(':checked') ? '1' : '0'
+        };
+        $.post('/hr/conceptos/save', payload, function (r) {
+            if (r.status == 1) {
+                toastr.success(r.msg);
+                $('#modalConcepto').modal('hide');
+                table.ajax.reload();
+            } else toastr.error(r.error || 'Error');
+        }).fail(function (x) {
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'Error');
+        });
+    });
+});
+</script>
+{{end}}

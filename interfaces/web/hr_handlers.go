@@ -34,6 +34,11 @@ func (s *Server) registerHRRoutes() {
 	s.mux.HandleFunc("GET /hr/tax-rates/data", s.hrTaxRateListData)
 	s.mux.HandleFunc("POST /hr/tax-rates/verify", s.hrTaxRateVerify)
 
+	// Catálogo de conceptos (hr_concepto.go): los atributos jurídicos —causa,
+	// regularidad, moneda, soporte— de los que la jurisprudencia de la Sala
+	// exige derivar el carácter salarial, y no del nombre del concepto.
+	s.registerConceptoRoutes()
+
 	// Vacaciones (hr_leave_handlers.go): mism motivo que arriba, las rutas
 	// /hr/leave* estaban escritas pero sin dar de alta, y el módulo solo
 	// funcionaba con SQL a mano.
