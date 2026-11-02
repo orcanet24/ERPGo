@@ -763,7 +763,7 @@ const aiSSEWriteGrace = 2 * aiTimeout
 // Antes del flush RENUEVA el plazo de escritura de la conexión: el WriteTimeout
 // global del servidor (120 s) se aplica al total de la respuesta, y el agente
 // puede tardar mucho más en diseñar un informe (Fase 1 + hasta maxSteps llamadas
-// al proveedor de 60 s cada una). Sin esta renovación, net/http cortaba la
+// al proveedor de aiTimeout cada una). Sin esta renovación, net/http cortaba la
 // conexión a los 120 s con el stream vivo y el modal nunca recibía el evento
 // «listo»: la IA gastaba sus tokens y el usuario nunca veía la respuesta.
 func aiSSE(w http.ResponseWriter, event, data string) {

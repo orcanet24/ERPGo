@@ -9,8 +9,8 @@ package web
 //     «listo» final se perdía para siempre.
 //  2. El WriteTimeout global del servidor (120 s) se aplicaba al total de la
 //     respuesta, pero el agente puede tardar mucho más (Fase 1 + hasta
-//     maxSteps llamadas al proveedor de 60 s): net/http cortaba la conexión con
-//     el stream vivo y el modal jamás recibía el resultado.
+//     maxSteps llamadas al proveedor de aiTimeout): net/http cortaba la conexión
+//     con el stream vivo y el modal jamás recibía el resultado.
 //
 // POR QUÉ SE PRUEBA CON UN SERVIDOR DE PRUEBA: el defecto era de ENTREGA (qué
 // le llega al navegador y cuándo muere la conexión), no de lógica de negocio:
