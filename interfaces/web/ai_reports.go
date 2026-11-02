@@ -1,4 +1,4 @@
-﻿package web
+package web
 
 // ai_reports.go — Informes personalizados por plantillas JSON. Tanto usuarios
 // como agentes crean plantillas; TODAS pasan por el guardián SQL al ejecutar.
@@ -523,87 +523,238 @@ func allModuleKeys() []string {
 	return keys
 }
 
-// iaPreviewDefinition es el núcleo compartido de ai-preview y ai-refine:
-// pide al agente una definición JSON (excluyendo report.save_template), la
-// valida con el guardián, la ejecuta como preview y devuelve todo junto.
-// El caller decide qué hacer con el resultado (mostrar en modal, guardar, etc.).
+// iaPreviewDefinition es el n�cleo compartido de ai-preview y ai-refine:
+// genera la definici�n del informe en DOS PASOS DIRECTOS (sin agente con
+// herramientas) y la valida con el guardi�n.
 //
-// Por qué existe como helper y no se repite: el preview y el refine comparten
-// validación + ejecución, y un bug arreglado en uno (p.ej. "warning en totales")
-// debe propagarse al otro sin que se lo vuelva a buscar en dos sitios.
-func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string, onProgress ...func(string)) (def reportDefShape, name, desc string, preview *reportResult, err error) {
+// POR QU� DOS PASOS Y NO UN AGENTE: el enfoque anterior montaba un agente con
+// herramientas que recib�a el esquema de la BD y decid�a qu� consultas hacer.
+// Los modelos que razonan (LongCat-2.0) se perd�an en el razonamiento sobre el
+// esquema y las herramientas, consum�an todo el presupuesto de tokens y nunca
+// llegaban a escribir el JSON del informe. Dividir la tarea en dos pasos con
+// prompts peque�os y espec�ficos (1: SQL, 2: columnas/totales) reduce la carga
+// de razonamiento y hace que el modelo responda en segundos, no en minutos.
+//
+// El caller decide qu� hacer con el resultado (mostrar en modal, guardar, etc.).
+func (s *Server) iaGenerarInforme(sess *SessionData, instruction, previousSQL string, onProgress ...func(string)) (def reportDefShape, name, desc string, preview *reportResult, err error) {
 	if sess == nil {
-		err = fmt.Errorf("sesión no iniciada")
+		err = fmt.Errorf("sesi�n no iniciada")
 		return
 	}
 	var progress func(string)
 	if len(onProgress) > 0 && onProgress[0] != nil {
 		progress = onProgress[0]
 	}
-	if progress != nil { progress("Iniciando generación del informe...") }
+	if progress != nil {
+		progress("Iniciando generaci�n del informe...")
+	}
 	agent, ok := s.aiDefaultITAgent(sess)
 	if !ok {
 		err = fmt.Errorf("no hay agentes IA activos. crea uno en Agentes IA")
 		return
 	}
 
-	// FASE 1 — CLASIFICACIÓN DE MÓDULOS (prompt liviano, ~1.5K tokens).
-	// La IA solo decide qué módulos de negocio son relevantes para el request.
-	// Esto scopa el mapa de ese la Fase 2: en vez de ~15K tokens (100 tablas),
-	// el prompt de generación lleva solo ~4K tokens (los módulos elegidos).
-	log.Printf("[AI report] === INICIO generación de informe ===")
+	// FASE 1 � CLASIFICACI�N DE M�DULOS (prompt liviano, ~1.5K tokens).
+	// La IA solo decide qu� m�dulos de negocio son relevantes para el request.
+	// Esto scopa el mapa de la Fase 2: en vez de ~15K tokens (100 tablas),
+	// el prompt de generaci�n lleva solo ~4K tokens (los m�dulos elegidos).
+	log.Printf("[AI report] === INICIO generaci�n de informe ===")
 	log.Printf("[AI report] solicitud: %.120s", instruction)
-	if progress != nil { progress("Fase 1: clasificando módulos de negocio...") }
+	if progress != nil {
+		progress("Fase 1: clasificando m�dulos de negocio...")
+	}
 	moduleKeys := s.aiReportModulesForRequest(sess, instruction, agent)
-	log.Printf("[AI report] Fase 2: generando con módulos=%s", strings.Join(moduleKeys, ","))
-	if progress != nil { progress(fmt.Sprintf("Fase 1: módulos detectados: %s", strings.Join(moduleKeys, ", "))) }
+	log.Printf("[AI report] Fase 2: generando con m�dulos=%s", strings.Join(moduleKeys, ", "))
+	if progress != nil {
+		progress(fmt.Sprintf("Fase 1: m�dulos detectados: %s", strings.Join(moduleKeys, ", ")))
+	}
 
-	// FASE 2 — GENERACIÓN CON ESQUEMA DIRIGIDO a los módulos elegidos.
-	task := aiTask{
-		AgentID:               agent.ID,
-		Name:                "Diseño de informe (preview)",
-		Instructions:        instruction,
-		RespuestaJSON:       true,
-		ModuleKeys:          moduleKeys,
-		HerramientasExcluidas: []string{"report.save_template"}, // el save lo hace el servidor
-	}
-	journal := &aiRunJournal{scope: "adhoc:" + now()}
-	steps := []aiStep{}
-	resp, runErr := s.aiRunLoop(sess, agent, task, &steps, journal, progress)
-	if runErr != nil {
-		log.Printf("[AI report] Fase 2 FALLÓ: %v", runErr)
-		err = fmt.Errorf("la IA falló: %w", runErr)
-		return
-	}
-	log.Printf("[AI report] Fase 2 completada: %d pasos, respuesta=%d chars", len(steps), len(resp))
-	if progress != nil { progress("Respuesta de la IA recibida. Extrayendo definición...") }
-	jsonText, ok := aiExtraerDefinicion(resp)
+	// FASE 2 � GENERACI�N DEL SQL BASE (sin agente, sin herramientas).
+	p, ok := s.aiProviderForAgent(sess, agent)
 	if !ok {
-		// Se incluye un preview de la respuesta para diagnosticar sin abrir
-		// logs: el agente pudo haber respondido tool calls (content vacío),
-		// prosa sin JSON, o un JSON sin la clave «sql».
-		snippet := resp
-		if len(snippet) > 300 {
-			snippet = snippet[:300] + "..."
-		}
-		log.Printf("[AI report] no se extrajo JSON de la respuesta: %q", snippet)
-		err = fmt.Errorf("la respuesta de la IA no contiene una definición JSON con «sql». Respuesta del agente: %q",
-			strings.TrimSpace(snippet))
+		err = fmt.Errorf("no hay proveedor de IA activo con API key: act�velo en Configuraci�n IA")
 		return
 	}
-	if progress != nil { progress("Definición extraída. Ejecutando vista previa...") }
-	def, preview, err = s.previewDefinitionFromJSON(sess, jsonText)
+	model := strings.TrimSpace(p.Model)
+	if model == "" {
+		model = aiModelPorDefecto(p.Vendor)
+	}
+	schemaMap := s.aiSchemaMapForModules(sess, moduleKeys)
+	if progress != nil {
+		progress("Fase 2: generando el SQL del informe...")
+	}
+	sql, err := s.iaGenerateSQL(p, model, instruction, schemaMap, previousSQL, progress)
 	if err != nil {
-		log.Printf("[AI report] preview FALLÓ: %v (definición: %.200s)", err, jsonText)
+		log.Printf("[AI report] Fase 2 FALL�: %v", err)
+		err = fmt.Errorf("la IA fall� al generar el SQL: %w", err)
 		return
 	}
-	if progress != nil { progress("Vista previa lista.") }
+	log.Printf("[AI report] SQL generado: %.200s...", sql)
+
+	// FASE 3 � GENERACI�N DE COLUMNAS Y TOTALES (sin agente, sin herramientas).
+	if progress != nil {
+		progress("Fase 3: generando columnas y totales...")
+	}
+	colsJSON, err := s.iaGenerateColumns(p, model, instruction, sql, progress)
+	if err != nil {
+		log.Printf("[AI report] Fase 3 FALL�: %v", err)
+		err = fmt.Errorf("la IA fall� al generar las columnas: %w", err)
+		return
+	}
+	log.Printf("[AI report] Columnas generadas: %.200s...", colsJSON)
+
+	// Ensamblar la definici�n completa.
+	var defShape struct {
+		Title   string         `json:"title"`
+		Columns []reportDefCol `json:"columns"`
+		Totals  []string       `json:"totals"`
+	}
+	if err = json.Unmarshal([]byte(colsJSON), &defShape); err != nil {
+		err = fmt.Errorf("las columnas generadas no son JSON v�lido: %v", err)
+		return
+	}
+	def = reportDefShape{
+		Title:   defShape.Title,
+		SQL:     sql,
+		Columns: defShape.Columns,
+		Totals:  defShape.Totals,
+	}
+
+	// Validar y ejecutar el preview.
+	defJSON, _ := json.Marshal(def)
+	if progress != nil {
+		progress("Definici�n extra�da. Ejecutando vista previa...")
+	}
+	_, preview, err = s.previewDefinitionFromJSON(sess, string(defJSON))
+	if err != nil {
+		log.Printf("[AI report] preview FALL�: %v (definici�n: %.200s)", err, string(defJSON))
+		return
+	}
+	if progress != nil {
+		progress("Vista previa lista.")
+	}
 	name = strings.TrimSpace(def.Title)
-	desc = strings.TrimSpace(def.Title) // el description se sugiere; el caller lo puede sobreescribir
+	desc = strings.TrimSpace(def.Title)
 	log.Printf("[AI report] === INFORME GENERADO OK: %s (columnas=%d, filas=%d) ===", name, len(def.Columns), filasDePreview(preview))
 	return def, name, desc, preview, nil
 }
 
+// iaPreviewDefinition es el camino del borrador inicial: genera la definici�n
+// desde cero (previousSQL vac�o).
+func (s *Server) iaPreviewDefinition(sess *SessionData, instruction string, onProgress ...func(string)) (def reportDefShape, name, desc string, preview *reportResult, err error) {
+	return s.iaGenerarInforme(sess, instruction, "", onProgress...)
+}
+
+// iaRefineDefinition es el camino del ajuste: el modelo recibe el SQL previo y
+// lo modifica seg�n el feedback del usuario, en vez de regenerarlo desde cero.
+func (s *Server) iaRefineDefinition(sess *SessionData, instruction, previousSQL string, onProgress ...func(string)) (def reportDefShape, name, desc string, preview *reportResult, err error) {
+	return s.iaGenerarInforme(sess, instruction, previousSQL, onProgress...)
+}
+
+// iaSQLPrevioExtrae devuelve el "sql" de una definici�n JSON de informe. Vac�o
+// si la definici�n no se puede leer: en ese caso el refine se comporta como un
+// borrador (no hay previo que ajustar).
+func iaSQLPrevioExtrae(raw json.RawMessage) string {
+	var d struct {
+		SQL string `json:"sql"`
+	}
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(d.SQL)
+}
+
+// iaGenerateSQL genera el SQL base con un prompt peque�o y espec�fico. Sin
+// agente, sin herramientas: el modelo solo recibe el esquema de las tablas
+// relevantes (scopado por el MCP) y la solicitud del usuario.
+//
+// Si el SQL generado no pasa el guardi�n, se reintenta una vez con el error
+// del guardi�n en el prompt: el modelo corrige en el acto en vez de perder la
+// corrida completa.
+func (s *Server) iaGenerateSQL(p aiProvider, model, instruction, schemaMap, previousSQL string, progress ...func(string)) (string, error) {
+	sqlPrompt := "Eres un experto en SQL de MySQL para ERPGo.\n\n" +
+		"SOLICITUD DEL USUARIO:\n" + instruction + "\n\n" +
+		"ESQUEMA DE LAS TABLAS RELEVANTES:\n" + schemaMap + "\n\n"
+	if strings.TrimSpace(previousSQL) != "" {
+		sqlPrompt += "SQL PREVIO (ajústalo según el feedback; si no cambia, repítelo idéntico):\n" + previousSQL + "\n\n"
+	}
+	sqlPrompt += "CONTRATO DE RESPUESTA: responde ÚNICAMENTE con el SQL de lectura (SELECT) que responde a la solicitud. " +
+		"Sin markdown, sin vallado de código, sin texto fuera del SQL. " +
+		"Usa :desde/:hasta para fechas. NO uses ningún otro parámetro con nombre."
+	messages := []map[string]string{
+		{"role": "system", "content": "Eres un experto en SQL de MySQL. Generas consultas SELECT de lectura."},
+		{"role": "user", "content": sqlPrompt},
+	}
+	sql, _, _, err := aiCallChatWithTools(p, model, messages, "")
+	if err != nil {
+		return "", err
+	}
+	sql = aiLimpiarSQL(sql)
+	if _, err = aiValidateSQLSelect(sql, aiHardMaxRows); err != nil {
+		if progress != nil && progress[0] != nil {
+			progress[0](fmt.Sprintf("El SQL no pasó la validación (%v). Reintentando...", err))
+		}
+		log.Printf("[AI report] SQL rechazado por el guardián: %v; reintentando", err)
+		reintentoPrompt := sqlPrompt + "\n\nEL SQL ANTERIOR FALLÓ LA VALIDACIÓN: " + err.Error() + "\n\nCorrígelo y responde ÚNICAMENTE con el SQL corregido."
+		messages2 := []map[string]string{
+			{"role": "system", "content": "Eres un experto en SQL de MySQL. Generas consultas SELECT de lectura."},
+			{"role": "user", "content": reintentoPrompt},
+		}
+		sql2, _, _, err2 := aiCallChatWithTools(p, model, messages2, "")
+		if err2 != nil {
+			return "", err2
+		}
+		sql = aiLimpiarSQL(sql2)
+	}
+	return sql, nil
+}
+
+// iaGenerateColumns genera las columnas y totales con un prompt pequeño y
+// específico. Sin agente, sin herramientas: el modelo recibe el SQL generado
+// y declara las columnas y totales que lo acompañan.
+func (s *Server) iaGenerateColumns(p aiProvider, model, instruction, sql string, progress ...func(string)) (string, error) {
+	colsPrompt := "Eres un experto en informes de negocio para ERPGo.\n\n" +
+		"SOLICITUD DEL USUARIO:\n" + instruction + "\n\n" +
+		"SQL DEL INFORME:\n" + sql + "\n\n" +
+		"CONTRATO DE RESPUESTA: responde ÚNICAMENTE con un objeto JSON con estas claves:\n" +
+		`  "title": nombre corto del informe.` + "\n" +
+		`  "columns": [{key,label}...]. El "key" de CADA columna DEBE ser EXACTAMENTE el alias que usaste en el SELECT con "AS".` + "\n" +
+		`  "totals": ["clave1", "clave2"...]. CADA total DEBE ser una "key" que ya declaraste en "columns".` + "\n" +
+		"Sin markdown, sin vallado de código, sin texto fuera del objeto."
+	messages := []map[string]string{
+		{"role": "system", "content": "Eres un experto en informes de negocio. Generas definiciones de columnas y totales."},
+		{"role": "user", "content": colsPrompt},
+	}
+	colsJSON, _, _, err := aiCallChatWithTools(p, model, messages, "")
+	if err != nil {
+		return "", err
+	}
+	return aiLimpiarJSON(colsJSON), nil
+}
+
+// aiLimpiarSQL quita el vallado de c�digo markdown y texto extra del SQL.
+func aiLimpiarSQL(sql string) string {
+	sql = strings.TrimSpace(sql)
+	if strings.HasPrefix(sql, "```") {
+		sql = strings.TrimPrefix(sql, "```sql")
+		sql = strings.TrimPrefix(sql, "```")
+		sql = strings.TrimSuffix(sql, "```")
+		sql = strings.TrimSpace(sql)
+	}
+	return sql
+}
+
+// aiLimpiarJSON quita el vallado de c�digo markdown del JSON.
+func aiLimpiarJSON(jsonStr string) string {
+	jsonStr = strings.TrimSpace(jsonStr)
+	if strings.HasPrefix(jsonStr, "```") {
+		jsonStr = strings.TrimPrefix(jsonStr, "```json")
+		jsonStr = strings.TrimPrefix(jsonStr, "```")
+		jsonStr = strings.TrimSuffix(jsonStr, "```")
+		jsonStr = strings.TrimSpace(jsonStr)
+	}
+	return jsonStr
+}
 func filasDePreview(p *reportResult) int {
 	if p == nil || p.Rows == nil {
 		return 0
@@ -619,6 +770,13 @@ func filasDePreview(p *reportResult) int {
 // preview falla con "no se pudo calcular el total" porque el motor suma por
 // la key declarado. La regla "key = alias exacto del SELECT (con AS)" evita
 // que el agente se saltee validar columna a columna.
+// aiSolicitudCruda devuelve la solicitud del usuario SIN contrato: el flujo de
+// dos pasos pone su PROPIO contrato en cada llamada (primero SQL, despu�s
+// columnas/totales). Reusar aqu� el contrato viejo de JSON �nica contradec�a al
+// contrato de cada paso y el modelo respond�a con JSON donde se le ped�a SQL.
+func aiSolicitudCruda(request string) string {
+	return strings.TrimSpace(request)
+}
 func aiPreviewInstruction(request string) string {
 	return request + "\n\nCONTRATO DE RESPUESTA (¡ESCRÍBELO BIEN LA PRIMERA VEZ!):\n" +
 		"Responde ÚNICAMENTE con la definición del informe como objeto JSON con estas claves:\n" +
@@ -736,18 +894,18 @@ func (s *Server) reportTemplateAIPreview(w http.ResponseWriter, r *http.Request)
 		jsonError(w, "Describe el informe que necesitas", http.StatusBadRequest)
 		return
 	}
-	def, name, desc, preview, pErr := s.iaPreviewDefinition(sess, aiPreviewInstruction(req.Request))
+	def, name, desc, preview, pErr := s.iaPreviewDefinition(sess, aiSolicitudCruda(req.Request))
 	if pErr != nil {
 		jsonError(w, pErr.Error(), http.StatusBadGateway)
 		return
 	}
 	writeJSON(w, map[string]interface{}{
-		"status":   1,
-		"request":  req.Request,
-		"definition": mustJSON(def),
-		"title":    name,
+		"status":      1,
+		"request":     req.Request,
+		"definition":  mustJSON(def),
+		"title":       name,
 		"description": desc,
-		"preview":  previewJSON(preview),
+		"preview":     previewJSON(preview),
 	})
 }
 
@@ -808,7 +966,7 @@ func (s *Server) reportTemplateAIPreviewStream(w http.ResponseWriter, r *http.Re
 		aiSSE(w, "progreso", msg)
 	}
 
-	def, name, desc, preview, pErr := s.iaPreviewDefinition(sess, aiPreviewInstruction(req.Request), progress)
+	def, name, desc, preview, pErr := s.iaPreviewDefinition(sess, aiSolicitudCruda(req.Request), progress)
 	if pErr != nil {
 		aiSSE(w, "error", mustJSON(map[string]interface{}{"status": 0, "error": pErr.Error()}))
 		return
@@ -824,8 +982,8 @@ func (s *Server) reportTemplateAIPreviewStream(w http.ResponseWriter, r *http.Re
 }
 
 // reportTemplateAIRefine ajusta la definición según el feedback del usuario y
-// devuelve una nueva vista previa. El agente recibe el JSON previo como contexto
-// (no como texto plano) para que ajuste solo lo pedido.
+// devuelve una nueva vista previa. El modelo recibe el SQL previo (y el JSON
+// completo como contexto) para que ajuste solo lo pedido.
 func (s *Server) reportTemplateAIRefine(w http.ResponseWriter, r *http.Request) {
 	sess := s.sessionFromRequest(r)
 	if sess == nil {
@@ -849,22 +1007,24 @@ func (s *Server) reportTemplateAIRefine(w http.ResponseWriter, r *http.Request) 
 		jsonError(w, "Debes generar primero el borrador (falta la definición previa)", http.StatusBadRequest)
 		return
 	}
-	// La instrucción lleva el JSON previo incrustado: el agente reajusta sobre él
-	// en vez de empezar desde cero, preservando el resto.
+	// La instrucción lleva el JSON previo incrustado y, además, se pasa el SQL
+	// previo aparte: el modelo ajusta sobre lo que ya había en vez de empezar
+	// desde cero, preservando el resto.
 	instruction := fmt.Sprintf(
-		"Ajusta la definición JSON del informe según este feedback del usuario: «%s».\n\nDEFINICIÓN PREVIA (JSON):\n%s\n\nCONTRATO DE RESPUESTA: responde ÚNICAMENTE con la definición ajustada como objeto JSON con \"title\", \"sql\", \"columns\", \"totals\". Si el feedback no cambia el SQL, repítelo idéntico. Si el SQL contiene un parámetro con nombre que no sea :desde o :hasta (como :agrupar), quítalo y usa un literal o una fórmula en su lugar: el motor solo resuelve :desde y :hasta. Sin markdown, sin vallado de código.",
+		"Ajusta el informe según este feedback del usuario: «%s».\n\nDEFINICIÓN PREVIA (JSON, solo contexto; el SQL exacto va aparte):\n%s",
 		req.Request, string(req.Definition))
-	def, name, desc, preview, pErr := s.iaPreviewDefinition(sess, instruction)
+	prevSQL := iaSQLPrevioExtrae(req.Definition)
+	def, name, desc, preview, pErr := s.iaRefineDefinition(sess, instruction, prevSQL)
 	if pErr != nil {
 		jsonError(w, pErr.Error(), http.StatusBadGateway)
 		return
 	}
 	writeJSON(w, map[string]interface{}{
-		"status":        1,
-		"definition":    mustJSON(def),
-		"title":         name,
-		"description":   desc,
-		"preview":       previewJSON(preview),
+		"status":      1,
+		"definition":  mustJSON(def),
+		"title":       name,
+		"description": desc,
+		"preview":     previewJSON(preview),
 	})
 }
 
@@ -901,9 +1061,10 @@ func (s *Server) reportTemplateAIRefineStream(w http.ResponseWriter, r *http.Req
 	}
 	progress := func(msg string) { aiSSE(w, "progreso", msg) }
 	instruction := fmt.Sprintf(
-		"Ajusta la definición JSON del informe según este feedback del usuario: «%s».\n\nDEFINICIÓN PREVIA (JSON):\n%s\n\nCONTRATO DE RESPUESTA: responde ÚNICAMENTE con la definición ajustada como objeto JSON con \"title\", \"sql\", \"columns\", \"totals\". Si el feedback no cambia el SQL, repítelo idéntico. Si el SQL contiene un parámetro con nombre que no sea :desde o :hasta (como :agrupar), quítalo y usa un literal o una fórmula en su lugar: el motor solo resuelve :desde y :hasta. Sin markdown, sin vallado de código.",
+		"Ajusta el informe según este feedback del usuario: «%s».\n\nDEFINICIÓN PREVIA (JSON, solo contexto; el SQL exacto va aparte):\n%s",
 		req.Request, string(req.Definition))
-	def, name, desc, preview, pErr := s.iaPreviewDefinition(sess, instruction, progress)
+	prevSQL := iaSQLPrevioExtrae(req.Definition)
+	def, name, desc, preview, pErr := s.iaRefineDefinition(sess, instruction, prevSQL, progress)
 	if pErr != nil {
 		aiSSE(w, "error", mustJSON(map[string]interface{}{"status": 0, "error": pErr.Error()}))
 		return
@@ -927,10 +1088,10 @@ func (s *Server) reportTemplateAISave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name        string   `json:"name"`
-		Description string   `json:"description"`
-		Definition  string   `json:"definition"`
-		RoleIDs     []int64  `json:"role_ids"` // NULL o vacío = visible para todos
+		Name        string  `json:"name"`
+		Description string  `json:"description"`
+		Definition  string  `json:"definition"`
+		RoleIDs     []int64 `json:"role_ids"` // NULL o vacío = visible para todos
 	}
 	body, err := readAllLimit(r, 1<<20)
 	if err != nil {
@@ -989,6 +1150,7 @@ func previewJSON(r *reportResult) map[string]interface{} {
 		"warnings": r.Warnings,
 	}
 }
+
 // insertarReporteACL graba la visibilidad de un informe en report_template_acl.
 // Si roleIDs es vacío (nil), no se insertan filas: el informe es visible para
 // TODOS (regla: SIN filas → todos ven). Esto preserva el comportamiento actual
@@ -1021,9 +1183,9 @@ func (s *Server) insertarReporteACL(r *http.Request, sess *SessionData, reportID
 
 // reportCanView verifica la visibilidad de un informe para un usuario/rol.
 // Regla:
-//  - SIN filas en report_template_acl para el informe → visible para TODOS.
-//  - SI hay filas → visible si alguna coincide con su role_id o user_id.
-//  - una fila con role_id=NULL y user_id=NULL → "todos los roles/usuarios" (público explícito).
+//   - SIN filas en report_template_acl para el informe → visible para TODOS.
+//   - SI hay filas → visible si alguna coincide con su role_id o user_id.
+//   - una fila con role_id=NULL y user_id=NULL → "todos los roles/usuarios" (público explícito).
 //
 // La tabla report_template_acl puede no existir todavía (pre-migration): en
 // ese caso la query de COUNT falla y se asume visible para todos (fallback seguro).
@@ -1453,7 +1615,7 @@ func (s *Server) reportTemplateAIHelp(w http.ResponseWriter, r *http.Request) {
 		// La ayuda también pide JSON: el borrador se parsea del texto para
 		// rellenar el textarea, y el mismo contrato de extracción del create
 		// aplica. Se excluye report.save_template: "Ayúdame" no debe guardar.
-		RespuestaJSON:       true,
+		RespuestaJSON:         true,
 		HerramientasExcluidas: []string{"report.save_template"},
 	}
 	// Ámbito propio por invocación: esta acción es interactiva y de una sola
