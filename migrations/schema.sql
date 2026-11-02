@@ -764,7 +764,7 @@ CREATE TABLE IF NOT EXISTS `web_sessions` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `menu` (
-  `id`            int          NOT NULL,
+  `id`            int          NOT NULL AUTO_INCREMENT,  -- AUTO_INCREMENT: los addons siembran sus entradas de menú SIN id (addons.go) y MySQL exige que la primaria la genere. La siembra de schema_z_menu.sql sigue pasando ids fijos, que AUTO_INCREMENT admite sin problema.
   `parent_id`     int          DEFAULT NULL,
   `label`         varchar(128) NOT NULL,
   `url`           varchar(255) DEFAULT NULL,

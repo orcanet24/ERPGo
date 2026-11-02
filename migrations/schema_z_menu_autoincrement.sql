@@ -1,0 +1,14 @@
+-- Las bases YA instaladas nacieron con `menu.id` int NOT NULL sin
+-- AUTO_INCREMENT, y el registro de menú de los addons lo necesita: su INSERT
+-- no pasa id (addons.go) y MySQL 8 lo rechaza con Error 1364 "'id' doesn't
+-- have a default value" — el addon nunca dejaba su entrada en el menú.
+--
+-- En instalaciones NUEVAS no hace falta este ALTER: schema.sql ya crea la
+-- columna AUTO_INCREMENT (aplica antes, orden alfabético). Este archivo cubre
+-- a las bases viejas: schema.sql ya está anotado con su checksum en ellas y
+-- no se re-aplica, así que el alter vive aquí.
+--
+-- SQLite (el motor de las pruebas) NO ejecuta este archivo: el traductor
+-- salta las sentencias MODIFY DDL intraducibles, y en SQLite no hacen falta
+-- porque `id` ya es el alias del rowid y autogenera.
+ALTER TABLE `menu` MODIFY `id` INT NOT NULL AUTO_INCREMENT;

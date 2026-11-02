@@ -121,7 +121,14 @@ func (s *Server) ensureDemoColumn() {
 	if err != nil {
 		return
 	}
-	_, _ = ctl.Exec(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_demo TINYINT(1) NOT NULL DEFAULT 0`)
+	// ALTER simple, sin "IF NOT EXISTS": MySQL no soporta esa forma para
+	// ADD COLUMN (Error 1064) y con el ejecutable descartado la columna nunca
+	// nacía en instalaciones MySQL — el INSERT del catálogo con is_demo moría
+	// con Error 1054 en cada arranque. El patrón portable del proyecto
+	// (asegurarColumna, wizard.go) es exactamente este: ALTER directo y
+	// silencio si la columna ya existe, que es el caso usual tras el primer
+	// arranque.
+	_, _ = ctl.Exec(`ALTER TABLE tenants ADD COLUMN is_demo TINYINT(1) NOT NULL DEFAULT 0`)
 }
 
 // tenantEsDemo consulta (con caché de 60 s) si una empresa es la demo.
