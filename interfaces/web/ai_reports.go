@@ -302,9 +302,35 @@ func (s *Server) executeReportDefinition(sess *SessionData, definition, from, to
 			res.Totals[key] = round2(v)
 			continue
 		}
-		// Se pidió este total y no se pudo calcular. Sin aviso, el informe sale
-		// con las mismas filas y sin cifras, y quien lo lee no tiene por qué
-		// sospechar que le falta el dato más importante.
+
+		// Sin suma puede haber TRES causas distintas. El aviso antiguo decía
+		// "no aparece en el resultado" para todas y mentía en dos: la columna
+		// que el propio aviso listaba entre las "disponibles". Medido en vivo:
+		// informe creado por IA contra una base maestra recién instalada pinta
+		// el preview con el warning falso aunque la definición declara la
+		// columna exacta. Se resuelve por causa:
+		//
+		// 1) Resultado sin filas: un total sobre cero filas es cero. No hay
+		//    nada que avisar — un informe de un mes sin ventas sigue siendo
+		//    correcto y sus totales valen 0. Como toda la suma va por
+		//    keyIndex (alias e key declarada), la existencia se consulta ahí.
+		// 2) Filas pero valores no numéricos (NULL, texto): la columna existe,
+		//    se dice por qué no se sumó, no que "no aparece".
+		// 3) La key tal cual no está ni como alias ni como key declarada: sí
+		//    es un desajuste del agente y conserva el aviso detallado.
+		if _, existe := keyIndex[key]; existe {
+			if len(res.Rows) == 0 {
+				res.Totals[key] = 0
+				continue
+			}
+			res.Warnings = append(res.Warnings, fmt.Sprintf(
+				"no se pudo calcular el total de la columna %q: existe en el resultado pero ninguno de sus valores es numérico",
+				key))
+			continue
+		}
+		// Se pidió un total de una key que el resultado ni devuelve. Sin aviso,
+		// el informe sale con las mismas filas y sin cifras, y quien lo lee no
+		// tiene por qué sospechar que le falta el dato más importante.
 		//
 		// Por qué se listan las columnas y el mismatch: el agente suele desalinear
 		// `columns` respecto a los aliases del SELECT, o declarar una key que el

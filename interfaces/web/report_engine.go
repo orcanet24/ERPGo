@@ -324,11 +324,36 @@ func (s *Server) RunReportDefinition(r *http.Request, def *ReportDefinition, val
 			if i < len(keys) && keys[i] != "" && keys[i] != claves[i] {
 				sums[keys[i]] += *f
 			}
+		}}
+
+	// Existencia de cada nombre en el resultado: keys (aliases del SELECT) y
+	// claves declaradas. Mismo tratamiento por causa que en		// executeReportDefinition (ai_reports.go): resultado vacío ⇒ total 0 sin
+		// aviso; columna existente sin valores numéricos ⇒ aviso honesto; key
+		// ajena al resultado ⇒ aviso de desajuste. El aviso antiguo decía "no
+		// aparece" para todas y mentía en las dos primeras.
+	enResultado := map[string]bool{}
+	for _, k := range claves {
+		if k != "" {
+			enResultado[k] = true
+		}
+	}
+	for _, k := range keys {
+		if k != "" {
+			enResultado[k] = true
 		}
 	}
 	for _, key := range def.Totals {
 		if v, ok := sums[key]; ok {
 			run.Totals[key] = round2(v)
+			continue
+		}
+		if enResultado[key] {
+			if len(data) == 0 {
+				run.Totals[key] = 0
+				continue
+			}
+			run.Warnings = append(run.Warnings, fmt.Sprintf(
+				"no se pudo calcular el total de la columna %q: existe en el resultado pero ninguno de sus valores es numérico", key))
 			continue
 		}
 		run.Warnings = append(run.Warnings, fmt.Sprintf(

@@ -354,3 +354,67 @@ func TestPreviewNoBloqueaMostrandoWarning(t *testing.T) {
 		t.Errorf("ventas_anterior debería calcularse; warnings=%v", preview.Warnings)
 	}
 }
+
+// TestElTotalDeUnResultadoVacioEsCeroSinWarning: reproduce el defecto medido en
+// vivo con el asistente de IA. Contra una base recién instalada (sin facturas),
+// el modelo genera una definición correcta cuyo SELECT devuelve CERO filas; como
+// la suma va por filas, sums quedaba vacío y el motor avisaba "no se pudo
+// calcular el total de la columna X (SELECT: alias): no aparece en el resultado
+// de la consulta" — mientras el propio aviso la listaba entre las disponibles.
+// El total de cero filas es 0 y no es un aviso: es la respuesta correcta.
+func TestElTotalDeUnResultadoVacioEsCeroSinWarning(t *testing.T) {
+	s, db := basePrueba(t)
+	crearTablaReportTemplatePrueba(t, db)
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS ventas_vacias (
+		cliente TEXT, importe REAL)`); err != nil {
+		t.Fatalf("create ventas_vacias: %v", err)
+	}
+	// NO se insertan filas: esa es la condición del defecto.
+	sess := sessPrueba("admin")
+	def := `{"title":"Ventas por cliente","sql":"SELECT cliente AS customer_name, importe AS total_facturado FROM ventas_vacias","columns":[{"key":"customer_name","label":"Cliente"},{"key":"total_facturado","label":"Total"}],"totals":["total_facturado"]}`
+	_, preview, err := s.previewDefinitionFromJSON(sess, def)
+	if err != nil {
+		t.Fatalf("preview con resultado vacío no debe fallar: %v", err)
+	}
+	if len(preview.Warnings) > 0 {
+		t.Errorf("un resultado vacío no debe generar warnings; salieron: %v", preview.Warnings)
+	}
+	v, ok := preview.Totals["total_facturado"]
+	if !ok {
+		t.Fatalf("el total de la columna debe existir aunque no haya filas; Totals=%v", preview.Totals)
+	}
+	if fmt.Sprintf("%v", v) != "0" {
+		t.Errorf("esperaba total total_facturado=0; salió %v", v)
+	}
+}
+
+// TestLaColumnaExistePeroSusValoresNoSonNumericosDaAvisoHonesto: con filas y una
+// columna declarada como total cuyos valores no son números (texto), el aviso
+// debe decir POR QUÉ no se sumó — no puede decir que la columna "no aparece",
+// porque aparece y el usuario la ve en la tabla.
+func TestLaColumnaExistePeroSusValoresNoSonNumericosDaAvisoHonesto(t *testing.T) {
+	s, db := basePrueba(t)
+	crearTablaReportTemplatePrueba(t, db)
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS ventas_texto (
+		cliente TEXT, importe TEXT)`); err != nil {
+		t.Fatalf("create ventas_texto: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO ventas_texto (cliente, importe) VALUES ('A','no es un número'), ('B','12 pesos')`); err != nil {
+		t.Fatalf("insert ventas_texto: %v", err)
+	}
+	sess := sessPrueba("admin")
+	def := `{"title":"V","sql":"SELECT cliente, importe FROM ventas_texto","columns":[{"key":"cliente"},{"key":"importe"}],"totals":["importe"]}`
+	_, preview, err := s.previewDefinitionFromJSON(sess, def)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if len(preview.Warnings) != 1 {
+		t.Fatalf("esperaba exactamente 1 warning; salieron: %v", preview.Warnings)
+	}
+	if !strings.Contains(preview.Warnings[0], "ninguno de sus valores es numérico") {
+		t.Errorf("el warning debe explicar que los valores no son numéricos; salió: %q", preview.Warnings[0])
+	}
+	if strings.Contains(preview.Warnings[0], "no aparece en el resultado") {
+		t.Errorf("el warning no debe mentir: la columna SÍ aparece en el resultado. Salió: %q", preview.Warnings[0])
+	}
+}
