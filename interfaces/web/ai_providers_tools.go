@@ -24,8 +24,16 @@ import (
 // presupuesto mayor hasta que el razonamiento quepa. Al pagar es igual: se
 // cobran los tokens consumidos de verdad, el tope no es una factura.
 const (
-	aiAgenticMinTokens = 2000
-	aiAgenticMaxTokens = 32768
+	// aiAgenticMinTokens es el suelo del presupuesto de respuesta. 8 K en vez de
+	// 2 K: los modelos que razonan (LongCat-2.0) se cortaban ya con el primer
+	// intento de 2 K y cada reintento costaba minutos. Empezar más arriba
+	// evita el primer intento inútil.
+	aiAgenticMinTokens = 8000
+	// aiAgenticMaxTokens es el techo del presupuesto de respuesta. LongCat-2.0
+	// razona largo antes de escribir y con 32 K se cortaba siempre (finish_reason
+	// length con content vacío); 131 K le da holgura para terminar el
+	// razonamiento Y escribir el JSON del informe.
+	aiAgenticMaxTokens = 131072
 )
 
 // aiChatToolCall es una llamada a herramienta propuesta por el modelo.
@@ -142,7 +150,10 @@ func aiCallChatWithTools(p aiProvider, model string, messages []map[string]strin
 		// así trabaja igual un modelo que razona que uno que no—. Si no,
 		// contar la verdad con la pista del que la puede arreglar.
 		if estado.Cut && presupuesto < aiAgenticMaxTokens {
-			nuevo := presupuesto * 4
+			// Crece x8 (no x4): con un modelo que tarda minutos por intento,
+			// cada paso adicional cuesta caro en tiempo de espera. De 8 K a
+			// 64 K a 131 K: tres intentos en vez de cinco.
+			nuevo := presupuesto * 8
 			if nuevo > aiAgenticMaxTokens {
 				nuevo = aiAgenticMaxTokens
 			}

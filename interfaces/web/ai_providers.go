@@ -24,15 +24,13 @@ const (
 	// defaults now live in ai_rules.go (aiModelPorDefecto), because ORC24's
 	// default is `orc24` and an OpenAI default of gpt-4o-mini would contradict
 	// the curated catalog (small models are not offered).
-	// aiTimeout es el plazo máximo de UNA llamada al proveedor de IA. 180 s en
-	// vez de 60: un informe complejo (ventas por día/semana/mes/trimestre/año
-	// con comparador de período anterior) necesita que el modelo razone sobre un
-	// esquema grande y responda un JSON extenso; 60 s quedaban cortos y el
-	// cliente abortaba con «context deadline exceeded» cuando la IA tardaba
-	// más, perdiendo los tokens ya consumidos. El SSE renueva el WriteTimeout
-	// global del servidor en cada evento, así que un plazo mayor no deja la
-	// conexión colgada.
-	aiTimeout = 180 * time.Second
+	// aiTimeout es el plazo máximo de UNA llamada al proveedor de IA. 600 s en
+	// vez de 60/180: los modelos que razonan (LongCat-2.0) pueden tardar varios
+	// minutos en escribir la respuesta cuando el informe es complejo; el cliente
+	// abortaba con «context deadline exceeded» antes de recibirla y se perdían
+	// los tokens ya consumidos. El SSE renueva el WriteTimeout global del
+	// servidor en cada evento, así que un plazo mayor no deja la conexión colgada.
+	aiTimeout = 600 * time.Second
 	aiMaxBody = 8 << 20
 )
 
