@@ -371,7 +371,7 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 	// Se resuelve una vez para todos los renglones, y se crea si le falta —caso de
 	// los proveedores cargados desde el PHP original—, para que la deuda tenga
 	// dónde asentarse.
-	headSupplier, subSupplier, err := s.cuentaProveedorTx(tx, supplierID)
+	headSupplier, subSupplier, err := s.cuentaProveedorTx(tx, supplierID, createBy)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return

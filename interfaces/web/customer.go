@@ -503,14 +503,17 @@ func (s *Server) customerQuickCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := tx.Exec(`INSERT INTO acc_coa (HeadCode, HeadName, PHeadName, HeadLevel, IsActive, IsTransaction, IsGL,
-		HeadType, IsBudget, IsDepreciation, DepreciationRate, customer_id, CreateBy, CreateDate, isSubType, subType)
-		VALUES (?,?,?,?,1,1,0,'A',0,0,0,?,?,?,0,1)`,
-		headcode, fmt.Sprintf("%d-%s", customerID, name), "Customer Receivable", 4, customerID, sessUserID(sess), now()); err != nil {
+		HeadType, IsBudget, IsDepreciation, DepreciationRate, customer_id, CreateBy, CreateDate, UpdateBy, UpdateDate, isSubType, subType)
+		VALUES (?,?,?,?,1,1,0,'A',0,0,0,?,?,?,?,?,0,1)`,
+		headcode, fmt.Sprintf("%d-%s", customerID, name), "Customer Receivable", 4, customerID, sessUserID(sess), now(), sessUserID(sess), now()); err != nil {
 		jsonError(w, fmt.Sprintf("crear cuenta contable del cliente: %v", err), 500)
 		return
 	}
-	if _, err := tx.Exec(`INSERT INTO acc_subcode (subTypeId, name, referenceNo, status, created_by, created_date)
-		VALUES (3, ?, ?, 1, ?, ?)`, name, customerID, sessUserID(sess), today()); err != nil {
+	// updated_by NO es opcional: el DDL canónico lo declara NOT NULL sin DEFAULT
+	// (Error 1364 si falta). Regla del alta principal: a la creación vale el mismo
+	// que created_by.
+	if _, err := tx.Exec(`INSERT INTO acc_subcode (subTypeId, name, referenceNo, status, created_by, created_date, updated_by)
+		VALUES (3, ?, ?, 1, ?, ?, ?)`, name, customerID, sessUserID(sess), today(), sessUserID(sess)); err != nil {
 		jsonError(w, fmt.Sprintf("crear subcuenta del cliente: %v", err), 500)
 		return
 	}

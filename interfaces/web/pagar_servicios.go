@@ -73,7 +73,7 @@ func (s *Server) pagarServicioSave(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = tx.Rollback() }()
 
 	// La cuenta del proveedor: es la que se acredita (lo que se debe).
-	head, sub, err := s.cuentaProveedorTx(tx, supplierID)
+	head, sub, err := s.cuentaProveedorTx(tx, supplierID, createBy)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -203,7 +203,7 @@ func (s *Server) pagarCompraPay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	head, sub, err := s.cuentaProveedorTx(tx, supplierID)
+	head, sub, err := s.cuentaProveedorTx(tx, supplierID, createBy)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return

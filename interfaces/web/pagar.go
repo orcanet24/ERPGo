@@ -274,7 +274,7 @@ func (s *Server) pagarPay(w http.ResponseWriter, r *http.Request) {
 		}
 		medioCOA = pre.CashCode
 	}
-	headcode, sub, err := s.cuentaProveedorTx(tx, supplierID)
+	headcode, sub, err := s.cuentaProveedorTx(tx, supplierID, createBy)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -477,11 +477,12 @@ func (s *Server) supplierLedgerData(w http.ResponseWriter, r *http.Request) {
 // falta —proveedores cargados desde el PHP original, o cuenta borrada a mano— se
 // crea con el mismo código que usa el alta, para que sus documentos tengan dónde
 // asentarse y su deuda se vea.
-func (s *Server) cuentaProveedorTx(tx *sql.Tx, supplierID int64) (int64, sql.NullInt64, error) {
+func (s *Server) cuentaProveedorTx(tx *sql.Tx, supplierID int64, usuario string) (int64, sql.NullInt64, error) {
 	var headcode int64
 	err := tx.QueryRow(`SELECT HeadCode FROM acc_coa WHERE supplier_id = ? ORDER BY HeadCode LIMIT 1`, supplierID).Scan(&headcode)
 	if err == nil {
-		return headcode, s.subcodeProveedorTx(tx, supplierID), nil
+		sub, err := s.subcodeProveedorTx(tx, supplierID, usuario)
+		return headcode, sub, err
 	}
 	if err != sql.ErrNoRows {
 		return 0, sql.NullInt64{}, err
@@ -495,33 +496,42 @@ func (s *Server) cuentaProveedorTx(tx *sql.Tx, supplierID int64) (int64, sql.Nul
 	if err != nil {
 		return 0, sql.NullInt64{}, err
 	}
+	// UpdateBy/UpdateDate NO SON OPCIONALES: el DDL canónico de acc_coa (migrations/schema.sql)
+	// los declara NOT NULL sin DEFAULT, así que un INSERT que los omita muere con
+	// Error 1364 al primer documento del proveedor sin cuenta (rompió /purchase/save).
 	if _, err := tx.Exec(`
 		INSERT INTO acc_coa (HeadCode, HeadName, PHeadName, HeadLevel, IsActive, IsTransaction, IsGL,
-			HeadType, IsBudget, IsDepreciation, DepreciationRate, supplier_id, CreateBy, CreateDate, isSubType, subType)
-		VALUES (?,?,?,?,1,1,0,'L',0,0,0,?,?,?,1,4)`,
-		hc, fmt.Sprintf("%d-%s", supplierID, name), "Suppliers", 4, supplierID, "sistema", now()); err != nil {
-		return 0, sql.NullInt64{}, err
+			HeadType, IsBudget, IsDepreciation, DepreciationRate, supplier_id, CreateBy, CreateDate, UpdateBy, UpdateDate, isSubType, subType)
+		VALUES (?,?,?,?,1,1,0,'L',0,0,0,?,?,?,?,?,1,4)`,
+		hc, fmt.Sprintf("%d-%s", supplierID, name), "Suppliers", 4, supplierID, usuario, now(), usuario, now()); err != nil {
+		return 0, sql.NullInt64{}, fmt.Errorf("crear cuenta contable del proveedor %d: %w", supplierID, err)
 	}
-	return hc, s.subcodeProveedorTx(tx, supplierID), nil
+	sub, err := s.subcodeProveedorTx(tx, supplierID, usuario)
+	return hc, sub, err
 }
 
 // subcodeProveedorTx devuelve el id de acc_subcode del proveedor (subTypeId 4) y
 // lo crea si falta: es el detalle con el que se marca cada asiento del proveedor
 // y el que usa el alta para dejarlo creado.
-func (s *Server) subcodeProveedorTx(tx *sql.Tx, supplierID int64) sql.NullInt64 {
+//
+// EL ERROR SE PROPAGA. Antes la función se tragaba el fallo y devolvía un
+// subcode vacío: el asiento salía sin detalle y nadie se enteraba. Y ojo con el
+// tipo: created_by/updated_by son INT en el DDL canónico; usuario debe ser el
+// ID numérico del que actúa ("1", no "sistema": ese texto moría con Error 1366).
+func (s *Server) subcodeProveedorTx(tx *sql.Tx, supplierID int64, usuario string) (sql.NullInt64, error) {
 	var id int64
 	if err := tx.QueryRow(`SELECT id FROM acc_subcode WHERE referenceNo = ? AND subTypeId = 4 LIMIT 1`, supplierID).Scan(&id); err == nil {
-		return sql.NullInt64{Int64: id, Valid: true}
+		return sql.NullInt64{Int64: id, Valid: true}, nil
 	}
 	var name string
 	_ = tx.QueryRow(`SELECT supplier_name FROM supplier_information WHERE supplier_id = ?`, supplierID).Scan(&name)
 	res, err := tx.Exec(`INSERT INTO acc_subcode (subTypeId, name, referenceNo, status, created_by, created_date, updated_by)
-		VALUES (4, ?, ?, 1, ?, ?, ?)`, name, supplierID, "sistema", today(), "sistema")
+		VALUES (4, ?, ?, 1, ?, ?, ?)`, name, supplierID, usuario, today(), usuario)
 	if err != nil {
-		return sql.NullInt64{}
+		return sql.NullInt64{}, fmt.Errorf("crear subcódigo del proveedor %d: %w", supplierID, err)
 	}
 	id, _ = res.LastInsertId()
-	return sql.NullInt64{Int64: id, Valid: id > 0}
+	return sql.NullInt64{Int64: id, Valid: id > 0}, nil
 }
 
 // supplierPreviousBalance replicates supplier previous_balance_add:
