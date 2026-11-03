@@ -1,0 +1,5 @@
+env de IA del máq: []
+>> Error 1146 (42S02): Table 'erpgow_001.med_sales_master' doesn't exist
+>> Error 1146 (42S02): Table 'erpgow_001.med_sales_master' doesn't exist
+>> Error 1146 (42S02): Table 'erpgow_001.med_sales_master' doesn't exist
+>> Error 1146 (42S02): Table 'erpgow_001.customer_master' doesn't exist
