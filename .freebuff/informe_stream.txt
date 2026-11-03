@@ -1,0 +1,7 @@
+event: progreso
+data: Preparando el esquema completo de la base (cache del MCP)...
+
+event: progreso
+data: Consultando a la IA (un solo prompt: reglas + solicitud + esquema completo)...
+
+curl: (56) Recv failure: Connection was reset
