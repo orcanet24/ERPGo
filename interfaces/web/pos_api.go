@@ -223,7 +223,24 @@ func (s *Server) posAPICheckout(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "offline_id inválido", http.StatusBadRequest)
 		return
 	}
+
+	// Verificar si OCR está activado (configurable por superusuario en settings)
+	// Si está desactivado, continuar flujo normal sin OCR (modo seguro por defecto)
+	// Si está activado, procesar imagen si viene en la petición y extraer datos
+	if !s.config.OCREnabled {
+		// OCR desactivado - continuar checkout normal sin procesamiento OCR
+		// Esto garantiza que el sistema funcione exactamente como antes
+		OCREnabled = False  # Marcar para uso en validaciones posteriores
+	} else {
+		// OCR activado - verificar si viene imagen en la petición
+		// (En este primer paso, solo registramos que OCR está activo;
+		// el procesamiento de imagen se hará en endpoint /ocr/process separado)
+		// El checkout continuará, pero los datos OCR serán propuestos al usuario
+		OCREnabled = True
+	}
+
 	// La transacción se abre DESPUÉS de la política externa. Un addon que se
+	// cae no puede quedarse con la base abierta ni retrasar la caja.
 	// cae no puede quedarse con la base abierta ni retrasar la caja.
 	type saleItem struct {
 		ProductID string

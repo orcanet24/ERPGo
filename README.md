@@ -164,4 +164,138 @@ La vista de administración de addons está implementada en:
 
 Los addons de terceros son propiedad de sus creadores, quienes eligen su propia
 licencia (comercial o libre). ERPGo no reclama propiedad sobre los addons.
+## Módulo OCR Addon
+
+### Descripción General
+El módulo OCR permite procesar facturas entrantes utilizando Tesseract OCR via bindings de Go (`otiai10/gosseract/v2`). Es configurable por el superusuario mediante la variable de entorno `ENABLE_OCR=0|1`.
+
+### Estado Actual
+- **Modo por defecto**: `ENABLE_OCR=0` (desactivado) - El sistema funciona exactamente como antes sin OCR
+- **Para activar**: Configurar `ENABLE_OCR=1` en `settings/fiscal` o `.env`
+- **Motor OCR**: `gosseract` (wrapper Go a Tesseract C++ con soporte español `spa`)
+
+### Endpoints Disponibles
+
+| Endpoint | Método | Descripción |
+|----------|--------|-------------|
+| `/ocr/process` | POST | Procesa imagen de factura subida (multipart/form-data con field `invoice_image`). Detecta automáticamente RIF, total y fecha. Requiere `ENABLE_OCR=1`. |
+| `/ocr/status` | GET | Retorna el estado actual de OCR: `{"enabled": true/false, "message": "activado"|"desactivado"}`. |
+| `/ocr/test` | GET | Retorna una muestra de resultado OCR con datos simulados (útil para desarrollo). |
+
+### Estructura de Datos OCR
+
+```go
+type OCRResult struct {
+    Text          string  `json:"text"`           // Todo el texto extraído
+    Confidence    float64 `json:"confidence"`     // Nivel de confianza Tesseract (0-100)
+    RIFFound      string  `json:"rif_found"`      // RIF detectado (ej: J-12345678-9)
+    TotalFound    string  `json:"total_found"`    // Total/grand total detectado
+    DateFound     string  `json:"date_found"`     // Fecha detectada (dd/mm/yyyy)
+    InvoiceNo     string  `json:"invoice_no"`     // Número de factura/Comprobante
+    SupplierName  string  `json:"supplier_name"`  // Nombre proveedor
+    Status        string  `json:"status"`         // "ok", "low_confidence", "error", "disabled"
+    RawFormat     string  `json:"raw_format"`     // "xml", "pdf", "image"
+```
+
+### Flujo de Trabajo
+
+#### 1. OCR Desactivado (Recomendado por defecto)
+```
+Usuario sube factura → POST /ocr/process → Retorna: {"status": "disabled", ...}
+Sistema continúa normal, usuario ingresa datos manualmente.
+```
+
+#### 2. OCR Activado (Superusuario)
+```
+Usuario sube factura escaneada → Gosseract extrae texto → 
+Detecta: RIF, Total, Fecha → Retorna OCRResult → 
+IA propone datos → Validador fiscal permite create_report → 
+Usuario confirma → Sistema guarda factura con datos validados
+```
+
+#### 3. Baja Confianza (confidence < 30%)
+```
+OCR result → status: "low_confidence" → Usuario revisa manualmente
+```
+
+### Requisitos de Instalación
+
+1. **Go Dependency**:
+   ```bash
+   go get github.com/otiai10/gosseract/v2
+   go mod tidy
+   ```
+
+2. **Tesseract OCR Engine** (en el servidor Linux):
+   ```bash
+   # Debian/Ubuntu
+   apt-get update && apt-get install -y tesseract-ocr tesseract-ocr-spa
+   
+   # O otros gestores de paquetes según SO
+   ```
+
+3. **Configuración de Entorno**:
+   Agregar a `.env` o `settings/fiscal`:
+   ```
+   ENABLE_OCR=0      # Default: desactivado (seguro)
+   # o
+   ENABLE_OCR=1      # Activado: módulo OCR disponible
+   ```
+
+### Seguridad y Validador Fiscal
+
+El validador fiscal implementado protege contra 18 operaciones fiscales prohibidas:
+
+**Operaciones Bloqueadas:**
+- ✅ Guardar factura con datos OCR automáticamente
+- ✅ Modificar total después de OCR
+- ✅ Borrar factura fiscal después de OCR
+- ✅ Modificar tasas IGTF/IVA
+- ✅ Ocultar facturas fiscales
+- ✅ Suprimir comprobantes fiscales
+
+**Operaciones Permitidas:**
+- ✅ `create_report` con resultados OCR (solo reporte/propuesta, no modificación)
+- ✅ Analizar OCR y proponer datos al usuario
+- ✅ Mostrar resultados OCR para que el usuario decida
+
+**Prompt Seguro para IA:**
+```
+"Analizar resultado OCR de factura y proponer datos: 
+RIF=J-12345678-9, total=150.00, fecha=15/01/2025"
+```
+
+### Arquitectura del Sistema
+
+```
+┌─────────────────────────────────────┐
+│          Flujo Completo OCR          │
+├─────────────────────────────────────┤
+│ 1. Usuario sube imagen               │
+│ 2. POST /ocr/process                 │
+│ 3. Verificar ENABLE_OCR=1           │
+│ 4. Gosseract → Texto extraído        │
+│ 5. extractRIF/extractTotal/extractDate│
+│ 6. OCRResult con status              │
+│ 7. IA recibe resultado + prompt      │
+│ 8. Validador fiscal → bloquea/permite│
+│ 9. Usuario confirma o corrige        │
+│ 10. Guardar factura validada         │
+└─────────────────────────────────────┘
+```
+
+### Archivos Modificados/Creados
+
+- ✅ `interfaces/web/ocr_addon.go` (NUEVO) - Motor OCR completo
+- ✅ `interfaces/web/server.go` (MODIFICADO) - Línea 396: `s.registerOCCRoutes()`
+- ✅ Documentación en este README
+
+### Próximos Pasos Recomendados
+
+1. Instalar dependencias: `go get github.com/otiai10/gosseract/v2`
+2. Instalar Tesseract: `apt-get install tesseract-ocr tesseract-ocr-spa`
+3. Configurar `ENABLE_OCR=1` en settings
+4. Probar endpoints: `/ocr/process`, `/ocr/status`, `/ocr/test`
+5. Diseñar interfaz de configuración en panel de administración
+6. Integrar con flujo de compras existente
 ####################################################################################

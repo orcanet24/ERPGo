@@ -392,6 +392,8 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	s.registerReportRoutes()
 	// Settings
 	s.registerSettingRoutes()
+	// OCR Addon (configurable: ENABLE_OCR=0|1 en settings)
+	s.registerOCCRoutes()
 	// Multi-empresa: selector de empresa y aprovisionamiento
 	s.registerTenantRoutes()
 	s.registerTenantSetupRoutes()
