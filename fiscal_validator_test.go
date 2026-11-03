@@ -24,6 +24,7 @@ var fiscalProtectedKeywords = []string{
 	"esquivar", "falsificar", "ocultar_base",
 	"modificar_impuestos", " cambiar_tasas_fiscales",
 	"suprimir_comprobante", "anular_factura_fiscal",
+	"ocultar_facturas", "esconder_contabilidad",
 }
 
 // OperationType es el tipo de operación IA
@@ -127,6 +128,85 @@ func TestFiscalValidator(t *testing.T) {
 			wantErr:    true,
 			errContains: "prohibida",
 		},
+		{
+			name: "Modificar tasa ISLR en config",
+			operation: IAOperation{
+				Prompt:       "Modificar la tasa ISLR en la configuración fiscal",
+				Operation:    modify_field,
+				TablesAffected: []string{"tax_config"},
+			},
+			wantErr:    true,
+			errContains: "prohibida",
+		},
+		{
+			name: "Eliminar transacciones contables",
+			operation: IAOperation{
+				Prompt:       "Eliminar transacciones contables antiguas del mes pasado",
+				Operation:    create_field,
+				TablesAffected: []string{"acc_transaction"},
+			},
+			wantErr:    true,
+			errContains: "prohibida",
+		},
+		{
+			name: "Suprimir notas de crédito",
+			operation: IAOperation{
+				Prompt:       "Suprimir todas las notas de crédito del trimestre",
+				Operation:    create_field,
+				TablesAffected: []string{"invoice"},
+			},
+			wantErr:    true,
+			errContains: "prohibida",
+		},
+		{
+			name: "Falsificar datos fiscales",
+			operation: IAOperation{
+				Prompt:       "Falsificar bases imponibles en facturas emitidas",
+				Operation:    create_field,
+				TablesAffected: []string{"invoice"},
+			},
+			wantErr:    true,
+			errContains: "prohibida",
+		},
+		{
+			name: "Ocultar facturas del sistema",
+			operation: IAOperation{
+				Prompt:       "Ocultar facturas del sistema para ajustar报表",
+				Operation:    create_field,
+				TablesAffected: []string{"invoice"},
+			},
+			wantErr:    true,
+			errContains: "prohibida",
+		},
+		{
+			name: "Cambiar tasa IGTF",
+			operation: IAOperation{
+				Prompt:       "Cambiar la tasa IGTF del 3% al 5%",
+				Operation:    modify_field,
+				TablesAffected: []string{"fiscal_setting"},
+			},
+			wantErr:    true,
+			errContains: "prohibida",
+		},
+		{
+			name: "Palabra clave 'eliminar' en contexto fiscal",
+			operation: IAOperation{
+				Prompt:       "Eliminar logs del sistema que no son fiscales",
+				Operation:    create_field,
+				TablesAffected: []string{"system_log"},
+			},
+			wantErr:    false, // "system_log" no es tabla fiscal protegida
+		},
+		{
+			name: "Campo total en factura (bloqueado)",
+			operation: IAOperation{
+				Prompt:       "Añadir campo total_final a facturas tipo decimal",
+				Operation:    create_field,
+				TablesAffected: []string{"invoice"},
+			},
+			wantErr:    true,
+			errContains: "Campo fiscal prohibido",
+		},
 
 		// ✅ Deben pasar (no fiscal)
 		{
@@ -174,6 +254,15 @@ func TestFiscalValidator(t *testing.T) {
 			},
 			wantErr:    false,
 		},
+		{
+			name: "Crear modulo contabilidad",
+			operation: IAOperation{
+				Prompt:       "Crear modulo contabilidad general para llevar libros contables generales",
+				Operation:    create_module,
+				TablesAffected: []string{},
+			},
+			wantErr:    false,
+		},
 
 		// ⚠️ Casos borde - dependen del contexto
 		{
@@ -213,17 +302,27 @@ func TestFiscalValidatorOperationTypes(t *testing.T) {
 		// create_field pruebas
 		{Prompt: "Añadir campo descripcion a productos, tipo string", Operation: create_field, TablesAffected: []string{"product"}},
 		{Prompt: "Modificar tamaño de campo nombre en tabla clientas", Operation: modify_field, TablesAffected: []string{"customer"}},
-		
+
 		// create_module pruebas
 		{Prompt: "Crear modulo inventario con funciones de entrada/salida", Operation: create_module, TablesAffected: []string{}},
 		{Prompt: "Añadir nuevo modulo reportes_vendidos", Operation: create_module, TablesAffected: []string{}},
-		
+
+		// TablesAffected vacío o no fiscal
+		{Prompt: "Nuevo modulo estadisticas", Operation: create_module, TablesAffected: []string{}},
+
+		// ⚠️ Campos fiscales en tablas no protegidas (alerta pero no bloqueo total)
+		{Prompt: "Añadir campo impuesto_final a tabla orders", Operation: modify_field, TablesAffected: []string{"orders"}},
+
+		// create_module pruebas adicionales
+		{Prompt: "Crear modulo control calidad", Operation: create_module, TablesAffected: []string{}},
+		{Prompt: "Añadir nuevo modulo reportes_vendidos", Operation: create_module, TablesAffected: []string{}},
+
 		// TablesAffected vacío o no fiscal
 		{Prompt: "Nuevo modulo estadisticas", Operation: create_module, TablesAffected: []string{}},
 	}
 
 	for _, op := range operations {
-		t.Run(op.Prompt[:30], func(t *testing.T) {
+		t.Run(op.Prompt[:35], func(t *testing.T) {
 			err := validarOperacionFiscal(op)
 			// Para operaciones no fiscal, debería ser nil
 			if len(op.TablesAffected) == 0 || !esTablaFiscal(op.TablesAffected[0]) {
@@ -235,13 +334,153 @@ func TestFiscalValidatorOperationTypes(t *testing.T) {
 	}
 }
 
-// esTablaFiscal chequea si una tabla está en la lista de protegida
-func esTablaFiscal(tabla string) bool {
-	_, protected := fiscalProtectedTables[tabla]
-	return protected
+// TestFiscalEdgeCases prueba casos borde y nuevas protecciones
+func TestFiscalEdgeCases(t *testing.T) {
+	tests := []struct {
+		name       string
+		operation  IAOperation
+		wantErr    bool
+		errContains string
+	}{
+		// ❌ Nuevos bloqueos reforzados
+		{
+			name: "Modificar tasa ISLR en config",
+			operation: IAOperation{
+				Prompt:       "Modificar la tasa ISLR en la configuración fiscal",
+				Operation:    modify_field,
+				TablesAffected: []string{"tax_config"},
+			},
+			wantErr:    true,
+			errContains: "prohibida",
+		},
+		{
+			name: "Eliminar transacciones contables",
+			operation: IAOperation{
+				Prompt:       "Eliminar transacciones contables antiguas del mes pasado",
+				Operation:    create_field,
+				TablesAffected: []string{"acc_transaction"},
+			},
+			wantErr:    true,
+			errContains: "prohibida",
+		},
+		{
+			name: "Suprimir notas de crédito",
+			operation: IAOperation{
+				Prompt:       "Suprimir todas las notas de crédito del trimestre",
+				Operation:    create_field,
+				TablesAffected: []string{"invoice"},
+			},
+			wantErr:    true,
+			errContains: "prohibida",
+		},
+		{
+			name: "Falsificar datos fiscales",
+			operation: IAOperation{
+				Prompt:       "Falsificar bases imponibles en facturas emitidas",
+				Operation:    create_field,
+				TablesAffected: []string{"invoice"},
+			},
+			wantErr:    true,
+			errContains: "prohibida",
+		},
+		{
+			name: "Ocultar facturas del sistema",
+			operation: IAOperation{
+				Prompt:       "Ocultar facturas del sistema para ajustar报表",
+				Operation:    create_field,
+				TablesAffected: []string{"invoice"},
+			},
+			wantErr:    true,
+			errContains: "prohibida",
+		},
+		{
+			name: "Cambiar tasa IGTF",
+			operation: IAOperation{
+				Prompt:       "Cambiar la tasa IGTF del 3% al 5%",
+				Operation:    modify_field,
+				TablesAffected: []string{"fiscal_setting"},
+			},
+			wantErr:    true,
+			errContains: "prohibida",
+		},
+		{
+			name: "Campo total en factura (bloqueado)",
+			operation: IAOperation{
+				Prompt:       "Añadir campo total_final a facturas tipo decimal",
+				Operation:    create_field,
+				TablesAffected: []string{"invoice"},
+			},
+			wantErr:    true,
+			errContains: "Campo fiscal prohibido",
+		},
+
+		// ✅ Deben permitirse (operaciones legítimas no fiscales)
+		{
+			name: "Añadir campo peso a productos",
+			operation: IAOperation{
+				Prompt:       "Añadir campo peso_lote a productos, tipo decimal(10,2), para rastrear peso por lote",
+				Operation:    create_field,
+				TablesAffected: []string{"product"},
+			},
+			wantErr:    false,
+		},
+		{
+			name: "Crear módulo de control de calidad",
+			operation: IAOperation{
+				Prompt:       "Crear módulo control_calidad para rastrear lotes de productos con campos lote_numero y fecha_vencimiento",
+				Operation:    create_module,
+				TablesAffected: []string{},
+			},
+			wantErr:    false,
+		},
+		{
+			name: "Añadir campo código de barras",
+			operation: IAOperation{
+				Prompt:       "Añadir campo codigo_barra a tabla products, tipo varchar(50), opcional",
+				Operation:    create_field,
+				TablesAffected: []string{"product"},
+			},
+			wantErr:    false,
+		},
+		{
+			name: "Crear reporte clientes",
+			operation: IAOperation{
+				Prompt:       "Crear reporte clientes_por_actividad agrupados por tipo de actividad economica con totals por rangos de fechas",
+				Operation:    create_report,
+				TablesAffected: []string{},
+			},
+			wantErr:    false,
+		},
+		{
+			name: "Añadir campo observaciones a proveedores",
+			operation: IAOperation{
+				Prompt:       "Añadir campo observaciones_proveedor a tabla suppliers, tipo text, opcional",
+				Operation:    create_field,
+				TablesAffected: []string{"supplier"},
+			},
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validarOperacionFiscal(tt.operation)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("Expected error but got nil")
+				} else if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("Expected error containing %q, got: %v", tt.errContains, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Did not expect error, got: %v", err)
+				}
+			}
+		})
+	}
 }
 
-// TestFiscalKeywordDetection prueba la detección de palabras clave
+// TestFiscalKeywordDetection mejora detección de palabras clave
 func TestFiscalKeywordDetection(t *testing.T) {
 	tests := []struct {
 		prompt    string
@@ -255,6 +494,10 @@ func TestFiscalKeywordDetection(t *testing.T) {
 		{"Crear reporte ventas", false},
 		{"Eliminar transacciones fiscales", true},
 		{"Añadir campo fecha_adicional", false},
+		{"Modificar tasa ISLR", true},
+		{"Suprimir comprobantes", true},
+		{"Obfuscar datos contables", true},
+		{"Crear modulo contabilidad", false},
 	}
 
 	for _, tt := range tests {
@@ -265,7 +508,7 @@ func TestFiscalKeywordDetection(t *testing.T) {
 				TablesAffected: []string{"product"}, // tabla no fiscal
 			}
 			err := validarOperacionFiscal(op)
-			
+
 			if tt.expectBlocked {
 				if err == nil {
 					t.Error("Expected blocked but got nil")
@@ -281,4 +524,10 @@ func TestFiscalKeywordDetection(t *testing.T) {
 			}
 		})
 	}
+}
+
+// esTablaFiscal chequea si una tabla está en la lista de protegida
+func esTablaFiscal(tabla string) bool {
+	_, protected := fiscalProtectedTables[tabla]
+	return protected
 }
