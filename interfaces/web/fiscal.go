@@ -162,9 +162,19 @@ func (s *Server) loadFiscalSettings(r *http.Request) fiscalSettings {
 			fs.WalkinRIFReq = v == "1"
 		case "fiscal_footnote":
 			fs.FiscalFootnote = v
+		case "cashhea_enabled":
+			fs.CashheaEnabled = v == "1"
 		}
 	}
 	return fs
+}
+
+type fiscalSettings struct {
+	IGTFEnabled    bool
+	IGTFRate       float64
+	WalkinRIFReq   bool
+	FiscalFootnote string
+	CashheaEnabled bool
 }
 
 // setFiscalSetting escribe un ajuste fiscal en la base de la empresa de esta
@@ -380,6 +390,7 @@ func seedPaymentMethodCOA(db *sql.DB) {
 		"zelle":         bank,
 		"cripto":        bank,
 		"credito":       customer,
+		"cashhea":       0, // Cashea: cuenta se asigna después o usa una por defecto
 	}
 	for code, coa := range mappings {
 		if _, err := db.Exec(`UPDATE payment_method SET coa_id = ? WHERE code = ? AND (coa_id IS NULL OR coa_id = 0)`, coa, code); err != nil {

@@ -868,6 +868,97 @@ func (s *Server) handlePOSDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 // ============================================================
+// Cashea Configuration
+// ============================================================
+
+// handleCashheaToggle alterna la activación de Cashea (solo super usuario)
+func (s *Server) handleCashheaToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	db := s.dbFor(r)
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid data", http.StatusBadRequest)
+		return
+	}
+
+	_, err := db.Exec(`UPDATE fiscal_setting SET value = ? WHERE key = 'cashhea_enabled'`, req.Enabled)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{"status": "updated", "cashhea_enabled": req.Enabled})
+}
+
+// handleCashheaStatus obtiene el estado actual de Cashea
+func (s *Server) handleCashheaStatus(w http.ResponseWriter, r *http.Request) {
+	db := s.dbFor(r)
+	var value string
+	err := db.QueryRow(`SELECT value FROM fiscal_setting WHERE key = 'cashhea_enabled'`).Scan(&value)
+	if err != nil {
+		value = "0"
+	}
+	writeJSON(w, map[string]interface{}{"cashhea_enabled": value == "1"})
+}
+
+// ============================================================
+// registerPOSAdminRoutes registra la INTEGRACIÓN con el POS, no el POS.
+//
+// AQUÍ SE QUITÓ EL PANEL WEB DEL POS (2026-10-18). Lo que había era: /pos/admin
+// pintaba `templates/pos/admin.html`, un archivo que no existe en el proyecto
+// —así que la pantalla era un 500 fijo—, y /pos/admin/{terminales,turnos,ventas,
+// config} devolvían literalmente «En construcción», más /pos/dashboard, que
+// pintaba el panel de caja del propio ERP. El POS es OTRO PROYECTO: se comunica
+// con el ERP por API/gRPC, pero el ERP no factura tipo caja registradora ni
+// administra sus pantallas. Dejarlas era ofrecer menús que no llevan a ninguna
+// parte.
+//
+// LO QUE **NO** SE TOCA, y es lo que mantiene la comunicación: los endpoints
+// JSON de sucursales, cajas y API keys (/admin/pos/*, /pos/api/*) y todo
+// /api/pos/* con su autenticación. Sin ellos, un terminal POS nuevo no se podría
+// dar de alta ni sincronizar.
+func (s *Server) registerPOSAdminRoutes() {
+	s.mux.HandleFunc("GET /pos/api/dashboard", s.posAPIDashboard)
+	s.mux.HandleFunc("GET /pos/api/terminals", s.posAPITerminals)
+	s.mux.HandleFunc("GET /pos/api/turns", s.posAPITurns)
+	s.mux.HandleFunc("POST /pos/api/terminal/{id}/logout", s.posAPITerminalLogout)
+	s.mux.HandleFunc("POST /pos/api/turn/{id}/close", s.posAPITurnClose)
+	s.mux.HandleFunc("POST /pos/api/terminal/create", s.posAPICreateTerminal)
+
+	// Sucursales
+	s.mux.HandleFunc("/admin/pos/branches", s.handleBranchList)
+	s.mux.HandleFunc("/admin/pos/branch/create", s.handleBranchCreate)
+	s.mux.HandleFunc("/admin/pos/branch/edit", s.handleBranchEdit)
+	s.mux.HandleFunc("/admin/pos/branch/delete", s.handleBranchDelete)
+
+	// Cajas
+	s.mux.HandleFunc("/admin/pos/registers", s.handleRegisterList)
+	s.mux.HandleFunc("/admin/pos/register/create", s.handleRegisterCreate)
+	s.mux.HandleFunc("/admin/pos/register/edit", s.handleRegisterEdit)
+	s.mux.HandleFunc("/admin/pos/register/delete", s.handleRegisterDelete)
+
+	// API Keys
+	s.mux.HandleFunc("/admin/pos/apikeys", s.handleAPIKeyList)
+	s.mux.HandleFunc("/admin/pos/apikey/create", s.handleAPIKeyCreate)
+	s.mux.HandleFunc("/admin/pos/apikey/regenerate", s.handleAPIKeyRegenerate)
+	s.mux.HandleFunc("/admin/pos/apikey/revoke", s.handleAPIKeyRevoke)
+	s.mux.HandleFunc("/admin/pos/apikey/delete", s.handleAPIKeyDelete)
+
+	// Dashboard POS
+	s.mux.HandleFunc("/admin/pos/dashboard", s.handlePOSDashboard)
+
+	// Cashea Configuration
+	s.mux.HandleFunc("/admin/pos/cashhea/toggle", s.handleCashheaToggle)
+	s.mux.HandleFunc("/admin/pos/cashhea/status", s.handleCashheaStatus)
+}
+
+// ============================================================
 // Helper: Validar API Key y obtener sucursal/caja
 // ============================================================
 

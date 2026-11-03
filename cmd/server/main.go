@@ -215,6 +215,13 @@ func main() {
 	// más, y el catálogo deja de mezclar datos sin quedarse sin identidad.
 	server := web.NewServer(cfg, db)
 
+	// Iniciar polling de estado Cashea cada 30s como alternativa a los webhooks
+	// Esta es la estrategia: consultar la API Cashea periódicamente (cada 30s)
+	// en lugar de depender de webhooks, que pueden no estar configurados o tener
+	// costo adicional. El polling es 'best effort' - si falla, el sistema continúa
+	// con el estado local y vuelve a intentar en el siguiente ciclo.
+	StartCasheaStatusPoller()
+
 	// If migrate-only mode, exit after migrations
 	if *migrate {
 		fmt.Println("Migrations applied. Exiting.")

@@ -177,7 +177,8 @@ INSERT INTO `payment_method` (`code`, `name`, `is_foreign`, `sort_order`) VALUES
   ('transferencia', 'Transferencia', 0, 4),
   ('zelle', 'Zelle', 1, 5),
   ('cripto', 'Criptoactivo', 1, 6),
-  ('credito', 'Crédito', 0, 7);
+  ('credito', 'Crédito', 0, 7),
+  ('cashhea', 'Cashea', 0, 8);
 
 -- ---------------------------------------------------------------------------
 -- Sesiones de caja (turno → cierre X/Z con arqueo por método de pago)
@@ -213,6 +214,47 @@ CREATE TABLE IF NOT EXISTS `cash_session_payment` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
+-- Sesiones Cashea (BNPL: Buy Now, Pay Later) - Vargas, 2026-11-03
+-- ---------------------------------------------------------------------------
+-- Modelo Cashea: compra en cuotas sin interés para el cliente.
+-- El comercio recibe pago inicial al momento, Cashea cobra cuotas al cliente.
+-- Estructura: 1 sesión = 1 venta Cashea con múltiples cuotas.
+CREATE TABLE IF NOT EXISTS `cashhea_session` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `session_id` VARCHAR(64) NOT NULL COMMENT 'UUID sesión externa Cashea',
+  `pos_session_id` INT NOT NULL COMMENT 'Referencia a cash_session POS',
+  `client_phone` VARCHAR(30) NOT NULL COMMENT 'Teléfono del cliente Cashea',
+  `client_rif` VARCHAR(12) DEFAULT NULL COMMENT 'RIF del cliente (opcional)',
+  `sale_amount` DECIMAL(18,2) NOT NULL DEFAULT 0.00 COMMENT 'Monto total de la venta',
+  `down_payment` DECIMAL(18,2) NOT NULL DEFAULT 0.00 COMMENT 'Pago inicial recibido al momento',
+  `installments` INT NOT NULL DEFAULT 1 COMMENT 'Número de cuotas (1-14 días cada una)',
+  `installment_amount` DECIMAL(18,2) NOT NULL DEFAULT 0.00 COMMENT 'Monto de cada cuota',
+  `total_fees` DECIMAL(18,2) NOT NULL DEFAULT 0.00 COMMENT 'Comisiones totales (venta + adelanto)',
+  `status` VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/approved/active/completed/failed',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `closed_at` DATETIME DEFAULT NULL COMMENT 'Cuándo se completaron todas las cuotas',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_cashhea_session_id` (`session_id`),
+  KEY `idx_cs_pos_session` (`pos_session_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Sesiones de pago Cashea (BNPL)';
+
+CREATE TABLE IF NOT EXISTS `cashhea_installment` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `cashhea_session_id` INT NOT NULL COMMENT 'Referencia a cashhea_session',
+  `installment_number` INT NOT NULL DEFAULT 1 COMMENT 'Número de cuota (1, 2, 3...)',
+  `amount` DECIMAL(18,2) NOT NULL DEFAULT 0.00 COMMENT 'Monto de esta cuota',
+  `due_date` DATE NOT NULL COMMENT 'Fecha de vencimiento (14 días después anterior)',
+  `paid_at` DATETIME DEFAULT NULL COMMENT 'Cuándo fue pagado realmente',
+  `payment_method` VARCHAR(20) DEFAULT NULL COMMENT 'Método de pago de la cuota',
+  `status` VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/paid/failed',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_chi_session` (`cashhea_session_id`),
+  KEY `idx_chi_number` (`installment_number`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Cuotas de pago Cashea';
+
+-- ---------------------------------------------------------------------------
 -- Parámetros fiscales (leídos por fiscal.go, editables en Ajustes > Fiscal)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `fiscal_setting` (
@@ -227,4 +269,5 @@ INSERT INTO `fiscal_setting` (`key`, `value`) VALUES
   ('igtf_enabled', '1'),
   ('igtf_rate', '3.00'),
   ('walkin_rif_required', '0'),
-  ('fiscal_footnote', 'Documento fiscal conforme a Ley de IVA y Providencia SNAT/2024/000102');
+  ('fiscal_footnote', 'Documento fiscal conforme a Ley de IVA y Providencia SNAT/2024/000102'),
+  ('cashhea_enabled', '0');

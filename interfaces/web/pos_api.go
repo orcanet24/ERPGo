@@ -303,7 +303,7 @@ func (s *Server) posAPICheckout(w http.ResponseWriter, r *http.Request) {
 		paidTotal += p.Amount
 		method := strings.ToLower(strings.TrimSpace(p.Method))
 		switch method {
-		case "cash":
+		case "cash", "cashhea":
 			cashAmount += p.Amount
 		case "card", "punto":
 			cardAmount += p.Amount
