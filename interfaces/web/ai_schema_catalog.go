@@ -30,24 +30,43 @@ type aiCatalogTable struct {
 	Description string
 	Columns     string // descripción compacta de columnas (rellenada por introspección)
 	Relations   string // joins típicos (rellenada por introspección)
+	Tipo        string // 'operacional', 'fiscal' o 'solo-lectura-fiscal'
 }
 
 // aiCatalogWhitelist: tablas de negocio visibles para la IA y para el modal
 // de ayuda del diseñador de informes. Cualquier tabla fuera de esta lista
 // (users, user_login, ai_providers, ai_agent, sesiones, internas) es invisible.
 var aiCatalogWhitelist = map[string]string{
-	"invoice":                  "Facturas de venta (cabecera): cliente, fechas, totales, pagado, por cobrar, estado e is_draft.",
-	"invoice_details":          "Renglones de factura: producto, cantidad, precio, descuento, IVA, total por renglón. Une con invoice por invoice_id.",
-	"customer_information":     "Clientes: nombre, RIF, contacto y estado. PK customer_id.",
-	"supplier_information":     "Proveedores: nombre, contacto y estado. PK supplier_id.",
-	"product_information":      "Productos: nombre, modelo, unidad, barcode, precio de venta y estado. PK product_id.",
-	"product_category":         "Categorías de producto. PK category_id.",
-	"product_purchase":         "Compras (cabecera): proveedor, fecha, totales, estado. PK purchase_id.",
-	"product_purchase_details": "Renglones de compra: producto, cantidad, costo (rate), total. Une con product_purchase por purchase_id.",
-	"product_return":           "Devoluciones: usablity 1=devolución de venta, 2=devolución a proveedor; net_total_amount.",
-	"product_service":          "Servicios facturables separados de productos.",
-	"quotation":                "Cotizaciones (cabecera) y su estado.",
-	"service_invoice":          "Facturas de servicio: cliente, fecha, totales.",
+	"invoice":                  "Facturas de venta (cabecera): cliente, fechas, totales, pagado, por cobrar, estado e is_draft. [TIPO: operacional - IA puede consultar ventas, calcular totales]",
+	"invoice_details":          "Renglones de factura: producto, cantidad, precio, descuento, IVA, total por renglón. Une con invoice por invoice_id. [TIPO: operacional]",
+	"customer_information":     "Clientes: nombre, RIF, contacto y estado. PK customer_id. [TIPO: operacional - IA puede ver datos del cliente]",
+	"supplier_information":     "Proveedores: nombre, contacto y estado. PK supplier_id. [TIPO: operacional - IA puede ver datos del proveedor]",
+	"product_information":      "Productos: nombre, modelo, unidad, barcode, precio de venta y estado. PK product_id. [TIPO: operacional - IA puede consultar stock y precios]",
+	"product_category":         "Categorías de producto. PK category_id. [TIPO: operacional]",
+	"product_purchase":         "Compras (cabecera): proveedor, fecha, totales, estado. PK purchase_id. [TIPO: operacional - IA puede consultar historial de compras]",
+	"product_purchase_details": "Renglones de compra: producto, cantidad, costo (rate), total. Une con product_purchase por purchase_id. [TIPO: operacional]",
+	"product_return":           "Devoluciones: usablity 1=devolución de venta, 2=devolución a proveedor; net_total_amount. [TIPO: operacional]",
+	"product_service":          "Servicios facturables separados de productos. [TIPO: operacional]",
+	"quotation":                "Cotizaciones (cabecera) y su estado. [TIPO: operacional]",
+	"service_invoice":          "Facturas de servicio: cliente, fecha, totales. [TIPO: operacional]",
+	"acc_coa":                  "Plan de cuentas (COA): HeadCode, HeadName, HeadType (A=Activo, L=Pasivo, I=Ingreso, E=Gasto), jerarquía PHeadName. [TIPO: fiscal - IA SOLO LECTURA, no modificar estructura]",
+	"acc_transaction":          "Movimientos contables por cuenta: VNo, VDate, Debit, Credit. Une con acc_coa por COAID. [TIPO: fiscal - IA SOLO LECTURA, NUNCA modificación]",
+	"acc_vaucher":              "Vouchers/comprobantes: VNo, Vtype (JV/CV/DV/CONTRA), referencia, débito/crédito por línea. [TIPO: fiscal - IA SOLO LECTURA, nunca escribir]",
+	"acc_subcode":              "Subcódigos que enlkan cuentas con clientes/proveedores: subTypeId 3=cliente, 4=proveedor, referenceNo. [TIPO: fiscal]",
+	"bank_information":         "Bancos registrados y sus cuentas. [TIPO: operacional]",
+	"bank_transaction":         "Movimientos bancarios: fecha, débito/crédito, referencia. [TIPO: operacional]",
+	"cash_session":             "Sesiones de caja por cajero: apertura/cierre, totales. [TIPO: operacional]",
+	"cash_session_payment":     "Cobros registrados en cada sesión de caja. [TIPO: operacional]",
+	"payment_method":           "Métodos de pago venezolanos: código, nombre, moneda extranjera (is_foreign) y cuenta contable. [TIPO: operacional]",
+	"credit_note":              "Notas de crédito: cliente, factura de origen, totales. [TIPO: operacional]",
+	"credit_note_details":      "Renglones de nota de crédito. [TIPO: operacional]",
+	"tax_collection":           "IVA cobrado por factura/período. [TIPO: fiscal - IA SOLO LECTURA, no configurar tasas]",
+	"vat_retention":            "Retenciones de IVA (libro legal Venezuela). [TIPO: fiscal - IA SOLO LECTURA]",
+	"islr_retention":           "Retenciones de ISLR (libro legal Venezuela). [TIPO: fiscal - IA SOLO LECTURA]",
+	"igtf_transaction":         "Percepciones IGTF registradas. [TIPO: fiscal - IA SOLO LECTURA]",
+	"exchange_rate":            "Tasas de cambio BCV por fecha. [TIPO: operacional]",
+	"voucher_no_setting":       "Configuración de numeración de vouchers por tipo. [TIPO: solo-lectura-fiscal]",
+
 	"acc_coa":                  "Plan de cuentas (COA): HeadCode, HeadName, HeadType (A=Activo, L=Pasivo, I=Ingreso, E=Gasto), jerarquía PHeadName.",
 	"acc_transaction":          "Movimientos contables por cuenta: VNo, VDate, Debit, Credit. Une con acc_coa por COAID.",
 	"acc_vaucher":              "Vouchers/comprobantes: VNo, Vtype (JV/CV/DV/CONTRA), referencia, débito/crédito por línea.",

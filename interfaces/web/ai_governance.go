@@ -52,21 +52,35 @@ const (
 // se rechaza por omisión (ver aiGuardAction). Declararla ahí la clasifica; el
 // campo Run decide si además está implementada.
 
-// aiForbiddenTables son tablas que la IA jamás puede leer por SQL. Están
-// excluidas del mapa del esquema Y bloqueadas aquí: la segunda barrera importa
+// aiForbiddenTables son tablas que la IA jamás puede leer por SQL en reportes.
+// Están excluidas del mapa del esquema Y bloqueadas aquí: la segunda barrera importa
 // porque protege si alguien amplía el mapa por error o por una tabla nueva.
+// Reporte-specific: estas tablas fiscales críticas nunca serán objetivo de un reporte IA.
 var aiForbiddenTables = []string{
+	// Control y seguridad (siempre)
 	"user_login", "users", "ai_providers", "ai_provider", "ai_setting",
 	"sec_userrole", "sec_role", "audit_log", "audit_chain_blocks",
 	"queue_tasks", "sec_password",
+	// Fiscal crítica (NUNCA por IA)
+	"acc_transaction", "acc_vaucher", "acc_coa", "acc_subcode", "acc_subtype",
+	"fiscal_setting", "fiscal_series", "tax_config", "retention",
+	"pos_fiscal_blocks",
+	// Solo humanos editarán: fuera del flujo IA
+	"company",
 }
 
 // aiForbiddenWriteTables nunca admiten escritura desde un agente, sin importar
 // el rol ni el prompt. La contabilidad y la auditoría son intocables por IA:
 // un agente puede leer un balance, pero jamás escribir en él.
+// Reportes: estas tablas fiscales también están protegidas contra cualquier
+// escritura (aunque el reporte IA sea solo SELECT, el sistema evita que se
+// configure por error una definición que intente escribir o modificar).
 var aiForbiddenWriteTables = []string{
 	"acc_transaction", "acc_vaucher", "acc_coa", "acc_subcode", "acc_subtype",
 	"audit_log", "audit_chain_blocks",
+	// Protección extendida para reportes IA:
+	"fiscal_setting", "fiscal_series", "tax_config", "retention",
+	"pos_fiscal_blocks",
 }
 
 // GovernanceDecision es el veredicto del guardián para una acción.
@@ -264,4 +278,139 @@ func aiDetectFraudIntent(text string) (bool, string) {
 		}
 	}
 	return false, ""
+}
+
+// validateReportSQL verifica que la definición SQL de un informe IA cumpla
+// con las restricciones de seguridad: solo lecturas sobre tablas permitidas,
+// sin targetear tablas fiscales configurables, y usando solo campos operacionales.
+// Esto se ejecuta como segunda barrera DESPUÉS del contrato JSON y antes de la
+// ejecución real del reporte.
+func validateReportSQL(sql string, schema map[string]map[string]string) *GovernanceDecision {
+\tlow := strings.ToLower(sql)
+
+\t// 1. Revisar tablas objetivo en el FROM/JOIN
+\ttablasObjecionables := []string{
+\t\t"acc_transaction",
+\t\t"acc_vaucher",
+\t\t"acc_coa",
+\t\t"acc_subcode",
+\t\t"acc_subtype",
+\t\t"fiscal_setting",
+\t\t"fiscal_series",
+\t\t"tax_config",
+\t\t"retention",
+\t\t"pos_fiscal_blocks",
+\t}
+
+\tfor _, tabla := range tablasObjecionables {
+\t\tif strings.Contains(low, tabla) {
+\t\t\treturn &GovernanceDecision{
+\t\t\t\tAllowed:    false,
+\t\t\t\tRisk:       RiskCritical,
+\t\t\t\tRule:       "tablas-fiscales",
+\t\t\t\tReason: fmt.Sprintf("El reporte IA no puede targetear la tabla fiscal '%s'. Las operaciones fiscales son solo para humanos.", tabla),
+\t\t\t}
+\t\t}
+\t}
+
+\t// 2. Verificar que las tablas usadas estén en la lista permitida para reportes
+\t// (tablas operacionales: product, client, supplier, sale, etc.)
+\t// Si el schema viene vacío o es muy limitado, permitimos razonablemente.
+\tcolumnasPermitidas := map[string]bool{
+\t\t"product": true,
+\t\t"client": true,
+\t\t"supplier": true,
+\t\t"sale": true,
+\t\t"purchase": true,
+\t\t"invoice": true,  // sololectura, no configuración fiscal
+\t\t"company": true,  // datos básicos, no fiscales configurables
+\t}
+
+\t// Extraer nombres de tablas del SQL (patrones simples FROM y JOIN)
+\tpatronesFROM := []string{
+\t\t`from\\s+(\\w+)`,
+\t\t`join\\s+(\\w+)`,
+\t}
+
+\tfor _, patron := range patronesFROM {
+\t\tmatches := findSQLMatches(sql, patron)
+\t\tfor _, tabla := range matches {
+\t\t\t// Permitir la tabla si está en la lista blanca O bloquear si es fiscal
+\t\t\tif !columnasPermitidas[tabla] {
+\t\t\t\t// Verificar si es una tabla fiscal conocida
+\t\t\t\tesFiscal := false
+\t\t\t\tfor _, fTabla := range tablasObjecionables {
+\t\t\t\t\tif strings.EqualFold(tabla, fTabla) {
+\t\t\t\t\t\tesFiscal = true
+\t\t\t\t\t\tbreak
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t\tif esFiscal {
+\t\t\t\t\treturn &GovernanceDecision{
+\t\t\t\t\t\tAllowed:    false,
+\t\t\t\t\t\tRisk:       RiskCritical,
+\t\t\t\t\t\tRule:       "tablas-fiscales",
+\t\t\t\t\t\tReason: fmt.Sprintf("Tabla '%s' es fiscal y está prohibida en reportes IA. Humanos editan en laboratorio.", tabla),
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t// Tabla no reconocida: bloquear por seguridad
+\t\t\t\treturn &GovernanceDecision{
+\t\t\t\t\tAllowed:    false,
+\t\t\t\t\tRisk:       RiskCritical,
+\t\t\t\t\tRule:       "tabla-no-permitida",
+\t\t\t\t\tReason: fmt.Sprintf("Tabla '%s' no está en la lista permitida para reportes IA. Usa tablas operacionales (product, client, supplier, sale, purchase).", tabla),
+\t\t\t\t}
+\t\t\t}
+\t\t}
+\t}
+
+\t// 3. Verificar campos sensibles en SELECT que indiquen fiscal
+\tpalabrasClaveFiscales := []string{
+\t\t"impuesto",
+\t\t"retencion",
+\t\t"igtf",
+\t\t"base_imponible",
+\t\t"igv",
+\t\t"total_fiscal",
+\t\t"subtotal_fiscal",
+\t}
+
+\tfor _, kw := range palabrasClaveFiscales {
+\t\tif strings.Contains(low, kw) {
+\t\t\t// Permitir la palabra si está en contexto de reporte de consulta SOBRE datos,
+\t\t\t// pero bloquear si parece configuración manual.
+\t\t\t// Regla heurística: si viene después de GROUP BY, ORDER BY, o en agregación,
+\t\t\t// es probable que sea un reporte de consulta normal.
+\t\t\tif !strings.Contains(low, "group by") && !strings.Contains(low, "order by") &&
+\t\t\t   !strings.Contains(low, "sum(") && !strings.Contains(low, "count(") {
+\t\t\t\treturn &GovernanceDecision{
+\t\t\t\t\tAllowed:    false,
+\t\t\t\t\tRisk:       RiskCritical,
+\t\t\t\t\tRule:       "palabra-clave-fiscal",
+\t\t\t\t\tReason: fmt.Sprintf("Palabra clave fiscal '%s' detectada en SQL de reporte. Verifica que sea parte de cálculo sobre datos, no configuración manual.", kw),
+\t\t\t\t}
+\t\t\t}
+\t\t}
+\t}
+
+\treturn &GovernanceDecision{
+\t\tAllowed: true,
+\t\tRisk:    RiskRead,
+\t\tRule:    "ok",
+\t\tReason: "SQL de reporte pasa validación de seguridad",
+\t}
+}
+
+// findSQLMatches busca coincidencias de patrón regex simple en SQL.
+// Devuelve la primera palabra capturada de cada match.
+func findSQLMatches(sql, pattern string) []string {
+\tvar results []string
+\tre := regexp.MustCompile(pattern)
+\tmatches := re.FindAllStringSubmatch(sql, -1)
+\tfor _, m := range matches {
+\t\tif len(m) > 1 {
+\t\t\tresults = append(results, strings.ToLower(m[1]))
+\t\t}
+\t}
+\treturn results
 }
