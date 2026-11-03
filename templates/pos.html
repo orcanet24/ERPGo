@@ -275,6 +275,11 @@ function savePOS(saleType, extra) {
     }
     if (empty) { toastr.warning('El carrito está vacío'); return; }
 
+    // Confirm before saving to avoid duplicate invoices on double-Enter
+    if (!confirm('¿Desea emitir la factura con el total ' + calcPos().toFixed(2) + '?')) {
+        return; // User cancelled - stay on current view, no invoice saved
+    }
+
     var data = {
         customer_id: $('#customer_id').val() || '',
         sale_type: saleType,

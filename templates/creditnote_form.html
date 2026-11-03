@@ -48,6 +48,7 @@
             <table class="table" style="margin-top:12px;max-width:320px;margin-left:auto">
                 <tr><th class="text-right">Base</th><td class="text-right" id="cnBase">0.00</td></tr>
                 <tr><th class="text-right">IVA</th><td class="text-right" id="cnVat">0.00</td></tr>
+                <tr><th class="text-right">Descuento %</th><td class="text-right"><input type="number" step="0.01" min="0" max="100" value="0" class="form-control input-sm" id="cnDiscount"></td></tr>
                 <tr class="success"><th class="text-right"><h4 style="margin:0">TOTAL</h4></th><td class="text-right"><h4 style="margin:0"><strong id="cnGrand">0.00</strong></h4></td></tr>
             </table>
 
@@ -90,7 +91,8 @@ function cnRow(desc) {
         '</tr>');
 }
 function calcCN() {
-    var base = 0, vat = 0;
+    var base = 0, vat = 0, discount = 0;
+    var discountPct = parseFloat($('#cnDiscount').val()) || 0;
     $('#cnRows tr').each(function () {
         var q = num($(this).find('.cn-qty').val());
         var r = num($(this).find('.cn-rate').val());
@@ -100,43 +102,32 @@ function calcCN() {
         $(this).find('.cn-total').text(b.toFixed(2));
         base += b; vat += t;
     });
+    // Apply global discount
+    discount = Math.round(base * discountPct / 100 * 100) / 100;
+    base -= discount;
     $('#cnBase').text(base.toFixed(2));
     $('#cnVat').text(vat.toFixed(2));
     $('#cnGrand').text((base + vat).toFixed(2));
 }
 $(function () {
+    // Store lines JSON in data attribute for later use
+    $('#cnForm').data('linesjson', {{ .LinesJSON | jsonify }});
     cnRow(); calcCN();
     $('#cnAdd').on('click', function () { cnRow(); });
     $('#cnRows').on('input change', 'input', calcCN);
 
     $('#invoice_id').on('change', function () {
         var $o = $(this).find(':selected');
-        $('#custInfo').text($o.val() ? ('Cliente: ' + $o.data('cust') + ' — RIF: ' + ($o.data('rif') || 'sin RIF') + ' — Total original: ' + $o.data('total')) : '');
-    });
+        $('#custInfo').text(invId ? ('Cliente: ' + $o.data('cust') + ' — RIF: ' + ($o.data('rif') || 'sin RIF') + ' — Total original: ' + $o.data('total')) : '');
 
-    $('#cnForm').on('submit', function (e) {
-        e.preventDefault();
-        var inv = $('#invoice_id').val();
-        if (!inv) { toastr.warning('Seleccione la factura'); return; }
-        var descs = [], qtys = [], rates = [], vats = [];
-        $('#cnRows tr').each(function () {
-            descs.push($(this).find('.cn-desc').val());
-            qtys.push(num($(this).find('.cn-qty').val()));
-            rates.push(num($(this).find('.cn-rate').val()));
-            vats.push(num($(this).find('.cn-vat').val()));
-        });
-        $.post('/creditnote/save', {
-            invoice_id: inv, reason: $('#reason').val(),
-            item_id: descs, item_qty: qtys, item_rate: rates, item_vat: vats
-        }, function (r) {
-            if (r.status == 1) {
-                $('#okNo').text(r.note_no);
-                $('#okCtrl').text(r.control_no);
-                $('#okPrint').attr('href', '/creditnote/print/' + r.id);
-                $('#okModal').modal('show');
-            } else toastr.error(r.error || 'Error');
-        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+        // Automatically load invoice lines via AJAX when invoice is selected
+        var invId = $(this).val();
+        if (invId) {
+            $.get('/creditnote/new?invoice_id=' + invId, function (data) {
+                // Replace the lines table with the loaded lines from the partial
+                $('#cnRows').html($(data).find('#cnRows').html());
+                calcCN();
+            })
+            .fail(function () { toastr.error('Error cargando líneas de la factura'); });
+        }
     });
-});
-</script>
-{{end}}

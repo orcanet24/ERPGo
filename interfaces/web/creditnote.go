@@ -99,6 +99,43 @@ func (s *Server) creditNoteListData(w http.ResponseWriter, r *http.Request) {
 
 // creditNoteForm: formulario con selector de factura y desglose.
 func (s *Server) creditNoteForm(w http.ResponseWriter, r *http.Request) {
+	invoiceIDStr := r.URL.Query().Get("invoice_id")
+	var opts []invOpt
+	var linesJSON []byte = nil
+	var custName, custRIF, invTotal string
+
+	if invoiceIDStr != "" {
+		// Cargar detalles de la factura seleccionada para pre-popular el formulario
+		invID, err := strconv.ParseInt(invoiceIDStr, 10, 64)
+		if err == nil {
+			rows, err := s.dbFor(r).Query(`
+			SELECT pi.product_id, pi.product_name, COALESCE(pi.price,0), pi.tax
+			FROM invoice_details id
+			JOIN product_information pi ON pi.product_id = id.product_id
+			WHERE id.invoice_id = ?`, invID).
+			if err == nil {
+				var desc, pid string
+				var price, taxRate float64
+				for rows.Next() {
+					var id sql.NullString
+					_ = rows.Scan(&pid, &desc, &price, &taxRate)
+					linesJSON = append(linesJSON, fmt.Sprintf(`<tr data-id="%s" data-desc="%s" data-price="%f" data-tax="%f"><td>%s</td><td><input type="text" class="form-control cn-qty" value="1"></td><td><input type="text" class="form-control text-right cn-rate" value="%f"></td><td><input type="text" class="form-control text-right cn-vat" value="%f"></td><td class="text-right cn-total" style="font-size:12px">0.00</td></tr>`, pid, desc, price, price, taxRate, taxRate))
+				}
+			}
+		}
+		// También obtener datos de la factura para el info box
+		var inv struct {
+			Invoice int64
+			Date    string
+			Total   float64
+			Customer string
+			RIF      string
+		}
+		err = s.dbFor(r).QueryRow(`SELECT invoice_id, date, total_amount, customer_name, customer_rif FROM invoice WHERE id = ?`, invID).
+			Scan(&inv.Invoice, &inv.Date, &inv.Total, &custName, &custRIF)
+		}
+	}
+
 	// Facturas recientes para el selector (vivas, no anuladas)
 	rows, err := s.dbFor(r).Query(`
 		SELECT i.id, i.invoice, i.date, i.total_amount, IFNULL(c.customer_name,''), IFNULL(i.customer_rif,'')
@@ -128,9 +165,37 @@ func (s *Server) creditNoteForm(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, r, "creditnote_form.html", map[string]interface{}{
-		"Title":    "Nueva Nota de Crédito",
-		"Invoices": opts,
+		"Title":       "Nueva Nota de Crédito",
+		"Invoices":    opts,
+		"LinesJSON":   linesJSON,
+		"CustName":    custName,
+		"CustRIF":     custRIF,
+		"InvTotal":    invTotal,
 	})
+	// Set LinesJSON as data attribute in form for JavaScript access
+	formHTML := s.render(w, r, "creditnote_form_html_partial", map[string]interface{}{
+		"LinesJSON": linesJSON,
+	})}
+	// Return just the form partial with LinesJSON as data attribute if invoice_id was provided
+	if invoiceIDStr != "" {
+		// Render partial and output only the form with data attribute
+		partialOpts := map[string]interface{}{
+			"LinesJSON": linesJSON,
+			"Title":     "Nueva Nota de Crédito",
+		}
+		partialHTML := s.render(w, r, "creditnote_form.html", partialOpts)
+		// Extract the form element with data attribute
+		// We need to add data-linesjson attribute to the form
+		formStart := strings.Index(partialHTML, "<form id=\"cnForm\"")
+		if formStart >= 0 {
+			attrEnd := strings.Index(partialHTML[formStart:], ">")
+			if attrEnd >= 0 {
+				partialHTML = partialHTML[:formStart+attrEnd+1] + " data-linesjson=\"" + string(linesJSON) + "\"" + partialHTML[formStart+attrEnd+1:]
+			}
+		}
+		w.Write([]byte(partialHTML))
+		return
+	}
 }
 
 // creditNoteSave emite la nota: serie fiscal + asientos + reversión de stock.

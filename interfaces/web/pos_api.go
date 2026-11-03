@@ -511,6 +511,7 @@ func (s *Server) posAPIProducts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Buscar por nombre (LIKE) o ID (igualdad exacta) o código de barras
 	like := "%" + q + "%"
 	rows, err := db.Query(`
 		SELECT pi.product_id, pi.product_name, pi.barcode,
@@ -520,9 +521,9 @@ func (s *Server) posAPIProducts(w http.ResponseWriter, r *http.Request) {
 		FROM product_information pi
 		LEFT JOIN product_price_list ppl ON ppl.product_id = pi.product_id AND ppl.price_list_id = 1
 		WHERE pi.status = 1
-		AND (pi.product_name LIKE ? OR pi.product_id LIKE ? OR pi.barcode LIKE ?)
+		AND (pi.product_name LIKE ? OR pi.product_id = ? OR pi.barcode LIKE ?)
 		ORDER BY pi.product_name
-		LIMIT 50`, like, like, like)
+		LIMIT 50`, like, q, like)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
