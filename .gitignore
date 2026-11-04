@@ -31,3 +31,4 @@ addons/*/erp-addon-*.exe
 screenshots/
 data/escrituras/
 *.rar
+*.zip
