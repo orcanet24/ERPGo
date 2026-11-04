@@ -30,3 +30,4 @@ addons/*/erp-addon-*.exe
 .e2e/
 screenshots/
 data/escrituras/
+*.zip
