@@ -67,24 +67,6 @@ var aiCatalogWhitelist = map[string]string{
 	"exchange_rate":            "Tasas de cambio BCV por fecha. [TIPO: operacional]",
 	"voucher_no_setting":       "Configuración de numeración de vouchers por tipo. [TIPO: solo-lectura-fiscal]",
 
-	"acc_coa":                  "Plan de cuentas (COA): HeadCode, HeadName, HeadType (A=Activo, L=Pasivo, I=Ingreso, E=Gasto), jerarquía PHeadName.",
-	"acc_transaction":          "Movimientos contables por cuenta: VNo, VDate, Debit, Credit. Une con acc_coa por COAID.",
-	"acc_vaucher":              "Vouchers/comprobantes: VNo, Vtype (JV/CV/DV/CONTRA), referencia, débito/crédito por línea.",
-	"acc_subcode":              "Subcódigos que enlzan cuentas con clientes/proveedores: subTypeId 3=cliente, 4=proveedor, referenceNo.",
-	"bank_information":         "Bancos registrados y sus cuentas.",
-	"bank_transaction":         "Movimientos bancarios: fecha, débito/crédito, referencia.",
-	"cash_session":             "Sesiones de caja por cajero: apertura/cierre, totales.",
-	"cash_session_payment":     "Cobros registrados en cada sesión de caja.",
-	"payment_method":           "Métodos de pago venezolanos: código, nombre, moneda extranjera (is_foreign) y cuenta contable.",
-	"credit_note":              "Notas de crédito: cliente, factura de origen, totales.",
-	"credit_note_details":      "Renglones de nota de crédito.",
-	"tax_collection":           "IVA cobrado por factura/período.",
-	"vat_retention":            "Retenciones de IVA (libro legal Venezuela).",
-	"islr_retention":           "Retenciones de ISLR (libro legal Venezuela).",
-	"igtf_transaction":         "Percepciones IGTF registradas.",
-	"exchange_rate":            "Tasas de cambio BCV por fecha.",
-	"voucher_no_setting":       "Configuración de numeración de vouchers por tipo.",
-
 	// --- Sistema de costos ---
 	//
 	// Estas 13 tablas se añaden JUNTAS a propósito: si se olvida una, la IA no la

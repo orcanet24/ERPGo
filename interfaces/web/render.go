@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -90,6 +91,16 @@ func templateFuncs(s *Server, r *http.Request) template.FuncMap {
 		// a texto legible. Va aquí y no en la plantilla para que la web, el log
 		// de arranque y la API digan lo mismo.
 		"catalogLabel": catalogLabel,
+		// jsonify serializa cualquier dato (slice, map…) a JSON para las
+		// plantillas que lo embeben en un script: es la vía características
+		// para que un dato vaya de Go al JS del front sin不自 manual.
+		"jsonify": func(v interface{}) string {
+			b, err := json.Marshal(v)
+			if err != nil {
+				return "null"
+			}
+			return string(b)
+		},
 		// kindLabel traduce la clase del documento de compra (factura, nota de
 		// entrega, orden…) a texto para las pantallas. Vive en el FuncMap y no
 		// como función de plantilla por plantilla para que la bandeja de

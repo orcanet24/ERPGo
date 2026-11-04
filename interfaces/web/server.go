@@ -391,9 +391,11 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	// Reports
 	s.registerReportRoutes()
 	// Settings
-	s.registerSettingRoutes()
-	// OCR Addon (configurable: ENABLE_OCR=0|1 en settings)
-	s.registerOCCRoutes()
+	s.registerSettingRoutes() // OCR Addon (configurable: ENABLE_OCR=0|1 para el superusuario)
+	s.registerOCRRoutes()
+	// YummyProxy2 (pasarela de envíos): cliente del gateway de Yummy y
+	// receptor de sus webhooks (configurable con YUMMY_ENABLED=1)
+	s.registerYummyRoutes()
 	// Multi-empresa: selector de empresa y aprovisionamiento
 	s.registerTenantRoutes()
 	s.registerTenantSetupRoutes()
@@ -639,7 +641,15 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// orquestador en un ERP real). No es abrir la puerta: addonCanal decide
 		// después, fail-closed, con loopback, grant efímero, sesión viva,
 		// empresa y permiso — que es para lo que existe esa ruta.
-		public := []string{"/login", "/api/login", "/api/pos/", "/__addon/", "/health", "/setup/company", "/static/", "/uploads", "/favicon"}
+		// /webhooks/yummy: el receptor de webhooks de la pasarela YummyProxy2.
+		// Es máquina a máquina: la pasarela no tiene cookie del ERP y nunca la
+		// tendrá, así que la cookie no es su llave. Su autenticación es la
+		// firma HMAC-SHA256 del evento (X-Gateway-Signature), verificada dentro
+		// del handler con fail-closed: sin YUMMY_ENABLED=1 o sin secreto
+		// configurado responde 403 sin leer nada de la base. Igual que el
+		// canal de addons, la puerta pública NO es la del candado: el candado
+		// vive en el handler que decide después.
+		public := []string{"/login", "/api/login", "/api/pos/", "/__addon/", "/webhooks/", "/health", "/setup/company", "/static/", "/uploads", "/favicon"}
 		for _, p := range public {
 			if strings.HasPrefix(r.URL.Path, p) {
 				next.ServeHTTP(w, r)

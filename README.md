@@ -167,12 +167,18 @@ licencia (comercial o libre). ERPGo no reclama propiedad sobre los addons.
 ## Módulo OCR Addon
 
 ### Descripción General
-El módulo OCR permite procesar facturas entrantes utilizando Tesseract OCR via bindings de Go (`otiai10/gosseract/v2`). Es configurable por el superusuario mediante la variable de entorno `ENABLE_OCR=0|1`.
+
+El módulo OCR permite procesar facturas entrantes utilizando el **binario** de
+Tesseract vía `exec` (sin bindings CGO: el ERP es un binario único que debe
+compilar en Windows y Linux sin dependencias nativas; si falta el binario en
+el servidor, el resultado es un error controlado, nunca un bloqueo del ERP).
+Se activa con las variables de entorno `ENABLE_OCR=0|1`, `TESSERACT_BIN` y
+`OCR_LANG` (default `spa`).
 
 ### Estado Actual
 - **Modo por defecto**: `ENABLE_OCR=0` (desactivado) - El sistema funciona exactamente como antes sin OCR
-- **Para activar**: Configurar `ENABLE_OCR=1` en `settings/fiscal` o `.env`
-- **Motor OCR**: `gosseract` (wrapper Go a Tesseract C++ con soporte español `spa`)
+- **Para activar**: `ENABLE_OCR=1` en `.env` (o en `settings/fiscal`); en Windows sin Tesseract en el PATH, asignar `TESSERACT_BIN` con la ruta del `tesseract.exe`
+- **Motor OCR**: binario `tesseract` ejecutado por `exec` con TSV de salida (nivel 5) y soporte español `OCR_LANG=spa`
 
 ### Endpoints Disponibles
 
@@ -274,7 +280,7 @@ RIF=J-12345678-9, total=150.00, fecha=15/01/2025"
 │ 1. Usuario sube imagen               │
 │ 2. POST /ocr/process                 │
 │ 3. Verificar ENABLE_OCR=1           │
-│ 4. Gosseract → Texto extraído        │
+│ 4. Binario tesseract (exec) → texto y TSV      │
 │ 5. extractRIF/extractTotal/extractDate│
 │ 6. OCRResult con status              │
 │ 7. IA recibe resultado + prompt      │
@@ -292,10 +298,42 @@ RIF=J-12345678-9, total=150.00, fecha=15/01/2025"
 
 ### Próximos Pasos Recomendados
 
-1. Instalar dependencias: `go get github.com/otiai10/gosseract/v2`
-2. Instalar Tesseract: `apt-get install tesseract-ocr tesseract-ocr-spa`
-3. Configurar `ENABLE_OCR=1` en settings
-4. Probar endpoints: `/ocr/process`, `/ocr/status`, `/ocr/test`
-5. Diseñar interfaz de configuración en panel de administración
-6. Integrar con flujo de compras existente
+1. Instalar Tesseract: `apt-get install tesseract-ocr tesseract-ocr-spa` (Linux) o descargar el instalador UCSF/SUBBE de UB Mannheim (Windows) y definir `TESSERACT_BIN`
+2. Configurar `ENABLE_OCR=1` en `.env`
+3. Probar endpoints: `/ocr/process`, `/ocr/status`, `/ocr/test`
+4. Diseñar interfaz de configuración en panel de administración
+5. Integrar con flujo de compras existente
+
+## Integración con YummyProxy2 (envíos)
+
+ERPGo se conecta a la pasarela de Yummy (`orcanet24/YummyProxy2`), un servicio
+EXTERNO con su propio binario/Docker que guarda la API key real de Yummy y
+ofrece un API simple por clave `X-Gateway-Key`. El ERP es CLIENTE de la
+pasarela: la clave `mk_live_…` de Yummy jamás vive en el ERP.
+
+### Variables de entorno (todas en `.env` del ERP)
+
+| Variable | Descripción |
+|----------|-------------|
+| `YUMMY_ENABLED` | `1` activa el módulo (default `0`: la operación diaria no depende de esto) |
+| `YUMMY_GATEWAY_URL` | base de la pasarela, ej. `http://gw.tudominio.com` |
+| `YUMMY_GATEWAY_KEY` | la clave `gw_live_…` del tenant del ERP (la emite el admin del gateway) |
+| `YUMMY_CALLBACK_SECRET` | el `callback_secret` del alta del tenant: con él el gateway firma las entregas de webhooks al ERP |
+
+### Endpoints del ERP
+
+| Endpoint | Método | Descripción |
+|----------|--------|-------------|
+| `/webhooks/yummy` | POST | Receptor de webhooks del gateway (machine-to-machine: se autentica por firma HMAC `X-Gateway-Signature: t=…,v1=…`, ventana de frescura de 5 min, idempotencia por `X-Gateway-Event-Id`; fail-closed 403 sin `YUMMY_ENABLED=1`) |
+| `/yummy/status` | GET | Diagnóstico: config completa y últimos 10 eventos recibidos |
+| `/yummy/stock/sync` | POST | Envía el stock real de la empresa (suma de lotes activos de `product_lot`) al gateway (`POST /v1/stock/sync`) |
+| `/yummy/orders` | GET | Consulta de órdenes de Yummy por la pasarela (`GET /v1/orders?query`) |
+
+### Puesta en marcha (resumen)
+
+1. Levantar la pasarela (ver README de YummyProxy2: `docker compose up -d --build`).
+2. Alta del tenant ERP en el gateway con su `callback_url` = `https://TU-ERP/webhooks/yummy`; guardar el `callback_secret` y configurarlo como `YUMMY_CALLBACK_SECRET`.
+3. Emitir la key del proyecto con permisos (`stock:read`, `stock:write`, `orders:read`) y configurar `YUMMY_GATEWAY_KEY`.
+4. En Yummy configurar la `webhook_url` del tenant (es la del GATEWAY, no la del ERP).
+5. En el ERP: `YUMMY_ENABLED=1` y verificar con `GET /yummy/status`.
 ####################################################################################

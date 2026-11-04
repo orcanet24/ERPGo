@@ -54,11 +54,30 @@ type Config struct {
 	MasterKey string
 	// JWTExpiry se conserva por compatibilidad (antes expiraba un token que ya
 	// no se emite; mantener la variable evita romper .env de clientes).
-	JWTExpiry int
-	AppName     string
-	AppURL      string
-	AppEnv      string
-	UploadPath  string
+	JWTExpiry  int
+	AppName    string
+	AppURL     string
+	AppEnv     string
+	UploadPath string
+
+	// Addon OCR (interfaces/web/ocr_addon.go): motor opcional para extraer
+	// datos de facturas de proveedor escaneadas. Desactivado por defecto:
+	// el sistema funciona exactamente igual con OCR apagado (o sin Tesseract
+	// instalado) porque el ERP no depende de él para nada fiscal.
+	OCREnabled   bool   // ENABLE_OCR=1 lo activa (default: 0)
+	TesseractBin string // TESSERACT_BIN ruta al binario tesseract (default "tesseract")
+	OcrLang      string // OCR_LANG modelo idiográfico de Tesseract (default "spa")
+
+	// Pasarela de envíos YummyProxy2 (interfaces/web/yummy.go): integración
+	// con la pasarela externa de Yummy como CLIENTE. La clave real de Yummy
+	// vive y muere en la pasarela: el ERP solo lleva su clave del gateway y
+	// el secreto con el que la pasarela firma los webhooks que entrega.
+	// Desactivado por defecto: tanto si el cliente usa Yummy como si no, la
+	// operación diaria del ERP funciona exactamente igual.
+	YummyEnabled        bool   // YUMMY_ENABLED=1 lo activa (default: 0)
+	YummyGatewayURL     string // YUMMY_GATEWAY_URL base de la pasarela, ej. http://gw:8080
+	YummyGatewayKey     string // YUMMY_GATEWAY_KEY la gw_live_… del tenant ERP
+	YummyCallbackSecret string // YUMMY_CALLBACK_SECRET firma HMAC de los webhooks de salida
 
 	// Logger configurable
 	LogEnabled bool
@@ -103,7 +122,7 @@ func Load() (*Config, error) {
 		ServerHost:  getEnv("SERVER_HOST", "127.0.0.1"),
 		TLSCertFile: getEnv("TLS_CERT_FILE", ""),
 		TLSKeyFile:  getEnv("TLS_KEY_FILE", ""),
-		MasterKey: getMasterKey(),
+		MasterKey:   getMasterKey(),
 		JWTExpiry:   jwtExpiry,
 		AppName:     getEnv("APP_NAME", "ERPGo"),
 		AppURL:      getEnv("APP_URL", "http://localhost:8080"),
@@ -119,6 +138,16 @@ func Load() (*Config, error) {
 		BackupEnabled:       EsVerdadero(getEnv("BACKUP_ENABLED", "1")),
 		BackupIntervalHours: backupInterval,
 		BackupDir:           getEnv("BACKUP_DIR", "backup"),
+
+		// OCR addon: apagado por defecto para que ninguna instalación existente
+		// cambie de comportamiento; el superusuario lo enciende con ENABLE_OCR=1.
+		OCREnabled:          EsVerdadero(getEnv("ENABLE_OCR", "0")),
+		TesseractBin:        getEnv("TESSERACT_BIN", "tesseract"),
+		YummyEnabled:        EsVerdadero(getEnv("YUMMY_ENABLED", "0")),
+		YummyGatewayURL:     strings.TrimSpace(getEnv("YUMMY_GATEWAY_URL", "")),
+		YummyGatewayKey:     strings.TrimSpace(getEnv("YUMMY_GATEWAY_KEY", "")),
+		YummyCallbackSecret: strings.TrimSpace(getEnv("YUMMY_CALLBACK_SECRET", "")),
+		OcrLang:             getEnv("OCR_LANG", "spa"),
 	}, nil
 }
 
@@ -281,4 +310,3 @@ func EnsureEnv() (*Config, error) {
 	}
 	return cfg, nil
 }
-

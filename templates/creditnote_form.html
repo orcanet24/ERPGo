@@ -110,7 +110,8 @@ function calcCN() {
     $('#cnGrand').text((base + vat).toFixed(2));
 }
 $(function () {
-    // Store lines JSON in data attribute for later use
+    // El desglose precargado vive en el dato linesjson del formulario:
+    // la plantilla lo serializa con jsonify directamente desde Go.
     $('#cnForm').data('linesjson', {{ .LinesJSON | jsonify }});
     cnRow(); calcCN();
     $('#cnAdd').on('click', function () { cnRow(); });
@@ -118,16 +119,19 @@ $(function () {
 
     $('#invoice_id').on('change', function () {
         var $o = $(this).find(':selected');
-        $('#custInfo').text(invId ? ('Cliente: ' + $o.data('cust') + ' — RIF: ' + ($o.data('rif') || 'sin RIF') + ' — Total original: ' + $o.data('total')) : '');
+        $('#custInfo').text($o.val() ? ('Cliente: ' + $o.data('cust') + ' — RIF: ' + ($o.data('rif') || 'sin RIF') + ' — Total original: ' + $o.data('total')) : '');
 
-        // Automatically load invoice lines via AJAX when invoice is selected
+        // Al elegir factura se cargan sus renglones por AJAX y se puebla
+        // la tabla del desglose con la respuesta del parcial.
         var invId = $(this).val();
         if (invId) {
             $.get('/creditnote/new?invoice_id=' + invId, function (data) {
-                // Replace the lines table with the loaded lines from the partial
                 $('#cnRows').html($(data).find('#cnRows').html());
                 calcCN();
             })
             .fail(function () { toastr.error('Error cargando líneas de la factura'); });
         }
     });
+});
+</script>
+{{end}}

@@ -98,60 +98,68 @@ func (s *Server) creditNoteListData(w http.ResponseWriter, r *http.Request) {
 }
 
 // creditNoteForm: formulario con selector de factura y desglose.
+// invOpt: opción del selector de facturas del formulario de nota de crédito.
+type invOpt struct {
+	ID       int64
+	Invoice  int64
+	Date     string
+	Total    string
+	Customer string
+	RIF      string
+}
+
+// creditNoteForm: formulario con selector de factura y desglose.
 func (s *Server) creditNoteForm(w http.ResponseWriter, r *http.Request) {
 	invoiceIDStr := r.URL.Query().Get("invoice_id")
 	var opts []invOpt
-	var linesJSON []byte = nil
+	// Renglones precargados: uno por línea ya compegada como HTML para el
+	// front; la plantilla los serializa con jsonify.
+	var linesJSON []string = nil
 	var custName, custRIF, invTotal string
 
 	if invoiceIDStr != "" {
-		// Cargar detalles de la factura seleccionada para pre-popular el formulario
 		invID, err := strconv.ParseInt(invoiceIDStr, 10, 64)
 		if err == nil {
+			// Detalles de la factura seleccionada para pre-poblar el formulario.
 			rows, err := s.dbFor(r).Query(`
-			SELECT pi.product_id, pi.product_name, COALESCE(pi.price,0), pi.tax
-			FROM invoice_details id
-			JOIN product_information pi ON pi.product_id = id.product_id
-			WHERE id.invoice_id = ?`, invID).
+				SELECT pi.product_id, pi.product_name, COALESCE(pi.price,0), pi.tax
+				FROM invoice_details id
+				JOIN product_information pi ON pi.product_id = id.product_id
+				WHERE id.invoice_id = ?`, invID)
 			if err == nil {
-				var desc, pid string
+				var pid, desc string
 				var price, taxRate float64
 				for rows.Next() {
-					var id sql.NullString
-					_ = rows.Scan(&pid, &desc, &price, &taxRate)
-					linesJSON = append(linesJSON, fmt.Sprintf(`<tr data-id="%s" data-desc="%s" data-price="%f" data-tax="%f"><td>%s</td><td><input type="text" class="form-control cn-qty" value="1"></td><td><input type="text" class="form-control text-right cn-rate" value="%f"></td><td><input type="text" class="form-control text-right cn-vat" value="%f"></td><td class="text-right cn-total" style="font-size:12px">0.00</td></tr>`, pid, desc, price, price, taxRate, taxRate))
+					// 4 columnas, 4 destinos fiables: el error de una fila sola
+					// no aborta el precargo de las demás.
+					if err := rows.Scan(&pid, &desc, &price, &taxRate); err != nil {
+						continue
+					}
+					linea := fmt.Sprintf(`<tr data-id="%s" data-desc="%s" data-price="%f" data-tax="%f"><td>%s</td><td><input type="text" class="form-control cn-qty" value="1"></td><td><input type="text" class="form-control text-right cn-rate" value="%f"></td><td><input type="text" class="form-control text-right cn-vat" value="%f"></td><td class="text-right cn-total" style="font-size:12px">0.00</td></tr>`, pid, desc, price, taxRate, pid, price, taxRate)
+					linesJSON = append(linesJSON, linea)
 				}
+				rows.Close()
 			}
-		}
-		// También obtener datos de la factura para el info box
-		var inv struct {
-			Invoice int64
-			Date    string
-			Total   float64
-			Customer string
-			RIF      string
-		}
-		err = s.dbFor(r).QueryRow(`SELECT invoice_id, date, total_amount, customer_name, customer_rif FROM invoice WHERE id = ?`, invID).
-			Scan(&inv.Invoice, &inv.Date, &inv.Total, &custName, &custRIF)
+			// Datos de la factura para el info box (nombre, RIF y total de la
+			// factura origen, sobre los que el usuario apoya la nota).
+			var factura struct {
+				Invoice int64
+				Date    string
+				Total   float64
+			}
+			if err := s.dbFor(r).QueryRow(`SELECT invoice_id, date, total_amount, customer_name, customer_rif FROM invoice WHERE id = ?`, invID).
+				Scan(&factura.Invoice, &factura.Date, &factura.Total, &custName, &custRIF); err == nil {
+				invTotal = money(factura.Total)
+			}
 		}
 	}
 
 	// Facturas recientes para el selector (vivas, no anuladas)
-	rows, err := s.dbFor(r).Query(`
+	if rows, err := s.dbFor(r).Query(`
 		SELECT i.id, i.invoice, i.date, i.total_amount, IFNULL(c.customer_name,''), IFNULL(i.customer_rif,'')
 		FROM invoice i LEFT JOIN customer_information c ON c.customer_id = i.customer_id
 		WHERE i.is_draft = 'no' AND i.is_anulled = 0
-		ORDER BY i.id DESC LIMIT 200`)
-	type invOpt struct {
-		ID       int64
-		Invoice  int64
-		Date     string
-		Total    string
-		Customer string
-		RIF      string
-	}
-	opts := []invOpt{}
-	if err == nil {
+		ORDER BY i.id DESC LIMIT 200`); err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var o invOpt
@@ -164,38 +172,23 @@ func (s *Server) creditNoteForm(w http.ResponseWriter, r *http.Request) {
 			opts = append(opts, o)
 		}
 	}
-	s.render(w, r, "creditnote_form.html", map[string]interface{}{
-		"Title":       "Nueva Nota de Crédito",
-		"Invoices":    opts,
-		"LinesJSON":   linesJSON,
-		"CustName":    custName,
-		"CustRIF":     custRIF,
-		"InvTotal":    invTotal,
-	})
-	// Set LinesJSON as data attribute in form for JavaScript access
-	formHTML := s.render(w, r, "creditnote_form_html_partial", map[string]interface{}{
+
+	datos := map[string]interface{}{
+		"Title":     "Nueva Nota de Crédito",
+		"Invoices":  opts,
 		"LinesJSON": linesJSON,
-	})}
-	// Return just the form partial with LinesJSON as data attribute if invoice_id was provided
+		"CustName":  custName,
+		"CustRIF":   custRIF,
+		"InvTotal":  invTotal,
+	}
+	// Con factura ya elegida (el front la pide por AJAX) se responde solo el
+	// formulario, sin layout: el desglose lo pinta la plantilla leyendo
+	// LinesJSON, así que no hace falta manipulaciones adicionales del HTML.
 	if invoiceIDStr != "" {
-		// Render partial and output only the form with data attribute
-		partialOpts := map[string]interface{}{
-			"LinesJSON": linesJSON,
-			"Title":     "Nueva Nota de Crédito",
-		}
-		partialHTML := s.render(w, r, "creditnote_form.html", partialOpts)
-		// Extract the form element with data attribute
-		// We need to add data-linesjson attribute to the form
-		formStart := strings.Index(partialHTML, "<form id=\"cnForm\"")
-		if formStart >= 0 {
-			attrEnd := strings.Index(partialHTML[formStart:], ">")
-			if attrEnd >= 0 {
-				partialHTML = partialHTML[:formStart+attrEnd+1] + " data-linesjson=\"" + string(linesJSON) + "\"" + partialHTML[formStart+attrEnd+1:]
-			}
-		}
-		w.Write([]byte(partialHTML))
+		s.renderPartial(w, "creditnote_form.html", datos)
 		return
 	}
+	s.render(w, r, "creditnote_form.html", datos)
 }
 
 // creditNoteSave emite la nota: serie fiscal + asientos + reversión de stock.
