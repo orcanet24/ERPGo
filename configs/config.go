@@ -79,6 +79,16 @@ type Config struct {
 	YummyGatewayKey     string // YUMMY_GATEWAY_KEY la gw_live_… del tenant ERP
 	YummyCallbackSecret string // YUMMY_CALLBACK_SECRET firma HMAC de los webhooks de salida
 
+	// Agente de pagos SpidiAgent (interfaces/web/spidi.go): sesiones de
+	// pago SPIDI por factura, a través del agente externo. Las credenciales
+	// reales de SPIDI viven cifradas en el agente: el ERP solo lleva su
+	// clave de tenant. Desactivado por defecto: la operación diaria del
+	// ERP funciona exactamente igual sin esto.
+	SpidiEnabled   bool   // SPIDI_ENABLED=1 lo activa (default: 0)
+	SpidiAgentURL  string // SPIDI_AGENT_URL base del agente, ej. http://127.0.0.1:8484
+	SpidiTenantID  string // SPIDI_TENANT_ID el tenant del ERP en el agente
+	SpidiTenantKey string // SPIDI_TENANT_KEY la X-Tenant-Key del tenant
+
 	// Logger configurable
 	LogEnabled bool
 	LogLevel   string
@@ -147,7 +157,12 @@ func Load() (*Config, error) {
 		YummyGatewayURL:     strings.TrimSpace(getEnv("YUMMY_GATEWAY_URL", "")),
 		YummyGatewayKey:     strings.TrimSpace(getEnv("YUMMY_GATEWAY_KEY", "")),
 		YummyCallbackSecret: strings.TrimSpace(getEnv("YUMMY_CALLBACK_SECRET", "")),
-		OcrLang:             getEnv("OCR_LANG", "spa"),
+
+		SpidiEnabled:   EsVerdadero(getEnv("SPIDI_ENABLED", "0")),
+		SpidiAgentURL:  strings.TrimSpace(getEnv("SPIDI_AGENT_URL", "")),
+		SpidiTenantID:  strings.TrimSpace(getEnv("SPIDI_TENANT_ID", "")),
+		SpidiTenantKey: strings.TrimSpace(getEnv("SPIDI_TENANT_KEY", "")),
+		OcrLang:        getEnv("OCR_LANG", "spa"),
 	}, nil
 }
 

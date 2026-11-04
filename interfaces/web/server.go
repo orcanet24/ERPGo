@@ -392,10 +392,12 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	s.registerReportRoutes()
 	// Settings
 	s.registerSettingRoutes() // OCR Addon (configurable: ENABLE_OCR=0|1 para el superusuario)
-	s.registerOCRRoutes()
-	// YummyProxy2 (pasarela de envíos): cliente del gateway de Yummy y
+	s.registerOCRRoutes()     // YummyProxy2 (pasarela de envíos): cliente del gateway de Yummy y
 	// receptor de sus webhooks (configurable con YUMMY_ENABLED=1)
 	s.registerYummyRoutes()
+	// SpidiAgent (pagos SPIDI): sesiones de cobro por factura y consulta
+	// de estado (configurable con SPIDI_ENABLED=1)
+	s.registerSpidiRoutes()
 	// Multi-empresa: selector de empresa y aprovisionamiento
 	s.registerTenantRoutes()
 	s.registerTenantSetupRoutes()

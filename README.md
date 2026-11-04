@@ -336,4 +336,36 @@ pasarela: la clave `mk_live_…` de Yummy jamás vive en el ERP.
 3. Emitir la key del proyecto con permisos (`stock:read`, `stock:write`, `orders:read`) y configurar `YUMMY_GATEWAY_KEY`.
 4. En Yummy configurar la `webhook_url` del tenant (es la del GATEWAY, no la del ERP).
 5. En el ERP: `YUMMY_ENABLED=1` y verificar con `GET /yummy/status`.
+
+## Integración con SpidiAgent (pagos SPIDI)
+
+ERPGo se conecta al agente de pagos SPIDI (`orcanet24/SpidiAgent`), un servicio
+EXTERNO (binario propio, SQLite de auditoría) con API por clave
+`X-Tenant-Key`. El ERP es CLIENTE del agente: las credenciales reales de
+SPIDI viven cifradas en el agente (AES-256-GCM), no en el ERP. El agente NO
+envía webhooks al ERP: el ERP CONSULTA el estado de cada sesión.
+
+### Variables de entorno (todas en `.env` del ERP)
+
+| Variable | Descripción |
+|----------|-------------|
+| `SPIDI_ENABLED` | `1` activa el módulo (default `0`) |
+| `SPIDI_AGENT_URL` | base del agente, ej. `http://127.0.0.1:8484` |
+| `SPIDI_TENANT_ID` | el tenant del ERP en el agente (ej. `erpgo`) |
+| `SPIDI_TENANT_KEY` | la `X-Tenant-Key` que le asignó el agente |
+
+### Endpoints del ERP
+
+| Endpoint | Método | Descripción |
+|----------|--------|-------------|
+| `/spidi/pagos/cobro-factura` | POST | Abre una sesión de pago por una factura: body `{"invoice_id":N,"monto":opcional}`. Por defecto cobra el saldo deudor (`due_amount`); con `monto` se admite cobro parcial. Facturas anuladas no se cobran nunca. Devuelve `session_id`, `payment_url`, monto y moneda (de la factura: `currency_code`). |
+| `/spidi/pagos/status` | GET | Consulta sesiones de pago (`?invoice_id=N` o `?session_id=abc`): pregunta al agente y actualiza el estado local. NO toca contabilidad: reflejar un pago en el libro es una fase aparte. |
+| `/spidi/status` | GET | Diagnóstico: config y últimas sesiones (sin consultar al agente). |
+
+### Puesta en marcha (resumen)
+
+1. Levantar el agente (ver README de SpidiAgent: `CGO_ENABLED=0 go build`, `SPIDI_MASTER_KEY`, `./spidi-agent ./config.yaml`).
+2. Registrar el tenant del ERP (`POST /clientes` con su `bank_account_id`) y guardar la clave del tenant → `SPIDI_TENANT_KEY`.
+3. En el ERP: `SPIDI_ENABLED=1`, `SPIDI_AGENT_URL`, `SPIDI_TENANT_ID` y verificar con `GET /spidi/status`.
+4. Los estados de pago finales (`pending`/`paid`/...) se reflejan tal como el agente los contesta: cuando el agente exponga callbacks hacia el ERP se añade el receptor automático.
 ####################################################################################
