@@ -112,6 +112,10 @@ func (s *Server) registerPOSAdminRoutes() {
 
 	// Dashboard POS
 	s.mux.HandleFunc("/admin/pos/dashboard", s.handlePOSDashboard)
+
+	// Cashea Configuration
+	s.mux.HandleFunc("/admin/pos/cashhea/toggle", s.handleCashheaToggle)
+	s.mux.HandleFunc("/admin/pos/cashhea/status", s.handleCashheaStatus)
 }
 
 // ============================================================
@@ -923,40 +927,6 @@ func (s *Server) handleCashheaStatus(w http.ResponseWriter, r *http.Request) {
 // JSON de sucursales, cajas y API keys (/admin/pos/*, /pos/api/*) y todo
 // /api/pos/* con su autenticación. Sin ellos, un terminal POS nuevo no se podría
 // dar de alta ni sincronizar.
-func (s *Server) registerPOSAdminRoutes() {
-	s.mux.HandleFunc("GET /pos/api/dashboard", s.posAPIDashboard)
-	s.mux.HandleFunc("GET /pos/api/terminals", s.posAPITerminals)
-	s.mux.HandleFunc("GET /pos/api/turns", s.posAPITurns)
-	s.mux.HandleFunc("POST /pos/api/terminal/{id}/logout", s.posAPITerminalLogout)
-	s.mux.HandleFunc("POST /pos/api/turn/{id}/close", s.posAPITurnClose)
-	s.mux.HandleFunc("POST /pos/api/terminal/create", s.posAPICreateTerminal)
-
-	// Sucursales
-	s.mux.HandleFunc("/admin/pos/branches", s.handleBranchList)
-	s.mux.HandleFunc("/admin/pos/branch/create", s.handleBranchCreate)
-	s.mux.HandleFunc("/admin/pos/branch/edit", s.handleBranchEdit)
-	s.mux.HandleFunc("/admin/pos/branch/delete", s.handleBranchDelete)
-
-	// Cajas
-	s.mux.HandleFunc("/admin/pos/registers", s.handleRegisterList)
-	s.mux.HandleFunc("/admin/pos/register/create", s.handleRegisterCreate)
-	s.mux.HandleFunc("/admin/pos/register/edit", s.handleRegisterEdit)
-	s.mux.HandleFunc("/admin/pos/register/delete", s.handleRegisterDelete)
-
-	// API Keys
-	s.mux.HandleFunc("/admin/pos/apikeys", s.handleAPIKeyList)
-	s.mux.HandleFunc("/admin/pos/apikey/create", s.handleAPIKeyCreate)
-	s.mux.HandleFunc("/admin/pos/apikey/regenerate", s.handleAPIKeyRegenerate)
-	s.mux.HandleFunc("/admin/pos/apikey/revoke", s.handleAPIKeyRevoke)
-	s.mux.HandleFunc("/admin/pos/apikey/delete", s.handleAPIKeyDelete)
-
-	// Dashboard POS
-	s.mux.HandleFunc("/admin/pos/dashboard", s.handlePOSDashboard)
-
-	// Cashea Configuration
-	s.mux.HandleFunc("/admin/pos/cashhea/toggle", s.handleCashheaToggle)
-	s.mux.HandleFunc("/admin/pos/cashhea/status", s.handleCashheaStatus)
-}
 
 // ============================================================
 // Helper: Validar API Key y obtener sucursal/caja

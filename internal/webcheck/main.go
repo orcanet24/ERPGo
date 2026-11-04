@@ -17,6 +17,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"html/template"
@@ -175,6 +176,17 @@ func templateFuncs() template.FuncMap {
 		// estable es lo que permite ejecutar el layout entero sin fingir un
 		// cambio de versión.
 		"assetVer": func(ruta string) string { return "deadbeef" },
+		// jsonify: la misma serialización que hace render.go (json.Marshal,
+		// "null" en error). La plantilla creditnote_form.html la usa; si el
+		// comprobador no la replica, daría "function not defined" en una
+		// plantilla que funciona.
+		"jsonify": func(v interface{}) string {
+			b, err := json.Marshal(v)
+			if err != nil {
+				return "null"
+			}
+			return string(b)
+		},
 		// Debe replicarse aquí también: si el comprobador no conoce una función
 		// que la aplicación sí, da "function not defined" en una plantilla que
 		// funciona, y ese falso positivo es la forma segura de que la herramienta

@@ -220,7 +220,7 @@ func main() {
 	// en lugar de depender de webhooks, que pueden no estar configurados o tener
 	// costo adicional. El polling es 'best effort' - si falla, el sistema continúa
 	// con el estado local y vuelve a intentar en el siguiente ciclo.
-	StartCasheaStatusPoller()
+	server.StartCasheaStatusPoller()
 
 	// If migrate-only mode, exit after migrations
 	if *migrate {
@@ -410,5 +410,3 @@ func retireSQLiteFile(path string) {
 		}
 	}
 }
-
-

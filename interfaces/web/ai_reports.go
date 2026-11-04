@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -204,7 +205,7 @@ func (s *Server) validateReportSQLwithSchema(sql string) error {
 	// Por ahora, usamos una validación básica con esquema mínimo incrustado.
 	// El esquema completo se pasará cuando esté totalmente integrado.
 	low := strings.ToLower(sql)
-	
+
 	// Tablas fiscales prohibidas (misma lista que en governance)
 	tablasProhibidas := []string{
 		"acc_transaction",
@@ -218,30 +219,30 @@ func (s *Server) validateReportSQLwithSchema(sql string) error {
 		"retention",
 		"pos_fiscal_blocks",
 	}
-	
+
 	for _, tabla := range tablasProhibidas {
 		if strings.Contains(low, tabla) {
 			return fmt.Errorf("El reporte IA no puede targetear la tabla fiscal '%s'. Las operaciones fiscales son solo para humanos. Genera un reporte operacional en su lugar.", tabla)
 		}
 	}
-	
+
 	// Tablas permitidas para reportes IA (operacionales)
 	columnasPermitidas := map[string]bool{
-		"product": true,
-		"client": true,
+		"product":  true,
+		"client":   true,
 		"supplier": true,
-		"sale": true,
+		"sale":     true,
 		"purchase": true,
-		"invoice": true,
-		"company": true,
+		"invoice":  true,
+		"company":  true,
 	}
-	
+
 	// Extraer nombres de tablas del SQL
 	patronesFROM := []string{
 		`from\s+(\w+)`,
 		`join\s+(\w+)`,
 	}
-			
+
 	for _, patron := range patronesFROM {
 		matches := findSQLMatches(sql, patron)
 		for _, tabla := range matches {
@@ -257,12 +258,12 @@ func (s *Server) validateReportSQLwithSchema(sql string) error {
 				if esFiscal {
 					return fmt.Errorf("Tabla '%s' es fiscal y está prohibida en reportes IA. Humanos editan en laboratorio.", tabla)
 				}
-			// Tabla no reconocida: advertir pero permitir si parece operación legítima
-			// (en producción real, esto requeriría el esquema completo del MCP)
+				// Tabla no reconocida: advertir pero permitir si parece operación legítima
+				// (en producción real, esto requeriría el esquema completo del MCP)
 			}
 		}
 	}
-	
+
 	// Verificar palabras clave fiscales sensibles en SELECT
 	palabrasClaveFiscales := []string{
 		"impuesto",
@@ -273,7 +274,7 @@ func (s *Server) validateReportSQLwithSchema(sql string) error {
 		"total_fiscal",
 		"subtotal_fiscal",
 	}
-		
+
 	for _, kw := range palabrasClaveFiscales {
 		if strings.Contains(low, kw) {
 			// Permitir si está en contexto de agregación (GROUP BY, SUM, COUNT)
@@ -284,7 +285,7 @@ func (s *Server) validateReportSQLwithSchema(sql string) error {
 			return fmt.Errorf("Palabra clave fiscal '%s' detectada en SQL de reporte. Verifica que sea parte de cálculo sobre datos, no configuración manual.", kw)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -1767,13 +1768,13 @@ func substituteReportParams(sqlText, from, to string) (string, error) {
 // findSQLMatches busca coincidencias de patrón regex simple en SQL.
 // Devuelve la primera palabra capturada de cada match.
 func findSQLMatches(sql, pattern string) []string {
-\tvar results []string
-\tre := regexp.MustCompile(pattern)
-\tmatches := re.FindAllStringSubmatch(sql, -1)
-\tfor _, m := range matches {
-\t\tif len(m) > 1 {
-\t\t\tresults = append(results, strings.ToLower(m[1]))
-\t\t}
-\t}
-\treturn results
+	var results []string
+	re := regexp.MustCompile(pattern)
+	matches := re.FindAllStringSubmatch(sql, -1)
+	for _, m := range matches {
+		if len(m) > 1 {
+			results = append(results, strings.ToLower(m[1]))
+		}
+	}
+	return results
 }

@@ -131,14 +131,6 @@ func ValidateDocumento(rif, tipo string) (bool, string) {
 // Parámetros fiscales (fiscal_setting)
 // ----------------------------------------------------------------------------
 
-// fiscalSettings cachea los parámetros fiscales (recarga al guardar).
-type fiscalSettings struct {
-	IGTFEnabled    bool
-	IGTFRate       float64
-	WalkinRIFReq   bool
-	FiscalFootnote string
-}
-
 func (s *Server) loadFiscalSettings(r *http.Request) fiscalSettings {
 	fs := fiscalSettings{IGTFEnabled: true, IGTFRate: 3.0}
 	rows, err := s.dbFor(r).Query(`SELECT ` + "`key`" + `, value FROM fiscal_setting`)
