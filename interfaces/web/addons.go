@@ -479,16 +479,23 @@ type sesionDeAddon struct {
 }
 
 // addonsIniciar arranca la frontera: escanea, registra en el mux y lanza.
-// Es nil-safe y no revienta si la carpeta addons/ no existe: una instalación
-// sin addons es una instalación legítima; solo se informa en el log.
+// Es nil-safe y también auto-suficiente: si la carpeta addons/ no existe se
+// CREA aquí (0755). Razón: una instalación sin addons es legítima, pero que
+// la carpeta falte no debe obligar al dueño a conocer la ruta esperada ni a
+// crearla a mano: la carpeta vacía es el estado natural de «nunca instalé un
+// addon». Solo si la creación misma falla (permisos, disco) se degrada:
+// este arranque va sin addons y se informa.
 func (s *Server) addonsIniciar() {
 	dir := os.Getenv("ADDONS_DIR")
 	if dir == "" {
 		dir = addonDirPorDefecto
 	}
 	if _, err := os.Stat(dir); err != nil {
-		log.Printf("addons: carpeta %q no encontrada; este arranque va sin addons externos", dir)
-		return
+		if errC := os.MkdirAll(dir, 0o755); errC != nil {
+			log.Printf("AVISO addons: la carpeta %q no existe y no se pudo crear: %v; este arranque va sin addons externos", dir, errC)
+			return
+		}
+		log.Printf("addons: carpeta %q no existía y fue creada (vacía): los addons externos se despliegan ahí", dir)
 	}
 	h := &addonHost{
 		s:            s,

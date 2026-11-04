@@ -193,6 +193,44 @@ func hostDeAddon(t *testing.T, dir string) (*Server, *addonHost) {
 	return s, h
 }
 
+// addonsIniciar es auto-suficiente en la carpeta de addons. Estas pruebas
+// cubren sus DOS vías cuando addons/ (o la carpeta que diga ADDONS_DIR) no
+// existe: crearla y seguir con el host vivo, o degradarse con aviso si la
+// creación misma falla (permisos, disco). El arranque nunca deja una
+// instalación sin la carpeta donde van a desplegarse los addons.
+func TestAddonsIniciarCreaLaCarpetaSiNoExiste(t *testing.T) {
+	t.Cleanup(stopOrchestrators)
+	s, _ := basePrueba(t)
+	dir := filepath.Join(t.TempDir(), "addons")
+	t.Setenv("ADDONS_DIR", dir)
+
+	s.addonsIniciar()
+
+	if s.addons == nil {
+		t.Fatal("la frontera quedó sin iniciar; debía montarse sobre la carpeta recién creada")
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Fatalf("la carpeta %q debía existir como directorio tras el arranque: %v", dir, err)
+	}
+}
+
+func TestAddonsIniciarSeDegradaSiLaCarpetaNoSePuedeCrear(t *testing.T) {
+	t.Cleanup(stopOrchestrators)
+	s, _ := basePrueba(t)
+	raiz := t.TempDir()
+	bloqueo := filepath.Join(raiz, "bloqueo")
+	if err := os.WriteFile(bloqueo, []byte("un archivo en lugar de carpeta"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ADDONS_DIR", filepath.Join(bloqueo, "addons"))
+
+	s.addonsIniciar()
+
+	if s.addons != nil {
+		t.Fatal("con la carpeta imposible de crear, el arranque debía degradarse sin frontera de addons")
+	}
+}
+
 func TestElEscaneoRegistraElAddonEnModulosYMenu(t *testing.T) {
 	s, h := hostDeAddon(t, addonDirPrueba(t, manifiestoHola))
 
