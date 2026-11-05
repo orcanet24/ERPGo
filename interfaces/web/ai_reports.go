@@ -194,6 +194,25 @@ func (s *Server) validateReportDefinition(definition string) error {
 		return fmt.Errorf("totals apunta a columnas que no están en columns: %s. Declara la columna o quita el total",
 			strings.Join(fuera, ", "))
 	}
+	// El gráfico NO puede apuntar a una columna que el SELECT no devuelve: el
+	// motor lo descartaría en silencio y el informe se guardaría sin gráfico
+	// sin que nadie sepa por qué. Se valida aquí, igual que los totales, para
+	// que la causa se arregle en el momento.
+	if d.Chart != nil {
+		switch d.Chart.Type {
+		case "line", "bar", "pie", "doughnut":
+		default:
+			return fmt.Errorf("chart.type debe ser line, bar, pie o doughnut (recibido: %q)", d.Chart.Type)
+		}
+		if strings.TrimSpace(d.Chart.XKey) == "" || strings.TrimSpace(d.Chart.YKey) == "" {
+			return fmt.Errorf("chart.x_key y chart.y_key son obligatorios cuando se define chart")
+		}
+		for campo, k := range map[string]string{"x_key": d.Chart.XKey, "y_key": d.Chart.YKey} {
+			if !declaradas[k] {
+				return fmt.Errorf("chart.%s apunta a %q, que no está en columns: el gráfico no puede leer una columna que el SELECT no devuelve", campo, k)
+			}
+		}
+	}
 	return nil
 }
 
@@ -296,6 +315,10 @@ type reportResult struct {
 	Rows     [][]interface{}        `json:"rows"`
 	Totals   map[string]interface{} `json:"totals,omitempty"`
 	Warnings []string               `json:"warnings,omitempty"`
+	// Chart es el dataset ya procesado que consume Chart.js (mismo contrato
+	// que el motor tipado). Va aparte de Totals: el gráfico lo alimentan las
+	// filas del propio informe, no un cálculo nuevo.
+	Chart *ReportRunChart `json:"chart,omitempty"`
 }
 
 // executeReportDefinition corre el SQL del informe y estructura el resultado.
@@ -455,6 +478,17 @@ func (s *Server) executeReportDefinition(sess *SessionData, definition, from, to
 			"no se pudo calcular el total de la columna %q: no aparece en el resultado de la consulta. Columnas disponibles: %s",
 			key, strings.Join(disponibles, ", ")))
 	}
+	// El gráfico se arma de las MISMAS filas del informe: si el informe tiene
+	// datos, el gráfico los alimenta; si no tiene filas, el gráfico sale con
+	// etiquetas vacías y la tabla debajo explica por qué. Igual que en el motor
+	// tipado (report_engine.go), un chart inválido es un aviso y no un error.
+	if d.Chart != nil {
+		if chart, err := buildReportChart(d.Chart, d.ClavesDeclaradas(), cols, res.Rows); err == nil {
+			res.Chart = chart
+		} else {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("no se pudo generar el gráfico: %v", err))
+		}
+	}
 	return res, nil
 }
 
@@ -602,7 +636,8 @@ const aiContratoInforme = `CONTRATO DE RESPUESTA — REGLAS DEL SISTEMA (no nego
 3. El "key" de CADA columna de "columns" DEBE ser el alias EXACTO que usaste con "AS" en el SELECT (o el nombre de la columna, si no usaste alias). El motor del informe suma los totales por ese key.
 4. Cada elemento de "totals" DEBE ser una "key" ya declarada en "columns". Un total de una key que el SELECT no devuelve deja el informe sin cifras: se rechaza.
 5. Para fechas usa :desde y :hasta. NINGÚN otro parámetro con nombre: un :algo distinto rompe el SQL con error 1064.
-6. Si la solicitud es un ajuste sobre un SQL previo, modifícalo conservando lo que ya estaba bien.`
+6. Si la solicitud es un ajuste sobre un SQL previo, modifícalo conservando lo que ya estaba bien.
+7. "chart" es OPCIONAL: si el informe tendrá al menos una columna categórica (fechas, nombres, periodos) y una numérica, propón un gráfico embebido con {"type":"line|bar|pie|doughnut","x_key":"<key de columns>","y_key":"<key de columns>","y_label":"<etiqueta>","title":"<título>"}. "x_key" y "y_key" DEBEN ser "key" ya declaradas en "columns": el gráfico se alimenta de las MISMAS filas del informe. Si no procede (una sola fila, todo texto), OMITE la clave "chart". El gráfico se dibuja en pantalla; no sale en el PDF.`
 
 // iaPromptInforme arma el ÚNICO prompt de generación. En el system va el
 // contrato (reglas harcodeadas); en el user van la solicitud del usuario, el
@@ -851,6 +886,7 @@ func aiPreviewInstruction(request string) string {
 		`  "sql"   : un ÚNICO SELECT de lectura sobre las tablas del mapa.\n` +
 		`  "columns": [{key,label}...]. IMPORTANTE: el "key" de CADA columna DEBE ser EXACTAMENTE el alias que usaste en el SELECT con "AS". Si no usas AS, el key debe ser el nombre de la columna de la tabla tal cual aparece en el mapa.\n` +
 		`  "totals": ["clave1", "clave2"...]. CADA total DEBE ser una "key" que ya declaraste en "columns". Si una columna no aparece en el resultado del SELECT, el total no se puede calcular.\n` +
+		`  "chart" : OPCIONAL. Si el informe tendrá una columna categórica y una numérica, propón {"type":"line|bar|pie|doughnut","x_key":"<key de columns>","y_key":"<key de columns>","y_label":"<etiqueta>","title":"<título>"}. x_key e y_key DEBEN ser keys declaradas en columns. Si no procede, OMITE la clave.\n` +
 		`Reglas: Usa :desde/:hasta para fechas. NO uses ningún otro parámetro con nombre (:algo): el motor solo resuelve :desde y :hasta; un :param distinto hace fallar el SQL con error 1064. Sin markdown, sin vallado de código, sin texto fuera del objeto. Verifica que cada "key" en columns coincide con un alias/AS del SELECT antes de devolver.`
 }
 
@@ -1209,13 +1245,19 @@ func previewJSON(r *reportResult) map[string]interface{} {
 	if r == nil {
 		return nil
 	}
-	return map[string]interface{}{
+	out := map[string]interface{}{
 		"title":    r.Title,
 		"headers":  r.Headers,
 		"rows":     r.Rows,
 		"totals":   r.Totals,
 		"warnings": r.Warnings,
 	}
+	// El modal dibuja el gráfico con Chart.js cuando llega chart_data; si no
+	// hay chart, la clave simplemente no existe y el render no pinta nada.
+	if r.Chart != nil {
+		out["chart_data"] = r.Chart
+	}
+	return out
 }
 
 // insertarReporteACL graba la visibilidad de un informe en report_template_acl.

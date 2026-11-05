@@ -20,6 +20,12 @@
                     {{range $k, $v := .Res.Totals}}<strong>{{$k}}:</strong> {{$v}} &nbsp;{{end}}
                 </div>
             {{end}}
+            {{if .Res.Chart}}
+                {{/* El gráfico se alimenta de las MISMAS filas que la tabla de abajo. */}}
+                <div style="background:#fff;border:1px solid #e0e4e8;border-radius:6px;padding:10px;margin-bottom:14px;">
+                    <canvas id="reportRunChart" height="120"></canvas>
+                </div>
+            {{end}}
             <div class="table-responsive">
                 <table class="table table-striped table-bordered table-condensed">
                     <thead>
@@ -39,4 +45,13 @@
 </div>
 {{end}}
 
-{{define "pagejs"}}{{end}}
+{{define "pagejs"}}
+<script src="/static/js/report_chart.js?v=1"></script>
+<script>
+{{if .Res.Chart}}
+$(function () {
+    ERPGoReportChart.render('reportRunChart', JSON.parse({{jsonify .Res.Chart}}));
+});
+{{end}}
+</script>
+{{end}}

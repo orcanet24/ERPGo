@@ -309,6 +309,7 @@
 {{end}}
 
 {{define "pagejs"}}
+<script src="/static/js/report_chart.js?v=1"></script>
 <script>
 $(function () {
     var submittedAction = 'save';
@@ -425,6 +426,13 @@ $(function () {
         if (preview.warnings && preview.warnings.length) {
             html += '<div class="alert alert-warning py-2" style="font-size:12px; border-radius:6px;"><i class="fa fa-exclamation-triangle"></i> ' + preview.warnings.map(escHtml).join('<br>') + '</div>';
         }
+        // El gráfico se alimenta de las MISMAS filas del preview: si el informe
+        // trae chart_data, se dibuja encima de la tabla.
+        var hasChart = !!(preview.chart_data && preview.chart_data.labels && preview.chart_data.labels.length);
+        if (hasChart) {
+            html += '<div class="mb-3" style="background:#fff;border:1px solid #e0e4e8;border-radius:6px;padding:10px;">';
+            html += '<canvas id="aiPreviewChart" height="120"></canvas></div>';
+        }
         if (!preview.headers || preview.headers.length === 0) {
             html += '<p class="text-muted text-center mt-4">La consulta no devolvió columnas.</p>';
         } else {
@@ -449,6 +457,11 @@ $(function () {
             }
         }
         $('#ai_preview_container').html(html);
+        if (hasChart) {
+            ERPGoReportChart.render('aiPreviewChart', preview.chart_data);
+        } else {
+            ERPGoReportChart.clear('aiPreviewChart');
+        }
     }
     
     function escHtml(v) {
