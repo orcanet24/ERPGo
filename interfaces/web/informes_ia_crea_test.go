@@ -447,3 +447,69 @@ func TestLaColumnaExistePeroSusValoresNoSonNumericosDaAvisoHonesto(t *testing.T)
 		t.Errorf("el warning no debe mentir: la columna SÍ aparece en el resultado. Salió: %q", preview.Warnings[0])
 	}
 }
+
+// TestElGraficoSeAlimentaDeLasFilasDelInforme: un informe con "chart" en su
+// definición produce el dataset de Chart.js a partir de las MISMAS filas que
+// muestra la tabla. Antes el chart existía en el motor tipado y en el editor
+// manual, pero el flujo de informes personalizados (IA y humano) no lo calculaba
+// ni lo pintaba: el informe salía con datos y sin gráfico.
+func TestElGraficoSeAlimentaDeLasFilasDelInforme(t *testing.T) {
+	s, db := basePrueba(t)
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS ventas_chart (
+		mes TEXT, total REAL)`); err != nil {
+		t.Fatalf("create ventas_chart: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO ventas_chart (mes, total) VALUES
+		('2026-01', 100), ('2026-02', 250), ('2026-03', 180)`); err != nil {
+		t.Fatalf("insert ventas_chart: %v", err)
+	}
+	sess := sessPrueba("admin")
+	def := `{"title":"Ventas por mes","sql":"SELECT mes AS mes, total AS total FROM ventas_chart","columns":[{"key":"mes","label":"Mes"},{"key":"total","label":"Total"}],"totals":["total"],"chart":{"type":"bar","x_key":"mes","y_key":"total","y_label":"Total","title":"Ventas por mes"}}`
+	res, err := s.executeReportDefinition(sess, def, "", "")
+	if err != nil {
+		t.Fatalf("executeReportDefinition: %v", err)
+	}
+	if res.Chart == nil {
+		t.Fatal("el informe debía traer chart_data: el gráfico se alimenta de sus propias filas")
+	}
+	if res.Chart.Type != "bar" || len(res.Chart.Labels) != 3 || len(res.Chart.Datasets) != 1 {
+		t.Fatalf("chart incompleto: %+v", res.Chart)
+	}
+	if res.Chart.Labels[1] != "2026-02" {
+		t.Errorf("etiqueta inesperada: %v", res.Chart.Labels)
+	}
+	if got := res.Chart.Datasets[0].Data[1]; got != 250 {
+		t.Errorf("valor del gráfico: quería 250, llegó %v", got)
+	}
+	// Y el preview lo expone como chart_data para que el modal lo dibuje.
+	out := previewJSON(res)
+	if out["chart_data"] == nil {
+		t.Error("previewJSON debe incluir chart_data cuando el informe tiene gráfico")
+	}
+}
+
+// TestElGuardianRechazaGraficosQueNoPuedenLeerse: un chart con tipo raro o con
+// x_key/y_key que no están en columns haría que el informe se guardara sin
+// gráfico y sin que nadie supiera por qué. Se rechaza al guardar.
+func TestElGuardianRechazaGraficosQueNoPuedenLeerse(t *testing.T) {
+	base := `{"title":"T","sql":"SELECT mes AS mes, total AS total FROM ventas_chart","columns":[{"key":"mes"},{"key":"total"}],"totals":[]`
+	casos := []struct {
+		nombre string
+		chart  string
+	}{
+		{"tipo inválido", `,"chart":{"type":"radar","x_key":"mes","y_key":"total"}`},
+		{"x_key desconocida", `,"chart":{"type":"bar","x_key":"cliente","y_key":"total"}`},
+		{"y_key desconocida", `,"chart":{"type":"bar","x_key":"mes","y_key":"monto"}`},
+		{"falta y_key", `,"chart":{"type":"bar","x_key":"mes"}`},
+	}
+	for _, c := range casos {
+		var s Server
+		if err := s.validateReportDefinition(base + c.chart + "}"); err == nil {
+			t.Errorf("%s: el guardián lo aceptó y el informe se guardaría sin gráfico", c.nombre)
+		}
+	}
+	var s Server
+	if err := s.validateReportDefinition(base + `,"chart":{"type":"line","x_key":"mes","y_key":"total"}` + "}"); err != nil {
+		t.Errorf("un chart válido fue rechazado: %v", err)
+	}
+}
