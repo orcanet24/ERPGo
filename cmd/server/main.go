@@ -220,6 +220,10 @@ func main() {
 	// en lugar de depender de webhooks, que pueden no estar configurados o tener
 	// costo adicional. El polling es 'best effort' - si falla, el sistema continúa
 	// con el estado local y vuelve a intentar en el siguiente ciclo.
+	//
+	// StartCasheaStatusPoller NO bloquea (el ciclo corre en gorutina propia):
+	// antes fue un `for range ticker.C` llamado en serie y main se colgaba aquí,
+	// con el ERP vivo pero sin abrir el puerto HTTP (8586).
 	server.StartCasheaStatusPoller()
 
 	// If migrate-only mode, exit after migrations

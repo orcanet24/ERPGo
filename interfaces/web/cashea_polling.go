@@ -37,15 +37,26 @@ type casheaSesion struct {
 	CreatedAt    time.Time
 }
 
-// StartCasheaStatusPoller inicia el verificador periódico de estado de sesiones Cashea.
-// Se ejecuta en background y revisa cada 30 segundos las sesiones activas o
-// pendientes, actualizando la base de datos de la empresa activa con el estado
-// reportado por la API de Cashea.
+// StartCasheaStatusPoller inicia el verificador periódico de estado de sesiones
+// Cashea y devuelve el control de inmediato: el ciclo corre en segundo plano.
+//
+// POR QUÉ NO BLOQUEA: el primer arranque lo llamó en serie desde main y, como
+// el ciclo interno es infinito (`for range ticker.C`), main se quedó colgado
+// justo antes de levantar el HTTP: el ERP quedaba VIVO pero el puerto 8586 nunca
+// se abría. El que arranca un polling no debería tener que saber que debe
+// escribir `go`: la función lo hace ella misma.
 //
 // Solo actúa cuando el superusuario tiene el módulo encendido
 // (fiscal_setting.cashhea_enabled = "1"): con el módulo apagado el ciclo no
 // consume API ni CPU, y el ERP no debe hablar de Cashea si nadie lo pidió.
 func (s *Server) StartCasheaStatusPoller() {
+	go s.runCasheaStatusPoller()
+}
+
+// runCasheaStatusPoller es el ciclo infinito. Se separa de
+// StartCasheaStatusPoller para que arrancar el polling no bloquee al caller y
+// para que la prueba pueda medir el contrato sin ejecutar un bucle sin fin.
+func (s *Server) runCasheaStatusPoller() {
 	log.Println("🔄 Iniciando polling de estado Cashea cada 30s")
 
 	ticker := time.NewTicker(casheaPollInterval)
