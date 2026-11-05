@@ -21,9 +21,17 @@ que lo invocarán. Con el mapa en mano, ningún cambio parte de una suposición.
 
 ## Directorios
 
+- `finetune/` — Generador del dataset JSONL para el fine-tuning del modelo
+  especialista en informes (ver su README.md con uso y candados: contrato y
+  catálogo leídos de la fuente única, exclusión de lo que el guardián
+  rechazará).
+
 - `reportes/modulo_reportes.map.json` — módulo de informes (CRUD, motor, IA,
   PDF, export, reportes clásicos). Cada entrada documenta propósito, tablas y
   endpoints.
+
+Nota: `finetune/` no es un mapa de módulo sino una herramienta del proyecto
+con su propio README.md; los mapas de módulos siguen la regla original.
 
 ## Formato del mapa
 
