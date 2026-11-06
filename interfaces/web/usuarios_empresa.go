@@ -168,3 +168,61 @@ func desvincularUsuarioDeEmpresaTx(tx *sql.Tx, userID, username, empresa string)
 	}
 	return nil
 }
+
+// repararPertenenciasHuerfanas reconstruye tenant_users desde
+// user_company_access cuando falta la fila de pertenencia.
+//
+// POR QUÉ HACE FALTA. El alta anterior escribía SOLO user_company_access (en la
+// base de control) y nunca tenant_users. El login, el selector de empresa y
+// canAccessTenant validan con tenant_users, así que esos usuarios existían,
+// aparecían asignados a una empresa y no podían entrar a ninguna: el síntoma que
+// se veía era «todos caen en la empresa demo», porque la demo es la única que se
+// abre sin pertenencia (is_demo=1).
+//
+// Se copia la empresa que ya estaba registrada, no se adivina otra: si el alta
+// vieja la eligió mal, el administrador la corrige desde el panel, pero al menos
+// el usuario vuelve a poder entrar. Es idempotente y no borra nada.
+func repararPertenenciasHuerfanas(ctl *sql.DB) (int, error) {
+	if ctl == nil {
+		return 0, nil
+	}
+	rows, err := ctl.Query(`SELECT uca.tenant_code, ul.username, IFNULL(uca.role_id,0)
+		FROM user_company_access uca
+		JOIN user_login ul ON ul.user_id = uca.user_id
+		LEFT JOIN tenant_users tu ON tu.tenant_code = uca.tenant_code AND tu.username = ul.username
+		WHERE tu.username IS NULL`)
+	if err != nil {
+		return 0, fmt.Errorf("buscando pertenencias sin fila en tenant_users: %w", err)
+	}
+	type huerfana struct {
+		empresa  string
+		username string
+		roleID   int64
+	}
+	var pendientes []huerfana
+	for rows.Next() {
+		var h huerfana
+		if err := rows.Scan(&h.empresa, &h.username, &h.roleID); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("leyendo pertenencias sin fila en tenant_users: %w", err)
+		}
+		pendientes = append(pendientes, h)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	reparadas := 0
+	for _, h := range pendientes {
+		if strings.TrimSpace(h.empresa) == "" || strings.TrimSpace(h.username) == "" {
+			continue
+		}
+		if _, err := ctl.Exec(`INSERT INTO tenant_users (tenant_code, username, role_id, is_owner, status, created_at)
+			VALUES (?,?,?,0,1,?)`, h.empresa, h.username, h.roleID, now()); err != nil {
+			return reparadas, fmt.Errorf("reparando la pertenencia de %q a %q: %w", h.username, h.empresa, err)
+		}
+		reparadas++
+	}
+	return reparadas, nil
+}

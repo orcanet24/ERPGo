@@ -323,3 +323,47 @@ func TestElRolReservadoNoSeReasignaNiSeCreaMaster(t *testing.T) {
 		t.Errorf("sin rol debe devolver 0 sin error: id=%d err=%v", id, err)
 	}
 }
+
+func TestRepararPertenenciasHuerfanasDevuelveElAccesoALaEmpresa(t *testing.T) {
+	db := baseDeUsuarios(t)
+	// El alta anterior dejaba SOLO user_company_access: sin tenant_users el login
+	// no reconoce la pertenencia y el usuario no puede entrar a la empresa.
+	if _, err := db.Exec(`INSERT INTO users (user_id, first_name, last_name, status) VALUES ('21','Viejo','Alta',2)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO user_login (user_id, username, password, user_type, status) VALUES ('21','viejo','x',2,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO user_company_access (user_id, tenant_code, role_id) VALUES ('21','acme',3)`); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := repararPertenenciasHuerfanas(db)
+	if err != nil {
+		t.Fatalf("reparando: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("debe reparar una pertenencia: %d", n)
+	}
+	var rol int
+	if err := db.QueryRow(`SELECT role_id FROM tenant_users WHERE tenant_code='acme' AND username='viejo'`).Scan(&rol); err != nil {
+		t.Fatalf("no se creó la pertenencia: %v", err)
+	}
+	if rol != 3 {
+		t.Errorf("el rol de la pertenencia debe conservarse: %d", rol)
+	}
+
+	// Idempotente: la segunda pasada no duplica ni vuelve a contar.
+	n, err = repararPertenenciasHuerfanas(db)
+	if err != nil {
+		t.Fatalf("segunda pasada: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("la reparación debe ser idempotente, reparó %d", n)
+	}
+	var total int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM tenant_users WHERE tenant_code='acme' AND username='viejo'`).Scan(&total)
+	if total != 1 {
+		t.Errorf("no debe duplicar la pertenencia: %d", total)
+	}
+}

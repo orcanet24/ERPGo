@@ -239,6 +239,17 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	if err := s.asegurarSuperAdminUnico(); err != nil {
 		log.Printf("AVISO: no se pudo comprobar el super administrador: %v", err)
 	}
+
+	// Pertenencia sin fila en tenant_users: la dejó el alta anterior, que escribía
+	// solo user_company_access. Sin esto, esos usuarios no pueden entrar a ninguna
+	// empresa real (el login valida con tenant_users) y parecen «de la demo».
+	if ctl, err := s.controlStore(); err == nil {
+		if n, err := repararPertenenciasHuerfanas(ctl); err != nil {
+			log.Printf("AVISO: no se pudieron reparar las pertenencias de usuarios: %v", err)
+		} else if n > 0 {
+			log.Printf("pertenencias reparadas: %d usuario(s) recuperaron su empresa en tenant_users", n)
+		}
+	}
 	// La empresa de práctica (DEMO) se auto-provisiona y queda SIEMPRE
 	// disponible para cualquier usuario. El admin puede desactivarla con
 	// POST /guia/demo-marcar (code=demo, demo=0).
