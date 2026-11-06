@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "5903163d-3a93-47d5-ab74-0eda6d53844b",
+  "status": "failed",
+  "command": "deliver",
+  "stage": "check",
+  "input": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\candidate.json",
+  "output": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\mapa-proyecto.html",
+  "artifact": {
+    "sha256": "8eb1365d4bdf2b9328e7d3004f419890c8bbbb3a9c45c36f179129f698458451",
+    "bytes": 940794
+  },
+  "error": "Final artifact check failed; the previous artifact was preserved."
+}

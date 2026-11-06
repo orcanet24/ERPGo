@@ -1,0 +1,411 @@
+{
+  "schema_version": 1,
+  "diagram_type": "tree",
+  "meta": {
+    "title": "Mapa del proyecto ERPGo",
+    "subtitle": "Capas y módulos de negocio · el detalle archivo a archivo está en el Diccionario de Scripts",
+    "output": "docs/Mapa-Proyecto/mapa-proyecto.html",
+    "locale": "es",
+    "quality_profile": "showcase"
+  },
+  "layout": {
+    "direction": "down",
+    "gapX": 16,
+    "gapY": 24,
+    "nodeW": 96,
+    "nodeMaxW": 120
+  },
+  "nodes": [
+    {
+      "id": "raiz",
+      "label": "ERPGo",
+      "sublabel": "368 archivos · 2933 funciones"
+    },
+    {
+      "id": "capa_interfaces",
+      "label": "interfaces/web",
+      "parent": "raiz",
+      "sublabel": "212 archivos · capa web (HTTP, handlers, plantillas)"
+    },
+    {
+      "id": "mod_facturacion",
+      "label": "Facturación y ventas",
+      "parent": "capa_interfaces",
+      "sublabel": "46 archivos · Facturas, cotizaciones, órdenes, clientes, POS, facturación digital y fiscal"
+    },
+    {
+      "id": "mod_inventario",
+      "label": "Inventario y almacén",
+      "parent": "capa_interfaces",
+      "sublabel": "13 archivos · Stock, kardex, costos, conteos cíclicos y punto de reorden"
+    },
+    {
+      "id": "mod_compras",
+      "label": "Compras y proveedores",
+      "parent": "capa_interfaces",
+      "sublabel": "10 archivos · Compras, bandeja de entrada y proveedores"
+    },
+    {
+      "id": "mod_contabilidad",
+      "label": "Contabilidad y finanzas",
+      "parent": "capa_interfaces",
+      "sublabel": "18 archivos · Cuentas, libros legales, períodos, bancos, cartera y moneda"
+    },
+    {
+      "id": "mod_rrhh",
+      "label": "RRHH y nómina",
+      "parent": "capa_interfaces",
+      "sublabel": "8 archivos · Empleados, conceptos, permisos y nómina"
+    },
+    {
+      "id": "mod_ia",
+      "label": "Inteligencia artificial",
+      "parent": "capa_interfaces",
+      "sublabel": "43 archivos · Agentes, proveedores, herramientas, esquema y gobernanza"
+    },
+    {
+      "id": "mod_crm",
+      "label": "CRM",
+      "parent": "capa_interfaces",
+      "sublabel": "4 archivos · Clientes y remarketing"
+    },
+    {
+      "id": "mod_reportes",
+      "label": "Reportes y dashboard",
+      "parent": "capa_interfaces",
+      "sublabel": "6 archivos · Reportes, motor, PDF y panel principal"
+    },
+    {
+      "id": "mod_addons",
+      "label": "Add-ons",
+      "parent": "capa_interfaces",
+      "sublabel": "9 archivos · Registro, administración y ganchos de complementos"
+    },
+    {
+      "id": "mod_administracion",
+      "label": "Administración y seguridad",
+      "parent": "capa_interfaces",
+      "sublabel": "26 archivos · Menú, permisos, usuarios, sesiones, tenants y auditoría"
+    },
+    {
+      "id": "mod_plataforma",
+      "label": "Plataforma y sistema",
+      "parent": "capa_interfaces",
+      "sublabel": "29 archivos · Servidor, caché, gzip, workers, salud y arranque"
+    },
+    {
+      "id": "capa_internal",
+      "label": "internal",
+      "parent": "raiz",
+      "sublabel": "27 archivos · Lógica interna, servicios y trabajadores"
+    },
+    {
+      "id": "n_internal_digitalinvoice",
+      "label": "digitalinvoice/",
+      "parent": "capa_internal",
+      "sublabel": "1 archivos"
+    },
+    {
+      "id": "n_internal_logger",
+      "label": "logger/",
+      "parent": "capa_internal",
+      "sublabel": "1 archivos"
+    },
+    {
+      "id": "n_internal_migrationcheck",
+      "label": "migrationcheck/",
+      "parent": "capa_internal",
+      "sublabel": "1 archivos"
+    },
+    {
+      "id": "n_internal_orchestrator",
+      "label": "orchestrator/",
+      "parent": "capa_internal",
+      "sublabel": "2 archivos"
+    },
+    {
+      "id": "n_internal_pos",
+      "label": "pos/",
+      "parent": "capa_internal",
+      "sublabel": "6 archivos"
+    },
+    {
+      "id": "n_internal_queue",
+      "label": "queue/",
+      "parent": "capa_internal",
+      "sublabel": "2 archivos"
+    },
+    {
+      "id": "n_internal_security",
+      "label": "security/",
+      "parent": "capa_internal",
+      "sublabel": "1 archivos"
+    },
+    {
+      "id": "n_internal_service",
+      "label": "service/",
+      "parent": "capa_internal",
+      "sublabel": "5 archivos"
+    },
+    {
+      "id": "n_internal_setup",
+      "label": "setup/",
+      "parent": "capa_internal",
+      "sublabel": "4 archivos"
+    },
+    {
+      "id": "n_internal_upload",
+      "label": "upload/",
+      "parent": "capa_internal",
+      "sublabel": "1 archivos"
+    },
+    {
+      "id": "n_internal_webcheck",
+      "label": "webcheck/",
+      "parent": "capa_internal",
+      "sublabel": "3 archivos"
+    },
+    {
+      "id": "capa_infrastructure",
+      "label": "infrastructure",
+      "parent": "raiz",
+      "sublabel": "15 archivos · Infraestructura y persistencia"
+    },
+    {
+      "id": "n_infrastructure_persistence",
+      "label": "persistence/",
+      "parent": "capa_infrastructure",
+      "sublabel": "15 archivos"
+    },
+    {
+      "id": "capa_migrations",
+      "label": "migrations",
+      "parent": "raiz",
+      "sublabel": "61 archivos · Migraciones y esquemas SQL"
+    },
+    {
+      "id": "mig_base",
+      "label": "Esquema base",
+      "parent": "capa_migrations",
+      "sublabel": "8 archivos SQL"
+    },
+    {
+      "id": "mig_reconstruido",
+      "label": "Reconstrucción por módulos",
+      "parent": "capa_migrations",
+      "sublabel": "10 archivos SQL"
+    },
+    {
+      "id": "mig_ampliaciones",
+      "label": "Ampliaciones z",
+      "parent": "capa_migrations",
+      "sublabel": "43 archivos SQL"
+    },
+    {
+      "id": "capa_cmd",
+      "label": "cmd",
+      "parent": "raiz",
+      "sublabel": "12 archivos · Comandos y puntos de entrada"
+    },
+    {
+      "id": "n_cmd_diag",
+      "label": "diag/",
+      "parent": "capa_cmd",
+      "sublabel": "1 archivos"
+    },
+    {
+      "id": "n_cmd_docgen",
+      "label": "docgen/",
+      "parent": "capa_cmd",
+      "sublabel": "7 archivos"
+    },
+    {
+      "id": "n_cmd_genhash",
+      "label": "genhash/",
+      "parent": "capa_cmd",
+      "sublabel": "1 archivos"
+    },
+    {
+      "id": "n_cmd_semillar",
+      "label": "semillar/",
+      "parent": "capa_cmd",
+      "sublabel": "1 archivos"
+    },
+    {
+      "id": "n_cmd_server",
+      "label": "server/",
+      "parent": "capa_cmd",
+      "sublabel": "2 archivos"
+    },
+    {
+      "id": "capa_addons",
+      "label": "addons",
+      "parent": "raiz",
+      "sublabel": "10 archivos · Complementos (add-ons) del ERP"
+    },
+    {
+      "id": "n_addons_demo",
+      "label": "demo/",
+      "parent": "capa_addons",
+      "sublabel": "3 archivos"
+    },
+    {
+      "id": "n_addons_hola",
+      "label": "hola/",
+      "parent": "capa_addons",
+      "sublabel": "3 archivos"
+    },
+    {
+      "id": "n_addons_memo",
+      "label": "memo/",
+      "parent": "capa_addons",
+      "sublabel": "4 archivos"
+    },
+    {
+      "id": "capa_tools",
+      "label": "tools",
+      "parent": "raiz",
+      "sublabel": "5 archivos · Herramientas de desarrollo"
+    },
+    {
+      "id": "n_tools_estress",
+      "label": "estress/",
+      "parent": "capa_tools",
+      "sublabel": "1 archivos"
+    },
+    {
+      "id": "n_tools_firmar",
+      "label": "firmar/",
+      "parent": "capa_tools",
+      "sublabel": "1 archivos"
+    },
+    {
+      "id": "n_tools_firmaraddon",
+      "label": "firmaraddon/",
+      "parent": "capa_tools",
+      "sublabel": "1 archivos"
+    },
+    {
+      "id": "n_tools_limpiar",
+      "label": "limpiar/",
+      "parent": "capa_tools",
+      "sublabel": "1 archivos"
+    },
+    {
+      "id": "n_tools_loadtest",
+      "label": "loadtest/",
+      "parent": "capa_tools",
+      "sublabel": "1 archivos"
+    },
+    {
+      "id": "capa_configs",
+      "label": "configs",
+      "parent": "raiz",
+      "sublabel": "3 archivos · Configuración de tenants"
+    },
+    {
+      "id": "n_configs_config_go",
+      "label": "config.go",
+      "parent": "capa_configs"
+    },
+    {
+      "id": "n_configs_tenantcfg_go",
+      "label": "tenantcfg.go",
+      "parent": "capa_configs"
+    },
+    {
+      "id": "n_configs_tenantcfg_test_go",
+      "label": "tenantcfg_test.go",
+      "parent": "capa_configs"
+    },
+    {
+      "id": "capa_static",
+      "label": "static",
+      "parent": "raiz",
+      "sublabel": "14 archivos · Recursos estáticos (JS)"
+    },
+    {
+      "id": "n_static_js",
+      "label": "js/",
+      "parent": "capa_static",
+      "sublabel": "14 archivos"
+    },
+    {
+      "id": "capa_scripts",
+      "label": "scripts",
+      "parent": "raiz",
+      "sublabel": "6 archivos · Construcción y despliegue"
+    },
+    {
+      "id": "n_scripts_deploy",
+      "label": "deploy/",
+      "parent": "capa_scripts",
+      "sublabel": "3 archivos"
+    },
+    {
+      "id": "n_scripts_build_bat",
+      "label": "build.bat",
+      "parent": "capa_scripts"
+    },
+    {
+      "id": "n_scripts_build_sh",
+      "label": "build.sh",
+      "parent": "capa_scripts"
+    },
+    {
+      "id": "n_scripts_verificar_pasarela_respan_py",
+      "label": "verificar_pasarela_respan.py",
+      "parent": "capa_scripts"
+    },
+    {
+      "id": "capa_fiscalprinteradapter",
+      "label": "fiscalprinteradapter",
+      "parent": "raiz",
+      "sublabel": "1 archivos · Adaptador de impresora fiscal"
+    },
+    {
+      "id": "n_fiscalprinteradapter_adapter_go",
+      "label": "adapter.go",
+      "parent": "capa_fiscalprinteradapter"
+    },
+    {
+      "id": "n_build_bat",
+      "label": "build.bat",
+      "parent": "raiz"
+    },
+    {
+      "id": "n_embed_go",
+      "label": "embed.go",
+      "parent": "raiz"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Cómo leer este mapa",
+      "items": [
+        "La raíz es el proyecto ERPGo; el primer nivel son las capas (interfaces, internal, infrastructure, migrations, cmd, addons, tools, configs, static, scripts y el adaptador fiscal).",
+        "Dentro de interfaces/web los 209 archivos se agrupan por módulo de negocio, no por carpeta: son 11 módulos funcionales.",
+        "Cada nodo indica cuántos archivos contiene. Usa el buscador (/) para encontrar un módulo o capa, y haz clic en un nodo para centrarlo."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Capas del ERP",
+      "items": [
+        "interfaces/web — capa web: handlers HTTP, plantillas y lógica de presentación (212 archivos).",
+        "internal — lógica interna: servicios, orquestador, cola, seguridad, setup y verificación web (27 archivos).",
+        "infrastructure/persistence — MySQL/SQLite, migraciones, protección y respaldos (15 archivos).",
+        "migrations — esquemas SQL del modelo de datos (61 archivos).",
+        "cmd — puntos de entrada: servidor, docgen, diag, genhash y semillar (12 archivos)."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Diccionario de Scripts",
+      "items": [
+        "Este mapa es la vista estructural. El diccionario (docs/Diccionario/index.html) es el catálogo buscable con la descripción de cada archivo y de sus 2933 funciones."
+      ]
+    }
+  ]
+}
