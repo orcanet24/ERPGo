@@ -148,11 +148,20 @@ func compraLineasDeFormulario(r *http.Request) []compraLineaHash {
 	ids := r.Form["product_id"]
 	qtys := r.Form["product_quantity"]
 	rates := r.Form["product_rate"]
+	// Los renglones de servicio no tienen producto: su identidad es el concepto.
+	// Sin esto, dos facturas de servicios del mismo proveedor por el mismo
+	// importe y los mismos números serían indistinguibles... y lo serían aunque
+	// fueran compras distintas. El concepto forma parte de la compra.
+	concepts := r.Form["line_concept"]
 	out := make([]compraLineaHash, 0, len(ids))
 	for i, id := range ids {
 		id = strings.TrimSpace(id)
 		if id == "" {
-			continue
+			if i < len(concepts) && strings.TrimSpace(concepts[i]) != "" {
+				id = "SERV:" + strings.ToUpper(strings.TrimSpace(concepts[i]))
+			} else {
+				continue
+			}
 		}
 		l := compraLineaHash{ProductID: id}
 		if i < len(qtys) {

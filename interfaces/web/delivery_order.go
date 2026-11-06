@@ -150,7 +150,10 @@ func (s *Server) deliveryOrderSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	warehouse := orDefault(r.FormValue("warehouse_id"), "WH-MAIN")
+	warehouse := strings.TrimSpace(r.FormValue("warehouse_id"))
+	if warehouse == "" {
+		warehouse = s.almacenPorDefecto(r, AlmacenTipoVenta)
+	}
 	date := today()
 	if d := r.FormValue("date"); d != "" {
 		date = d
@@ -300,7 +303,7 @@ func (s *Server) deliveryOrderUpdateStatus(w http.ResponseWriter, r *http.Reques
 	if newStatus == "delivered" {
 		deliveredAtExpr = "NOW()"
 	}
-	_, err = tx.Exec("UPDATE delivery_order SET status=?, delivered_at=" + deliveredAtExpr + " WHERE id=?", newStatus, id)
+	_, err = tx.Exec("UPDATE delivery_order SET status=?, delivered_at="+deliveredAtExpr+" WHERE id=?", newStatus, id)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -308,16 +311,31 @@ func (s *Server) deliveryOrderUpdateStatus(w http.ResponseWriter, r *http.Reques
 
 	// When transitioning to shipped or delivered, create stock_movement records
 	if newStatus == "shipped" || newStatus == "delivered" {
-		rows, err := tx.Query(`SELECT product_id, quantity FROM delivery_order_detail WHERE delivery_order_id = ?`, id)
+		// El almacén es el del despacho, no un código fijo; y un servicio no
+		// genera movimiento porque no tiene existencias.
+		var almacenDespacho string
+		_ = tx.QueryRow(`SELECT IFNULL(warehouse_id,'') FROM delivery_order WHERE id = ?`, id).Scan(&almacenDespacho)
+		if almacenDespacho == "" {
+			almacenDespacho = s.almacenPorDefecto(r, AlmacenTipoVenta)
+		}
+		rows, err := tx.Query(`
+			SELECT d.product_id, d.quantity, IFNULL(p.item_type,'venta')
+			FROM delivery_order_detail d
+			LEFT JOIN product_information p ON p.product_id = d.product_id
+			WHERE d.delivery_order_id = ?`, id)
 		if err == nil {
 			for rows.Next() {
 				var productID int
 				var qty float64
-				rows.Scan(&productID, &qty)
+				var tipo string
+				rows.Scan(&productID, &qty, &tipo)
+				if !itemMueveStock(tipo) {
+					continue
+				}
 				if _, err := tx.Exec(`
 					INSERT INTO stock_movement (movement_type, product_id, warehouse_id, quantity, unit_cost, reference_type, reference_id, reference_no, date, is_posted, posted_at, created_at)
-					VALUES ('delivery', ?, 'WH-MAIN', ?, 0, 'delivery_order', ?, CONCAT('DO-',?), CURDATE(), 1, NOW(), NOW())`,
-					productID, qty, id, id); err != nil {
+					VALUES ('delivery', ?, ?, ?, 0, 'delivery_order', ?, CONCAT('DO-',?), CURDATE(), 1, NOW(), NOW())`,
+					productID, almacenDespacho, qty, id, id); err != nil {
 					_ = tx.Rollback()
 					jsonError(w, fmt.Sprintf("movimiento de inventario: %v", err), 500)
 					return

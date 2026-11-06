@@ -1,0 +1,122 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Cuentas por defecto
+                <span class="btn-group pull-right">
+                    <a href="/account/coa" class="btn btn-default btn-sm"><i class="fa fa-sitemap"></i> Ver plan de cuentas</a>
+                    <a href="/account/coa/catalog" class="btn btn-default btn-sm"><i class="fa fa-book"></i> Catálogo contable</a>
+                </span>
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <p class="help-block">
+            Cada papel contable del sistema se ata a una cuenta <strong>del plan de esta empresa</strong>.
+            No hay códigos fijos: si su plan usa otra numeración, cámbiela aquí. Las compras de mercancía,
+            el consumo interno, los servicios y el IVA se asientan en la cuenta que usted elija.
+        </p>
+        <div class="alert alert-info">
+            Plan contable en uso: <strong>{{.Catalogo}}</strong>.
+            {{if .Pendientes}}
+            <br><i class="fa fa-warning"></i> Papeles de la separación sin cuenta válida:
+            <strong>{{range $i, $p := .Pendientes}}{{if $i}}, {{end}}{{$p}}{{end}}</strong>.
+            Las compras de consumo o servicio y el consumo interno se detendrán hasta asignarlos.
+            {{else}}
+            <br><i class="fa fa-check"></i> Todos los papeles de la separación tienen una cuenta válida.
+            {{end}}
+        </div>
+
+        <form id="cuentasRolForm">
+            <div class="table-responsive">
+                <table class="table table-bordered table-condensed">
+                    <thead>
+                        <tr>
+                            <th style="width:32%">Papel contable</th>
+                            <th style="width:40%">Cuenta del plan</th>
+                            <th style="width:28%">Estado</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Grupos}}
+                        <tr class="active">
+                            <td colspan="3"><strong>{{.Nombre}}</strong></td>
+                        </tr>
+                        {{range .Roles}}
+                        {{$rol := .}}
+                        <tr class="{{if eq .Estado "invalida"}}danger{{else if eq .Estado "sin_asignar"}}warning{{end}}">
+                            <td>
+                                <strong>{{.Rol.Titulo}}</strong>
+                                <div class="help-block" style="margin-bottom:0">{{.Rol.Ayuda}}</div>
+                                <small class="text-muted">Necesita: {{.Esperado}}</small>
+                            </td>
+                            <td>
+                                <select class="form-control" name="cuenta_{{.Rol.Clave}}">
+                                    <option value="">— Sin asignar —</option>
+                                    {{range $c := $.Cuentas}}
+                                    <option value="{{$c.code}}" {{if eq $c.code $rol.Codigo}}selected{{end}}>{{$c.code}} — {{$c.name}} ({{$c.type_label}})</option>
+                                    {{end}}
+                                </select>
+                            </td>
+                            <td>
+                                {{if eq .Estado "ok"}}
+                                <span class="label label-success">Correcta</span>
+                                <div><small>{{.Nombre}} ({{.Tipo}})</small></div>
+                                {{else if eq .Estado "sin_asignar"}}
+                                <span class="label label-default">Sin asignar</span>
+                                {{else}}
+                                <span class="label label-danger">No sirve</span>
+                                <div><small>{{.Motivo}}</small></div>
+                                {{end}}
+                            </td>
+                        </tr>
+                        {{end}}
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            <div class="form-group" style="margin-top:15px">
+                <button type="submit" class="btn btn-primary"><i class="fa fa-save"></i> Guardar cuentas</button>
+                <button type="button" class="btn btn-default" id="btnEstandar"><i class="fa fa-magic"></i> Vincular al plan estándar</button>
+                <span class="help-block" style="display:inline-block;margin-left:12px">
+                    «Vincular al plan estándar» solo toma cuentas que ya existan en su plan; no crea ni sobrescribe una cuenta válida.
+                </span>
+            </div>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#cuentasRolForm').on('submit', function (e) {
+        e.preventDefault();
+        $.post('/settings/accounts/save', $(this).serialize(), function (r) {
+            if (r && r.status == 1) {
+                toastr.success(r.msg || 'Cuentas guardadas');
+                setTimeout(function () { ERPGo.refrescar(); }, 600);
+            } else {
+                toastr.error((r && r.error) || 'No se pudieron guardar');
+            }
+        }).fail(function (x) {
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'No se pudieron guardar');
+        });
+    });
+
+    $('#btnEstandar').on('click', function () {
+        if (!confirm('¿Vincular los papeles al plan estándar? Se respetan las cuentas que ya sean válidas.')) { return; }
+        $.post('/settings/accounts/standard', function (r) {
+            if (r && r.status == 1) {
+                toastr.success(r.msg || 'Cuentas vinculadas');
+                setTimeout(function () { ERPGo.refrescar(); }, 800);
+            } else {
+                toastr.error((r && r.error) || 'No se pudo vincular');
+            }
+        }).fail(function (x) {
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'No se pudo vincular');
+        });
+    });
+});
+</script>
+{{end}}

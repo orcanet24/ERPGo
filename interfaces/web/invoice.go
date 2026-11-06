@@ -113,11 +113,17 @@ func iid2(p *int64) *int64 { return p }
 func (s *Server) invoiceForm(w http.ResponseWriter, r *http.Request) {
 	methods := s.paymentMethods(r)
 	canCreate := s.hasPermission(r, "add_customer", "create") || s.hasPermission(r, "manage_customer", "create")
-	s.render(w, r, "invoice_form.html", map[string]interface{}{
+	data := map[string]interface{}{
 		"Title":             "Nueva Factura",
 		"Methods":           methods,
 		"CanCreateCustomer": canCreate,
-	})
+	}
+	// Almacenes de venta: la factura dice de dónde sale la mercancía. Es lo que
+	// permite operar varias sucursales sin que todas descuenten del mismo sitio.
+	for k, v := range s.almacenesParaFormulario(r) {
+		data[k] = v
+	}
+	s.render(w, r, "invoice_form.html", data)
 }
 
 // paymentMethods: cash/bank accounts (like pmethod_dropdown).
@@ -172,7 +178,7 @@ func (s *Server) invoiceEdit(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 	}
 
-	s.render(w, r, "invoice_form.html", map[string]interface{}{
+	edata := map[string]interface{}{
 		"Title":    "Editar Factura #" + id,
 		"EditID":   iid,
 		"Customer": custID,
@@ -188,7 +194,11 @@ func (s *Server) invoiceEdit(w http.ResponseWriter, r *http.Request) {
 		"IDetails": details.String,
 		"Details":  drows,
 		"Methods":  s.paymentMethods(r),
-	})
+	}
+	for k, v := range s.almacenesParaFormulario(r) {
+		edata[k] = v
+	}
+	s.render(w, r, "invoice_form.html", edata)
 }
 
 // invoiceSave replicates invoice_entry(): invoice no, header, vouchers
@@ -423,6 +433,19 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 			dueAmount = 0
 		}
 	}
+	// ALMACÉN DE LA VENTA. Antes se escribía "WH-MAIN" a mano en el
+	// movimiento de stock, así que una empresa con varias sucursales no podía
+	// decir de dónde salió la mercancía. Ahora se toma el del documento y, si no
+	// viene, el almacén de venta por defecto de la empresa.
+	almacenVenta := strings.TrimSpace(r.FormValue("warehouse_id"))
+	if almacenVenta == "" {
+		almacenVenta = s.almacenPorDefecto(r, AlmacenTipoVenta)
+	}
+	if err := s.almacenValidoPara(r, almacenVenta, AlmacenTipoVenta); err != nil {
+		jsonError(w, err.Error(), 400)
+		return
+	}
+
 	doc, err := s.nextFiscalDoc(tx, "FACT")
 	if err != nil {
 		jsonError(w, "No se pudo asignar número de control fiscal: "+err.Error(), 500)
@@ -440,7 +463,7 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 		invoiceNo, customerID, date, grandTotal, paidAmount, dueAmount,
 		parseMoney(r.FormValue("previous")), shipping, invoiceNo, invoiceDiscount, totalDiscount,
 		totalVat, totalTax, "ERP Go", isCredit, isFixed, isDraft, isDynamic, status, paymentType, createBy,
-		doc.ControlNo, rif, doc.Series, igtfAmount, fs.IGTFRate, openSession, parseMoney(r.FormValue("warehouse_id")),
+		doc.ControlNo, rif, doc.Series, igtfAmount, fs.IGTFRate, openSession, almacenVenta,
 		currencyCode, tasaBCV, totalUSD, tasaFuente)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
@@ -481,6 +504,13 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 		qty := 1.0
 		if i < len(quantities) {
 			qty = parseMoney(quantities[i])
+		}
+		// Un servicio no tiene costo de mercancía: su costo es el gasto en que
+		// se incurrió, que ya está en su propia cuenta. Sumarlo aquí inventaba
+		// un costo de ventas que no existe.
+		pidInt, _ := strconv.Atoi(pid)
+		if !itemMueveStock(s.tipoItemProducto(r, pidInt)) {
+			continue
 		}
 		purchaseValue += costoVentaDeProducto(tx, pid) * qty
 	}
@@ -618,13 +648,21 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2) COGS voucher: Debit COGS, RevCodde=inventory
-	vnoGoods := nextVoucherNoTx(tx, "JV")
-	_ = s.insertVoucherRowTx(r, tx, VoucherRow{
-		VNo: vnoGoods, Vtype: "JV", ReferenceNo: fmt.Sprintf("%d", invoiceNo),
-		COAID: pre.COGSCode, RevCodde: pre.InventoryCode,
-		Narration: "Sales cost of goods Voucher", Comment: "Sales cost of goods Voucher for customer",
-		Debit: purchaseValue,
-	}, createBy)
+	//
+	// Solo si hay costo. Una factura de puros servicios no debe dejar un asiento
+	// de costo en cero, que ensucia el libro y hace creer que hubo mercancía.
+	if purchaseValue > 0 {
+		vnoGoods := nextVoucherNoTx(tx, "JV")
+		if err := s.insertVoucherRowTx(r, tx, VoucherRow{
+			VNo: vnoGoods, Vtype: "JV", ReferenceNo: fmt.Sprintf("%d", invoiceNo),
+			COAID: pre.COGSCode, RevCodde: pre.InventoryCode,
+			Narration: "Sales cost of goods Voucher", Comment: "Sales cost of goods Voucher for customer",
+			Debit: purchaseValue,
+		}, createBy); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+	}
 
 	// 3) tax voucher
 	if paidTax > 0 {
@@ -692,9 +730,18 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 
 		pidInt, _ := strconv.Atoi(pid)
 
-		// Validar stock si el producto es físico y el modo es invoice
-		if fc.DeductionMode == "invoice" && s.requiresStockMovement(r, pidInt) {
-			stock := stockForProductWithoutMovementTx(tx, pidInt)
+		// Un suministro de consumo interno no se vende: si aparece en una
+		// factura es un error de carga, no una venta. Se detiene aquí en vez de
+		// sacar del almacén de consumo y descuadrar el inventario de oficina.
+		tipoItem := s.tipoItemProducto(r, pidInt)
+		if tipoItem == ItemConsumo {
+			jsonError(w, fmt.Sprintf("El producto %s es de consumo interno y no se vende: cárguelo como gasto o como consumo, no en una factura", pid), 400)
+			return
+		}
+
+		// Validar stock si el producto vive en el almacén y el modo es invoice
+		if fc.DeductionMode == "invoice" && itemMueveStock(tipoItem) {
+			stock := stockPorMovimientos(tx, pidInt, almacenVenta)
 			if stock < qty {
 				jsonError(w, fmt.Sprintf("Stock insuficiente para producto %s: disponible %.2f, solicitado %.2f", pid, stock, qty), 400)
 				return
@@ -714,13 +761,14 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Crear stock_movement si el producto es físico y el modo descuenta al facturar
-		if fc.DeductionMode == "invoice" && s.requiresStockMovement(r, pidInt) {
+		// Crear stock_movement si el producto vive en el almacén y el modo
+		// descuenta al facturar. El almacén es el del documento, no un código fijo.
+		if fc.DeductionMode == "invoice" && itemMueveStock(tipoItem) {
 			_, err := tx.Exec(`
 				INSERT INTO stock_movement (movement_type, product_id, warehouse_id, quantity, unit_cost,
 					reference_type, reference_id, reference_no, date, is_posted, posted_at, created_at)
-				VALUES ('sale', ?, 'WH-MAIN', ?, ?, 'invoice', ?, CONCAT('INV-',?), ?, 1, NOW(), NOW())`,
-				pidInt, qty, rate, invInsertID, invInsertID, date)
+				VALUES ('sale', ?, ?, ?, ?, 'invoice', ?, CONCAT('INV-',?), ?, 1, NOW(), NOW())`,
+				pidInt, almacenVenta, qty, rate, invInsertID, invInsertID, date)
 			if err != nil {
 				jsonError(w, "Error registrando movimiento de stock: "+err.Error(), 500)
 				return
@@ -945,6 +993,12 @@ func (s *Server) invoiceDelete(w http.ResponseWriter, r *http.Request) {
 
 	// Renglones y asientos PENDIENTES del borrador. Nunca los publicados (ya se
 	// comprobó arriba que no hay).
+	// Un borrador no debió mover stock; si alguna vez lo hizo, el movimiento se
+	// retira con la factura para que el inventario no quede inflado.
+	if _, err := tx.Exec(`DELETE FROM stock_movement WHERE reference_type = 'invoice' AND reference_id = ?`, id); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
 	if _, err := tx.Exec(`DELETE FROM invoice_details WHERE invoice_id = ?`, id); err != nil {
 		jsonError(w, err.Error(), 500)
 		return

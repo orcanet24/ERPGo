@@ -120,6 +120,12 @@ func ApplyCOACatalog(db *sql.DB, user string) (SeedCOAResult, error) {
 	if err := SetCOACatalog(db, COACatalogCONASEV, "SENIAT", "", user); err != nil {
 		return res, err
 	}
+	// El plan cambió: los papeles que apuntaban a cuentas de la codificación
+	// anterior ya no sirven. Se revalidan y, cuando el catálogo trae la cuenta
+	// estándar, se vuelven a atar. Lo que no encuentra equivalente queda
+	// pendiente y se le dice al contador, en vez de asentar contra un código
+	// que ahora significa otra cosa.
+	res.CuentasAsignadas, res.CuentasPendientes, _ = vincularCuentasEstandar(db)
 	return res, nil
 }
 

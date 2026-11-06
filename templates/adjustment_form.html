@@ -19,7 +19,12 @@
                 <div class="col-sm-3">
                     <div class="form-group">
                         <label>Almacén / Bodega</label>
-                        <input type="text" class="form-control" name="warehouse_id" placeholder="Principal">
+                        <select class="form-control" name="warehouse_id">
+                            {{range .AlmacenesVenta}}<option value="{{.code}}" {{if .is_default}}selected{{end}}>Venta · {{.code}} — {{.name}}</option>{{end}}
+                            {{range .AlmacenesConsumo}}<option value="{{.code}}" {{if .is_default}}selected{{end}}>Consumo · {{.code}} — {{.name}}</option>{{end}}
+                            {{if not .AlmacenesVenta}}<option value="WH-MAIN">WH-MAIN — Almacén principal</option>{{end}}
+                        </select>
+                        <small class="help-block">Los renglones de consumo interno usan el almacén de consumo si elige uno de venta.</small>
                     </div>
                 </div>
                 <div class="col-sm-3">

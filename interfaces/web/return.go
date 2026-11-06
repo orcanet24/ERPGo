@@ -82,10 +82,11 @@ func (s *Server) returnCustomerSave(w http.ResponseWriter, r *http.Request) {
 
 	var originalMovementID int
 	var originalQty float64
+	var almacenOrigen sql.NullString
 	err = tx.QueryRow(`
-		SELECT id, quantity FROM stock_movement 
+		SELECT id, quantity, IFNULL(warehouse_id,'') FROM stock_movement
 		WHERE product_id = ? AND movement_type IN ('sale', 'delivery') AND reference_id = ?
-		ORDER BY id DESC LIMIT 1`, productID, invoiceID).Scan(&originalMovementID, &originalQty)
+		ORDER BY id DESC LIMIT 1`, productID, invoiceID).Scan(&originalMovementID, &originalQty, &almacenOrigen)
 	if err != nil {
 		jsonError(w, "Movimiento original no encontrado", 404)
 		return
@@ -93,6 +94,12 @@ func (s *Server) returnCustomerSave(w http.ResponseWriter, r *http.Request) {
 	if qty > originalQty {
 		jsonError(w, fmt.Sprintf("Excede cantidad vendida (%.2f > %.2f)", qty, originalQty), 400)
 		return
+	}
+	// La devolución vuelve al MISMO almacén del que salió; si el movimiento es
+	// viejo y no lo trae, al almacén de venta por defecto.
+	almacenDevolucion := almacenOrigen.String
+	if almacenDevolucion == "" {
+		almacenDevolucion = s.almacenPorDefecto(r, AlmacenTipoVenta)
 	}
 
 	_, err = tx.Exec(`
@@ -107,8 +114,8 @@ func (s *Server) returnCustomerSave(w http.ResponseWriter, r *http.Request) {
 	_, err = tx.Exec(`
 		INSERT INTO stock_movement (movement_type, product_id, warehouse_id, quantity, unit_cost,
 			reference_type, reference_id, reference_no, date, is_posted, posted_at, created_at)
-		VALUES ('return_customer', ?, 'WH-MAIN', ?, 0, 'return', ?, CONCAT('RET-C-',?), CURDATE(), 1, NOW(), NOW())`,
-		productID, qty, originalMovementID, originalMovementID)
+		VALUES ('return_customer', ?, ?, ?, 0, 'return', ?, CONCAT('RET-C-',?), CURDATE(), 1, NOW(), NOW())`,
+		productID, almacenDevolucion, qty, originalMovementID, originalMovementID)
 	if err != nil {
 		jsonError(w, "Error registrando movimiento: "+err.Error(), 500)
 		return
@@ -155,10 +162,11 @@ func (s *Server) returnSupplierSave(w http.ResponseWriter, r *http.Request) {
 
 	var originalMovementID int
 	var originalQty float64
+	var almacenOrigen sql.NullString
 	err = tx.QueryRow(`
-		SELECT id, quantity FROM stock_movement 
+		SELECT id, quantity, IFNULL(warehouse_id,'') FROM stock_movement
 		WHERE product_id = ? AND movement_type = 'purchase' AND reference_id = ?
-		ORDER BY id DESC LIMIT 1`, productID, purchaseID).Scan(&originalMovementID, &originalQty)
+		ORDER BY id DESC LIMIT 1`, productID, purchaseID).Scan(&originalMovementID, &originalQty, &almacenOrigen)
 	if err != nil {
 		jsonError(w, "Movimiento de compra no encontrado", 404)
 		return
@@ -166,6 +174,10 @@ func (s *Server) returnSupplierSave(w http.ResponseWriter, r *http.Request) {
 	if qty > originalQty {
 		jsonError(w, fmt.Sprintf("Excede cantidad comprada (%.2f > %.2f)", qty, originalQty), 400)
 		return
+	}
+	almacenDevolucion := almacenOrigen.String
+	if almacenDevolucion == "" {
+		almacenDevolucion = s.almacenPorDefecto(r, AlmacenTipoVenta)
 	}
 
 	_, err = tx.Exec(`
@@ -180,8 +192,8 @@ func (s *Server) returnSupplierSave(w http.ResponseWriter, r *http.Request) {
 	_, err = tx.Exec(`
 		INSERT INTO stock_movement (movement_type, product_id, warehouse_id, quantity, unit_cost,
 			reference_type, reference_id, reference_no, date, is_posted, posted_at, created_at)
-		VALUES ('return_supplier', ?, 'WH-MAIN', ?, 0, 'return', ?, CONCAT('RET-S-',?), CURDATE(), 1, NOW(), NOW())`,
-		productID, -qty, originalMovementID, originalMovementID)
+		VALUES ('return_supplier', ?, ?, ?, 0, 'return', ?, CONCAT('RET-S-',?), CURDATE(), 1, NOW(), NOW())`,
+		productID, almacenDevolucion, qty, originalMovementID, originalMovementID)
 	if err != nil {
 		jsonError(w, "Error registrando movimiento: "+err.Error(), 500)
 		return

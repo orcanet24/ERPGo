@@ -105,6 +105,12 @@ func (s *Server) purchaseForm(w http.ResponseWriter, r *http.Request) {
 		"DocumentKind": CompraFactura,
 		"Methods":      methods,
 	}
+	// Almacenes (venta y consumo) y cuentas de gasto: el renglón se carga con
+	// lo que existe de verdad en esta empresa, no con códigos escritos a mano.
+	for k, v := range s.almacenesParaFormulario(r) {
+		data[k] = v
+	}
+	data["CuentasGasto"] = s.cuentasDeGasto(r)
 	// ¿Se viene de la bandeja con un documento? La propuesta se carga AQUÍ, en
 	// el mismo formulario de siempre: nada de atajos que salten el candado ni el
 	// renglón a renglón. Si el documento no existe o ya se descartó, el
@@ -134,20 +140,24 @@ func (s *Server) purchaseEdit(w http.ResponseWriter, r *http.Request) {
 		ProductID, ProductName, Model string
 		Qty, Rate, Total              float64
 		Batch, Expiry                 string
+		Tipo, Concepto, Almacen       string
 	}
 	details := []drow{}
 	rows, _ := s.dbFor(r).Query(`
 		SELECT d.product_id, IFNULL(p.product_name,''), IFNULL(p.product_model,''), d.quantity, d.rate,
-			d.total_amount, IFNULL(d.batch_id,''), IFNULL(CAST(d.expiry_date AS CHAR),'')
+			d.total_amount, IFNULL(d.batch_id,''), IFNULL(CAST(d.expiry_date AS CHAR),''),
+			IFNULL(d.item_type,'venta'), IFNULL(d.concept,''), IFNULL(d.warehouse_id,'')
 		FROM product_purchase_details d
 		LEFT JOIN product_information p ON p.product_id = d.product_id
 		WHERE d.purchase_id = ?`, id)
 	if rows != nil {
 		for rows.Next() {
 			var d drow
-			var batch, exp sql.NullString
-			_ = rows.Scan(&d.ProductID, &d.ProductName, &d.Model, &d.Qty, &d.Rate, &d.Total, &batch, &exp)
+			var batch, exp, tipo, concepto, almacen sql.NullString
+			_ = rows.Scan(&d.ProductID, &d.ProductName, &d.Model, &d.Qty, &d.Rate, &d.Total, &batch, &exp,
+				&tipo, &concepto, &almacen)
 			d.Batch, d.Expiry = batch.String, exp.String
+			d.Tipo, d.Concepto, d.Almacen = normalizarTipoItem(tipo.String), concepto.String, almacen.String
 			details = append(details, d)
 		}
 		rows.Close()
@@ -168,7 +178,7 @@ func (s *Server) purchaseEdit(w http.ResponseWriter, r *http.Request) {
 	var controlNo sql.NullString
 	_ = s.dbFor(r).QueryRow(`SELECT IFNULL(control_no,'') FROM product_purchase WHERE purchase_id = ?`, pid).Scan(&controlNo)
 
-	s.render(w, r, "purchase_form.html", map[string]interface{}{
+	data := map[string]interface{}{
 		"Title":        "Editar Compra",
 		"EditID":       pid,
 		"Chalan":       chalan.String,
@@ -180,7 +190,12 @@ func (s *Server) purchaseEdit(w http.ResponseWriter, r *http.Request) {
 		"Grand":        total,
 		"Details":      details,
 		"Methods":      methods,
-	})
+	}
+	for k, v := range s.almacenesParaFormulario(r) {
+		data[k] = v
+	}
+	data["CuentasGasto"] = s.cuentasDeGasto(r)
+	s.render(w, r, "purchase_form.html", data)
 }
 
 // purchaseSave replicates insert_purchase(): header + details + vouchers +
@@ -222,6 +237,32 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 	grandTotal := parseMoney(r.FormValue("grand_total_price"))
 	paidAmount := parseMoney(r.FormValue("paid_amount"))
 	dueAmount := parseMoney(r.FormValue("due_amount"))
+
+	// -----------------------------------------------------------------
+	// CADA RENGLÓN SE INTERPRETA ANTES DE ESCRIBIR NADA.
+	// -----------------------------------------------------------------
+	//
+	// Tipo de ítem (venta / consumo interno / servicio), almacén y cuenta
+	// contable se resuelven aquí. Si un renglón no cuadra —un servicio sin
+	// concepto, un producto de consumo enviado al almacén de venta, una cuenta
+	// de ingreso para un gasto— la compra NO se guarda y el motivo se explica.
+	// Antes nada de esto se preguntaba: se metía todo al inventario y se
+	// asentaba contra una sola cuenta.
+	pre, err := s.predefineAccount(r)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	renglones, err := s.renglonesDeCompra(r, productIDs, quantities, rates, totals,
+		discounts, discPercents, vatPercents, vatValues, batches, expiries)
+	if err != nil {
+		jsonError(w, err.Error(), 400)
+		return
+	}
+	if err := s.resolverDestinosCompra(r, pre, renglones); err != nil {
+		jsonError(w, err.Error(), 400)
+		return
+	}
 
 	// ---------------------------------------------------------------
 	// CLASIFICACIÓN DEL DOCUMENTO Y CANDADO CONTRA DUPLICADOS.
@@ -350,15 +391,8 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// accounting vouchers (replicates insert_purchase_debitvoucher logic)
-	pre, err := s.predefineAccount(r)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
 	narration := "Purchase Voucher"
 	comment := "Purchase Voucher for supplier"
-	purchaseCOA := pre.PurchaseCode
 
 	// LA CUENTA DEL PROVEEDOR, NO LA GENERAL.
 	//
@@ -377,27 +411,70 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// -----------------------------------------------------------------
+	// ASIENTOS: UNA CUENTA POR DESTINO, NO UNA SOLA PARA TODO.
+	// -----------------------------------------------------------------
+	//
+	// El documento se parte en dos: la base (mercancía, suministros o gasto) y
+	// el IVA. La base se reparte entre los renglones según su importe y cada
+	// renglón va a SU cuenta:
+	//
+	//   mercancía  -> inventario de mercancía      (activo)
+	//   consumo    -> inventario de suministros    (activo)
+	//   servicio   -> cuenta de gasto del renglón  (resultado)
+	//   IVA        -> IVA crédito fiscal           (activo)
+	//
+	// El crédito sigue siendo el mismo de antes: caja/banco si se pagó, o el
+	// proveedor si quedó a crédito. Cada pata del crédito se reparte entre los
+	// mismos destinos para que la partida doble cierre al centavo.
+	ivaTotal := parseMoney(r.FormValue("total_vat_amnt"))
+	// El IVA va a su propia cuenta y esa cuenta la decide la empresa. Si no está
+	// configurada no se asienta «donde caiga»: se detiene y se dice dónde
+	// arreglarlo.
+	if ivaTotal > 0 && pre.CuentaIvaCompras() == 0 {
+		jsonError(w, "La compra tiene IVA y no hay cuenta de IVA crédito fiscal asignada. Asígnela en Configuración → Cuentas por defecto (papel «IVA crédito fiscal (compras)»).", 400)
+		return
+	}
+	baseTotal := round2(grandTotal - ivaTotal)
+	if baseTotal < 0 {
+		baseTotal = 0
+	}
+
+	pesos := make([]float64, len(renglones))
+	for i, l := range renglones {
+		pesos[i] = l.Total
+	}
+	importes := repartirImporte(baseTotal, pesos)
+
+	type destinoAsiento struct {
+		Cuenta  int64
+		Importe float64
+	}
+	destinosAsiento := []destinoAsiento{}
+	for i := range renglones {
+		if importes[i] > 0 {
+			destinosAsiento = append(destinosAsiento, destinoAsiento{Cuenta: renglones[i].Destino.Cuenta, Importe: importes[i]})
+		}
+	}
+	if ivaTotal > 0 {
+		destinosAsiento = append(destinosAsiento, destinoAsiento{Cuenta: pre.CuentaIvaCompras(), Importe: ivaTotal})
+	}
+
+	// Patas del crédito: de dónde salió el dinero o a quién se le debe.
+	type pataCredito struct {
+		Cuenta  int64
+		Importe float64
+		Vtype   string
+		SubType int
+		SubCode sql.NullInt64
+	}
+	patas := []pataCredito{}
 	if len(payAmounts) > 0 && len(payTypes) > 0 {
 		if payTypes[0] == "0" {
-			// COMPRA A CRÉDITO: DÉBITO a la cuenta de compras, CRÉDITO a la del
-			// proveedor. El signo estaba invertido (la fila se armaba con `Credit:`
-			// sobre la cuenta de compras y la doble partida de approveVoucher la
-			// convertía en un DÉBITO al proveedor), así que la deuda del proveedor
-			// nacía RESTANDO en su libro. La venta a crédito lo hace bien y sirve de
-			// espejo: «Debit: pre.CustomerCode» (invoice.go) — la deuda del tercero
-			// va en el lado que le corresponde.
-			vno := nextVoucherNoTx(tx, "JV")
-			_ = s.insertVoucherRowTx(r, tx, VoucherRow{
-				VNo: vno, Vtype: "JV", ReferenceNo: fmt.Sprintf("%d", purchaseID),
-				COAID: purchaseCOA, RevCodde: headSupplier,
-				Narration: narration, Comment: comment,
-				Debit: grandTotal, SubType: 4, SubCode: subSupplier,
-			}, createBy)
+			// Compra a crédito: toda la deuda al proveedor.
+			patas = append(patas, pataCredito{Cuenta: headSupplier, Importe: grandTotal, Vtype: "JV", SubType: 4, SubCode: subSupplier})
 		} else {
-			// El select del formulario manda el ID del método de pago
-			// (payment_method.id), no una cuenta contable: con el ID crudo el
-			// asiento se iba a acc_coa 1, 2, 3… en vez de a la cuenta del
-			// método (efectivo=101, banco=10205…). Se resuelve coa_id aquí.
+			// Multipago: cada método a su cuenta.
 			for i, pt := range payTypes {
 				mid, _ := strconv.ParseInt(pt, 10, 64)
 				var coaSQL sql.NullInt64
@@ -406,122 +483,110 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 				if coaid == 0 {
 					coaid = pre.CashCode
 				}
-				amount := parseMoney(payAmounts[i])
-				vno := nextVoucherNoTx(tx, "DV")
-				_ = s.insertVoucherRowTx(r, tx, VoucherRow{
-					VNo: vno, Vtype: "DV", ReferenceNo: fmt.Sprintf("%d", purchaseID),
-					COAID: purchaseCOA, RevCodde: coaid,
-					Narration: narration, Comment: comment,
-					Debit: amount,
-				}, createBy)
+				patas = append(patas, pataCredito{Cuenta: coaid, Importe: parseMoney(payAmounts[i]), Vtype: "DV"})
 			}
 			if dueAmount > 0 {
-				// Lo que queda a crédito, igual que arriba: débito a compras y
-				// crédito al proveedor (antes iba al revés y contra la cuenta general).
-				vno := nextVoucherNoTx(tx, "JV")
-				_ = s.insertVoucherRowTx(r, tx, VoucherRow{
-					VNo: vno, Vtype: "JV", ReferenceNo: fmt.Sprintf("%d", purchaseID),
-					COAID: purchaseCOA, RevCodde: headSupplier,
-					Narration: narration, Comment: comment,
-					Debit: dueAmount, SubType: 4, SubCode: subSupplier,
-				}, createBy)
+				patas = append(patas, pataCredito{Cuenta: headSupplier, Importe: dueAmount, Vtype: "JV", SubType: 4, SubCode: subSupplier})
 			}
 		}
 	} else if grandTotal > 0 {
-		// POR QUÉ ESTA RAMA EXISTE: el MISMO bug que en la venta, y por el
-		// mismo motivo. La sección de pagos del formulario de compra solo se
-		// envía en multi-pago, así que una compra corriente —pagada o a crédito—
-		// no llegaba a `acc_vaucher` en absoluto. La mercadería entraba al
-		// almacén y el costo no aparecía en ninguna parte: el inventario era un
-		// número que solo existía en los lotes.
-		// Los dos renglones iban con `Credit:` sobre la cuenta de compras, que en
-		// la doble partida deja DÉBITO en la cuenta contraria: la compra se
-		// acreditaba (bajando el costo) y salían débitos en caja y en el proveedor.
-		// Aquí se asienta como en la rama de multi-pago, que ya lo hacía bien: la
-		// cuenta de compras al DÉBITO y el dinero que sale al crédito.
+		// Compra corriente que no manda filas de pago: lo pagado sale de caja y
+		// lo pendiente queda con el proveedor.
 		if sumPay > 0 {
-			vno := nextVoucherNoTx(tx, "DV")
-			_ = s.insertVoucherRowTx(r, tx, VoucherRow{
-				VNo: vno, Vtype: "DV", ReferenceNo: fmt.Sprintf("%d", purchaseID),
-				COAID: purchaseCOA, RevCodde: pre.CashCode,
-				Narration: narration, Comment: comment,
-				Debit: sumPay,
-			}, createBy)
+			patas = append(patas, pataCredito{Cuenta: pre.CashCode, Importe: sumPay, Vtype: "DV"})
 		}
 		if dueAmount > 0 {
-			vno := nextVoucherNoTx(tx, "JV")
-			_ = s.insertVoucherRowTx(r, tx, VoucherRow{
-				VNo: vno, Vtype: "JV", ReferenceNo: fmt.Sprintf("%d", purchaseID),
-				COAID: purchaseCOA, RevCodde: headSupplier,
+			patas = append(patas, pataCredito{Cuenta: headSupplier, Importe: dueAmount, Vtype: "JV", SubType: 4, SubCode: subSupplier})
+		}
+	}
+
+	pesosDestino := make([]float64, len(destinosAsiento))
+	for i, d := range destinosAsiento {
+		pesosDestino[i] = d.Importe
+	}
+	for _, pata := range patas {
+		if pata.Importe <= 0 || len(destinosAsiento) == 0 {
+			continue
+		}
+		partes := repartirImporte(pata.Importe, pesosDestino)
+		// UNA sola VNo por pata: todas sus cuentas de débito se aprueban juntas,
+		// como un asiento con varios renglones y no como asientos sueltos.
+		vno := nextVoucherNoTx(tx, pata.Vtype)
+		for i, d := range destinosAsiento {
+			if partes[i] == 0 {
+				continue
+			}
+			if err := s.insertVoucherRowTx(r, tx, VoucherRow{
+				VNo: vno, Vtype: pata.Vtype, ReferenceNo: fmt.Sprintf("%d", purchaseID),
+				COAID: d.Cuenta, RevCodde: pata.Cuenta,
 				Narration: narration, Comment: comment,
-				Debit: dueAmount, SubType: 4, SubCode: subSupplier,
-			}, createBy)
+				Debit: partes[i], SubType: pata.SubType, SubCode: pata.SubCode,
+			}, createBy); err != nil {
+				jsonError(w, err.Error(), 500)
+				return
+			}
 		}
 	}
 
 	// details + supplier_product price update
-	for i, pid := range productIDs {
-		qty := float64(1)
-		rate, total := 0.0, 0.0
-		disc, discP, vatP, vatV := 0.0, 0.0, 0.0, 0.0
-		batch, expiry := "", ""
-		if i < len(quantities) {
-			qty = parseMoney(quantities[i])
-		}
-		if i < len(rates) {
-			rate = parseMoney(rates[i])
-		}
-		if i < len(totals) {
-			total = parseMoney(totals[i])
-		}
-		if i < len(discounts) {
-			disc = parseMoney(discounts[i])
-		}
-		if i < len(discPercents) {
-			discP = parseMoney(discPercents[i])
-		}
-		if i < len(vatPercents) {
-			vatP = parseMoney(vatPercents[i])
-		}
-		if i < len(vatValues) {
-			vatV = parseMoney(vatValues[i])
-		}
-		if i < len(batches) {
-			batch = batches[i]
-		}
-		if i < len(expiries) {
-			expiry = expiries[i]
-		}
+	//
+	// El detalle guarda AHORA el destino del renglón: su tipo, su almacén y —si
+	// es servicio— la cuenta de gasto. Sin eso, el kárdex, los reportes y una
+	// revisión posterior no pueden saber qué era cada renglón; con eso, la
+	// compra se puede auditar renglón por renglón.
+	purchaseDate := orDefault(r.FormValue("purchase_date"), today())
+	for _, l := range renglones {
 		expiryVal := interface{}(nil)
-		if expiry != "" {
-			expiryVal = expiry
+		if l.Expiry != "" {
+			expiryVal = l.Expiry
 		}
-
+		var coaVal any
+		if l.Tipo == ItemServicio && l.Destino.Cuenta > 0 {
+			coaVal = l.Destino.Cuenta
+		}
+		// La columna es NOT NULL con '' por defecto: un servicio no tiene
+		// almacén y se guarda vacío, no NULL (MySQL en modo estricto rechaza el
+		// NULL y la compra del servicio no se podría guardar).
+		almacenVal := any("")
+		if l.Destino.MueveStock {
+			almacenVal = l.Almacen
+		}
 		if _, err := tx.Exec(`
 			INSERT INTO product_purchase_details (purchase_detail_id, purchase_id, product_id, quantity, rate,
-				batch_id, expiry_date, total_amount, discount, discount_amnt, vat_amnt_per, vat_amnt, status)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)`,
-			generator(15), purchaseID, pid, qty, rate, batch, expiryVal, total, discP, disc, vatP, vatV); err != nil {
-			jsonError(w, err.Error(), 500)
-			return
-		}
-		// Actualizar stock_movement (rastreo)
-		pidInt, _ := strconv.Atoi(pid)
-		purchaseDate := orDefault(r.FormValue("purchase_date"), today())
-		if err := insertStockMovement(tx, "purchase", pidInt, "WH-MAIN", qty, rate, "purchase", int(purchaseID), fmt.Sprintf("PUR-%d", purchaseID), purchaseDate); err != nil {
+				batch_id, expiry_date, total_amount, discount, discount_amnt, vat_amnt_per, vat_amnt, status,
+				item_type, coa_id, warehouse_id, concept)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)`,
+			generator(15), purchaseID, l.ProductID, l.Qty, l.Rate, l.Batch, expiryVal, l.Total,
+			l.DiscP, l.Disc, l.VatP, l.VatV, l.Tipo, coaVal, almacenVal, l.Concepto); err != nil {
 			jsonError(w, err.Error(), 500)
 			return
 		}
 
-		// update supplier price (like PHP)
+		// Stock: SOLO si el renglón vive en un almacén. Un servicio no entra, no
+		// sale y no se cuenta; por eso aquí no hay movimiento que crear.
+		if l.Destino.MueveStock {
+			pidInt, _ := strconv.Atoi(l.ProductID)
+			if pidInt > 0 {
+				if err := insertStockMovement(tx, "purchase", pidInt, l.Almacen, l.Qty, l.Rate,
+					"purchase", int(purchaseID), fmt.Sprintf("PUR-%d", purchaseID), purchaseDate); err != nil {
+					jsonError(w, err.Error(), 500)
+					return
+				}
+			}
+		}
+
+		// Precio del proveedor: solo para mercancía y suministros. Un servicio no
+		// tiene precio de catálogo que actualizar.
+		if l.ProductID == "" || l.Tipo == ItemServicio {
+			continue
+		}
 		_, _ = tx.Exec(`UPDATE supplier_product SET supplier_price=? WHERE product_id=? AND supplier_id=?`,
-			fmt.Sprintf("%.2f", rate), pid, supplierID)
-		// ensure supplier_product relation exists
+			fmt.Sprintf("%.2f", l.Rate), l.ProductID, supplierID)
 		var relID int
-		_ = tx.QueryRow(`SELECT supplier_pr_id FROM supplier_product WHERE product_id=? AND supplier_id=?`, pid, supplierID).Scan(&relID)
+		_ = tx.QueryRow(`SELECT supplier_pr_id FROM supplier_product WHERE product_id=? AND supplier_id=?`, l.ProductID, supplierID).Scan(&relID)
 		if relID == 0 {
 			_, _ = tx.Exec(`INSERT INTO supplier_product (product_id, products_model, supplier_id, supplier_price)
-				VALUES (?,?,?,?)`, pid, "", supplierID, fmt.Sprintf("%.2f", rate))
+				VALUES (?,?,?,?)`, l.ProductID, "", supplierID, fmt.Sprintf("%.2f", l.Rate))
 		}
 	}
 
@@ -529,7 +594,6 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-
 
 	// El documento de la bandeja queda cargado: la compra ya existe, así que
 	// solo se registra el enlace y su rastro de auditoría. Si esto falla, la
@@ -580,9 +644,13 @@ func (s *Server) purchaseDelete(w http.ResponseWriter, r *http.Request) {
 
 	// remove vouchers + transactions tied to this purchase. Si cualquiera falla,
 	// la compra queda sin borrar: la transacción se revierte al final del handler.
+	// El stock ahora se lee de stock_movement: si al borrar la compra se dejan
+	// sus movimientos, la mercancía sigue "existiendo" en el almacén aunque la
+	// compra ya no esté. Se borran en la misma transacción.
 	for _, q := range []string{
 		`DELETE FROM acc_transaction WHERE referenceNo = ?`,
 		`DELETE FROM acc_vaucher WHERE referenceNo = ?`,
+		`DELETE FROM stock_movement WHERE reference_type = 'purchase' AND reference_id = ?`,
 		`DELETE FROM product_purchase_details WHERE purchase_id = ?`,
 	} {
 		if _, err := tx.Exec(q, id); err != nil {
@@ -626,18 +694,29 @@ func (s *Server) purchaseDetails(w http.ResponseWriter, r *http.Request) {
 	type drow struct {
 		ProductID, ProductName, Model, Unit string
 		Qty, Rate, Total                    float64
+		Tipo, EtiquetaTipo, Concepto        string
+		Almacen, Cuenta                     string
 	}
 	details := []drow{}
 	rows, _ := s.dbFor(r).Query(`
 		SELECT d.product_id, IFNULL(p.product_name,''), IFNULL(p.product_model,''), IFNULL(p.unit,''),
-			d.quantity, d.rate, d.total_amount
+			d.quantity, d.rate, d.total_amount,
+			IFNULL(d.item_type,'venta'), IFNULL(d.concept,''), IFNULL(d.warehouse_id,''), IFNULL(d.coa_id,0)
 		FROM product_purchase_details d
 		LEFT JOIN product_information p ON p.product_id = d.product_id
 		WHERE d.purchase_id = ?`, id)
 	if rows != nil {
 		for rows.Next() {
 			var d drow
-			_ = rows.Scan(&d.ProductID, &d.ProductName, &d.Model, &d.Unit, &d.Qty, &d.Rate, &d.Total)
+			var tipo, concepto, almacen sql.NullString
+			var coa int64
+			_ = rows.Scan(&d.ProductID, &d.ProductName, &d.Model, &d.Unit, &d.Qty, &d.Rate, &d.Total,
+				&tipo, &concepto, &almacen, &coa)
+			d.Tipo = normalizarTipoItem(tipo.String)
+			d.EtiquetaTipo, d.Concepto, d.Almacen = etiquetaTipoItem(d.Tipo), concepto.String, almacen.String
+			if coa > 0 {
+				d.Cuenta = s.nombreCuenta(r, coa)
+			}
 			details = append(details, d)
 		}
 		rows.Close()

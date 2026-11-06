@@ -13,7 +13,7 @@ func insertStockMovement(tx *sql.Tx, movementType string, productID int, warehou
 	_, err := tx.Exec(`
 		INSERT INTO stock_movement (movement_type, product_id, warehouse_id, quantity, unit_cost,
 			reference_type, reference_id, reference_no, date, is_posted, posted_at, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		movementType, productID, warehouseID, quantity, unitCost,
 		referenceType, referenceID, referenceNo, date)
 	return err

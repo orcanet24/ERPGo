@@ -21,16 +21,17 @@ import (
 func (s *Server) coaCatalogPage(w http.ResponseWriter, r *http.Request) {
 	st := InspectCOACatalog(s.dbFor(r))
 	s.render(w, r, "coa_catalog.html", map[string]interface{}{
-		"Title":          "Plan de Cuentas",
-		"Catalog":        st.Catalog,
-		"Source":         st.Source,
-		"AppliedAt":      st.AppliedAt,
-		"Notes":          st.Notes,
-		"AccountCount":   st.AccountCount,
-		"CollisionCount": st.CollisionCount,
-		"Collisions":     st.Collisions,
-		"OrderMissing":   st.OrderAccountsMissing,
-		"IsCONASEV":      st.Catalog == COACatalogCONASEV,
+		"Title":             "Plan de Cuentas",
+		"Catalog":           st.Catalog,
+		"CuentasPendientes": s.papelesPendientesDeCuenta(r),
+		"Source":            st.Source,
+		"AppliedAt":         st.AppliedAt,
+		"Notes":             st.Notes,
+		"AccountCount":      st.AccountCount,
+		"CollisionCount":    st.CollisionCount,
+		"Collisions":        st.Collisions,
+		"OrderMissing":      st.OrderAccountsMissing,
+		"IsCONASEV":         st.Catalog == COACatalogCONASEV,
 	})
 }
 
@@ -60,12 +61,14 @@ func (s *Server) coaCatalogApply(w http.ResponseWriter, r *http.Request) {
 
 	st := InspectCOACatalog(s.dbFor(r))
 	writeJSON(w, map[string]interface{}{
-		"status":   1,
-		"msg":      "Catálogo CONASEV cargado",
-		"inserted": res.Inserted,
-		"skipped":  res.Skipped,
-		"accounts": st.AccountCount,
-		"catalog":  st.Catalog,
+		"status":             1,
+		"msg":                "Catálogo CONASEV cargado",
+		"inserted":           res.Inserted,
+		"skipped":            res.Skipped,
+		"accounts":           st.AccountCount,
+		"catalog":            st.Catalog,
+		"cuentas_asignadas":  res.CuentasAsignadas,
+		"cuentas_pendientes": res.CuentasPendientes,
 	})
 }
 

@@ -1,0 +1,74 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Almacenes
+                <span class="btn-group pull-right">
+                    <a href="/warehouse/new" class="btn btn-primary btn-sm"><i class="fa fa-plus"></i> Nuevo almacén</a>
+                </span>
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <p class="help-block">
+            Cada almacén tiene un <strong>tipo</strong>: los de <strong>venta</strong> guardan mercancía para vender
+            (puede haber uno por local) y los de <strong>consumo</strong> guardan suministros de uso propio.
+            Compras, facturas y ajustes eligen el almacén; un renglón de consumo no puede entrar a uno de venta.
+        </p>
+        <table class="table table-striped table-bordered" id="warehouseTable" width="100%">
+            <thead>
+                <tr>
+                    <th>Código</th>
+                    <th>Nombre</th>
+                    <th>Tipo</th>
+                    <th>Dirección</th>
+                    <th class="text-center">Por defecto</th>
+                    <th class="text-center">Estado</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#warehouseTable').DataTable({
+        processing: true,
+        pageLength: 25,
+        order: [[2, 'asc'], [0, 'asc']],
+        ajax: { url: '/warehouse/data', type: 'GET' },
+        columns: [
+            { data: 'code' },
+            { data: 'name' },
+            { data: 'kind_label' },
+            { data: 'address' },
+            { data: 'is_default', className: 'text-center', render: function (d) { return d ? '<span class="label label-success">Sí</span>' : ''; } },
+            { data: 'is_active', className: 'text-center', render: function (d) { return d ? '<span class="label label-success">Activo</span>' : '<span class="label label-default">Inactivo</span>'; } },
+            { data: null, orderable: false, searchable: false, render: function (d) {
+                return '<a class="btn btn-info btn-xs" href="/warehouse/edit/' + d.id + '"><i class="fa fa-pencil"></i></a> ' +
+                    '<button class="btn btn-danger btn-xs do-del" data-id="' + d.id + '"><i class="fa fa-trash"></i></button>';
+            } }
+        ]
+    });
+
+    $('#warehouseTable').on('click', '.do-del', function () {
+        var id = $(this).data('id');
+        swal({
+            title: '¿Eliminar almacén?',
+            text: 'Si tiene movimientos no se elimina: desactívelo para conservar el histórico.',
+            type: 'warning',
+            showCancelButton: true,
+            confirmButtonText: 'Eliminar'
+        }, function () {
+            $.post('/warehouse/delete/' + id, function (r) {
+                if (r.status == 1) { toastr.success(r.msg); $('#warehouseTable').DataTable().ajax.reload(); }
+                else { toastr.error(r.error || 'Error'); }
+            }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+        });
+    });
+});
+</script>
+{{end}}

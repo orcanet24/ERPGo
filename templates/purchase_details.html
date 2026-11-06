@@ -33,7 +33,9 @@
                 <thead>
                     <tr>
                         <th style="width:50px">#</th>
-                        <th>Producto</th>
+                        <th>Producto / concepto</th>
+                        <th>Tipo</th>
+                        <th>Almacén / cuenta</th>
                         <th>Modelo</th>
                         <th>Unidad</th>
                         <th class="text-right">Cantidad</th>
@@ -45,7 +47,9 @@
                 {{range $i, $d := .Details}}
                     <tr>
                         <td>{{add $i 1}}</td>
-                        <td><a href="/product/details/{{$d.ProductID}}">{{$d.ProductName}}</a></td>
+                        <td>{{if $d.ProductID}}<a href="/product/details/{{$d.ProductID}}">{{$d.ProductName}}</a>{{else}}{{$d.Concepto}}{{end}}</td>
+                        <td>{{$d.EtiquetaTipo}}</td>
+                        <td>{{if $d.Almacen}}{{$d.Almacen}}{{else}}{{$d.Cuenta}}{{end}}</td>
                         <td>{{$d.Model}}</td>
                         <td>{{$d.Unit}}</td>
                         <td class="text-right">{{$d.Qty}}</td>
@@ -53,7 +57,7 @@
                         <td class="text-right">{{money $d.Total}}</td>
                     </tr>
                 {{else}}
-                    <tr><td colspan="7" class="text-center">Sin productos</td></tr>
+                    <tr><td colspan="10" class="text-center">Sin productos</td></tr>
                 {{end}}
                 </tbody>
             </table>

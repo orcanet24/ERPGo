@@ -321,6 +321,47 @@ type PredefineAccount struct {
 	InventoryCode    int64
 	SalaryCode       int64
 	ProvStateTaxCode int64
+
+	// Cuentas de la separación entre mercancía, consumo interno y servicios.
+	// Se leen aparte y con tolerancia: una base anterior a la migración no las
+	// tiene y el sistema debe seguir arrancando con los respaldos de abajo.
+	SuppliesInventoryCode int64
+	SuppliesExpenseCode   int64
+	ServiceExpenseCode    int64
+	PurchaseVatCode       int64
+}
+
+// CuentaInventarioMercancia: el inventario de lo que se vende.
+func (p *PredefineAccount) CuentaInventarioMercancia() int64 { return p.InventoryCode }
+
+// CuentaInventarioSuministros: el inventario de lo que se consume dentro de la
+// empresa (papelería, limpieza). NO cae al inventario de mercancía: mezclar los
+// dos es el defecto que esta separación corrige, y un respaldo silencioso lo
+// reintroduciría sin que nadie lo note. Si falta, la operación se detiene con un
+// mensaje que manda a Configuración → Cuentas por defecto.
+func (p *PredefineAccount) CuentaInventarioSuministros() int64 {
+	return p.SuppliesInventoryCode
+}
+
+// CuentaGastoSuministros: gasto por consumo de suministros (no es costo de
+// ventas: la papelería no se vende). Tampoco cae al costo de ventas.
+func (p *PredefineAccount) CuentaGastoSuministros() int64 {
+	return p.SuppliesExpenseCode
+}
+
+// CuentaGastoServicio: gasto por servicios recibidos (luz, agua, internet).
+// NO cae a ServiceCode: esa cuenta es de INGRESO y fue justo el defecto que
+// hacía que un gasto se asentara restando ingresos.
+func (p *PredefineAccount) CuentaGastoServicio() int64 { return p.ServiceExpenseCode }
+
+// CuentaIvaCompras: IVA crédito fiscal de las compras. Antes el IVA se sumaba
+// al inventario (el asiento debitaba el total del documento contra la cuenta de
+// inventario); con la cuenta separada el IVA queda donde corresponde.
+//
+// No cae a la cuenta de IVA por pagar: un crédito fiscal no es un pasivo, y
+// asentarlo ahí descuadra la declaración.
+func (p *PredefineAccount) CuentaIvaCompras() int64 {
+	return p.PurchaseVatCode
 }
 
 func (s *Server) predefineAccount(r *http.Request) (*PredefineAccount, error) {
@@ -351,6 +392,14 @@ func predefineAccountTx(q consultadorUnaFila) (*PredefineAccount, error) {
 	if err != nil {
 		return nil, fmt.Errorf("acc_predefine_account missing: %w", err)
 	}
+	// Cuentas de la separación mercancía / consumo / servicios. La consulta va
+	// aparte a propósito: si la base todavía no tiene estas columnas (proceso de
+	// arranque, restauración a medio migrar), el error se ignora y los métodos de
+	// respaldo deciden. Un fallo aquí no puede tumbar el arranque entero.
+	_ = q.QueryRow(`SELECT IFNULL(supplies_inventory_code,0), IFNULL(supplies_expense_code,0),
+			IFNULL(service_expense_code,0), IFNULL(purchase_vat_code,0)
+		FROM acc_predefine_account ORDER BY id LIMIT 1`).
+		Scan(&p.SuppliesInventoryCode, &p.SuppliesExpenseCode, &p.ServiceExpenseCode, &p.PurchaseVatCode)
 	return &p, nil
 }
 

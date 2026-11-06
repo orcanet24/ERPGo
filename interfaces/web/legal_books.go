@@ -305,80 +305,87 @@ func (s *Server) inventoryControl(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) inventoryControlData(w http.ResponseWriter, r *http.Request) {
+// inventarioControlRow es una fila del control de inventario.
+type inventarioControlRow struct {
+	PID, Name, Model, Unit, Price, Tipo string
+	Entries, Exits, Adjustments         float64
+	Stock, AvgCost                      float64
+}
+
+// inventoryControlRows lee el control de inventario.
+//
+// QUÉ CAMBIÓ: antes recorría TODOS los productos —servicios incluidos— y sacaba
+// las entradas de `product_purchase_details` y las salidas de `invoice_details`.
+// Un servicio aparecía con "entradas" y "stock", y el consumo interno no bajaba
+// nunca. Ahora excluye servicios y lee los movimientos reales, que es lo que
+// hace que el reporte cuadre con el kárdex y con la contabilidad.
+func (s *Server) inventoryControlRows(r *http.Request) []inventarioControlRow {
 	rows, err := s.dbFor(r).Query(`
-		SELECT a.product_id, a.product_name, IFNULL(a.product_model,'') AS model,
-			IFNULL(a.unit,'') AS unit, a.price,
-			IFNULL((SELECT SUM(total_amount) FROM product_purchase_details WHERE product_id = a.product_id),0) AS total_cost
+		SELECT a.product_id, a.product_name, IFNULL(a.product_model,''), IFNULL(a.unit,''), a.price,
+			IFNULL(a.item_type,'venta'),
+			IFNULL((SELECT SUM(d.total_amount) FROM product_purchase_details d WHERE d.product_id = a.product_id),0) AS total_cost,
+			IFNULL((SELECT SUM(d.quantity) FROM product_purchase_details d WHERE d.product_id = a.product_id),0) AS purchased_qty
 		FROM product_information a
-		WHERE a.status = 1
-		ORDER BY a.product_name`)
+		WHERE a.status = 1 AND IFNULL(a.item_type,'venta') <> 'servicio'
+		ORDER BY IFNULL(a.item_type,'venta'), a.product_name`)
 	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
+		return nil
 	}
 	defer rows.Close()
 
-	list := []map[string]interface{}{}
+	out := []inventarioControlRow{}
 	for rows.Next() {
-		var pid, name, model, unit, price sql.NullString
-		var totalCost float64
-		_ = rows.Scan(&pid, &name, &model, &unit, &price, &totalCost)
-		pidInt, _ := strconv.Atoi(pid.String)
-		stock := s.stockForProduct(r, pidInt)
-		avgCost := 0.0
-		if stock > 0 {
-			avgCost = totalCost / stock
+		var pid, name, model, unit, price, tipo sql.NullString
+		var totalCost, purchasedQty float64
+		if err := rows.Scan(&pid, &name, &model, &unit, &price, &tipo, &totalCost, &purchasedQty); err != nil {
+			continue
 		}
+		pidInt, _ := strconv.Atoi(pid.String)
 		var entries, exits, adjustments float64
-		_ = s.dbFor(r).QueryRow(`SELECT IFNULL(SUM(quantity),0) FROM product_purchase_details WHERE product_id = ?`, pid.String).Scan(&entries)
-		_ = s.dbFor(r).QueryRow(`SELECT IFNULL(SUM(quantity),0) FROM invoice_details WHERE product_id = ?`, pid.String).Scan(&exits)
-		_ = s.dbFor(r).QueryRow(`SELECT IFNULL(SUM(CASE WHEN type='add' THEN quantity ELSE -quantity END),0) FROM store_adjustment_details WHERE product_id = ?`, pid.String).Scan(&adjustments)
+		_ = s.dbFor(r).QueryRow(`
+			SELECT IFNULL(SUM(CASE WHEN movement_type IN ('purchase','return_customer','transfer_in') THEN quantity ELSE 0 END),0),
+				IFNULL(SUM(CASE WHEN movement_type IN ('sale','delivery','return_supplier','consumo','transfer_out') THEN quantity ELSE 0 END),0),
+				IFNULL(SUM(CASE WHEN movement_type = 'adjustment_add' THEN quantity
+					WHEN movement_type = 'adjustment_remove' THEN -quantity ELSE 0 END),0)
+			FROM stock_movement WHERE product_id = ? AND IFNULL(is_posted,1) = 1`, pidInt).
+			Scan(&entries, &exits, &adjustments)
+		avg := 0.0
+		if purchasedQty > 0 {
+			avg = totalCost / purchasedQty
+		}
+		out = append(out, inventarioControlRow{
+			PID: pid.String, Name: name.String, Model: model.String, Unit: unit.String,
+			Price: price.String, Tipo: normalizarTipoItem(tipo.String),
+			Entries: entries, Exits: exits, Adjustments: adjustments,
+			Stock: round2(stockPorMovimientos(s.dbFor(r), pidInt, "")), AvgCost: round2(avg),
+		})
+	}
+	return out
+}
+
+func (s *Server) inventoryControlData(w http.ResponseWriter, r *http.Request) {
+	list := []map[string]interface{}{}
+	for _, it := range s.inventoryControlRows(r) {
 		list = append(list, map[string]interface{}{
-			"product_id": pid.String, "name": name.String, "model": model.String,
-			"unit": unit.String, "price": price.String,
-			"entries": entries, "exits": exits, "adjustments": adjustments,
-			"stock": stock, "avg_cost": avgCost,
+			"product_id": it.PID, "name": it.Name, "model": it.Model,
+			"unit": it.Unit, "price": it.Price,
+			"item_type": it.Tipo, "type_label": etiquetaTipoItem(it.Tipo),
+			"entries": it.Entries, "exits": it.Exits, "adjustments": it.Adjustments,
+			"stock": it.Stock, "avg_cost": it.AvgCost,
 		})
 	}
 	writeJSON(w, list)
 }
 
 func (s *Server) inventoryControlPrint(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.dbFor(r).Query(`
-		SELECT a.product_id, a.product_name, IFNULL(a.product_model,'') AS model,
-			IFNULL(a.unit,'') AS unit, a.price,
-			IFNULL((SELECT SUM(total_amount) FROM product_purchase_details WHERE product_id = a.product_id),0) AS total_cost
-		FROM product_information a
-		WHERE a.status = 1
-		ORDER BY a.product_name`)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer rows.Close()
-
-	type krow struct {
-		PID, Name, Model, Unit, Price string
-		Entries, Exits, Adjustments   float64
-		Stock, AvgCost                float64
-	}
-	rowsData := []krow{}
-	for rows.Next() {
-		var pid, name, model, unit, price sql.NullString
-		var totalCost float64
-		_ = rows.Scan(&pid, &name, &model, &unit, &price, &totalCost)
-		pidInt, _ := strconv.Atoi(pid.String)
-		stock := s.stockForProduct(r, pidInt)
-		avgCost := 0.0
-		if stock > 0 {
-			avgCost = totalCost / stock
-		}
-		var entries, exits, adjustments float64
-		_ = s.dbFor(r).QueryRow(`SELECT IFNULL(SUM(quantity),0) FROM product_purchase_details WHERE product_id = ?`, pid.String).Scan(&entries)
-		_ = s.dbFor(r).QueryRow(`SELECT IFNULL(SUM(quantity),0) FROM invoice_details WHERE product_id = ?`, pid.String).Scan(&exits)
-		_ = s.dbFor(r).QueryRow(`SELECT IFNULL(SUM(CASE WHEN type='add' THEN quantity ELSE -quantity END),0) FROM store_adjustment_details WHERE product_id = ?`, pid.String).Scan(&adjustments)
-		rowsData = append(rowsData, krow{pid.String, name.String, model.String, unit.String, price.String, entries, exits, adjustments, stock, avgCost})
+	rowsData := []map[string]interface{}{}
+	for _, it := range s.inventoryControlRows(r) {
+		rowsData = append(rowsData, map[string]interface{}{
+			"PID": it.PID, "Name": it.Name, "Model": it.Model, "Unit": it.Unit,
+			"Price": it.Price, "Tipo": etiquetaTipoItem(it.Tipo),
+			"Entries": it.Entries, "Exits": it.Exits, "Adjustments": it.Adjustments,
+			"Stock": it.Stock, "AvgCost": it.AvgCost,
+		})
 	}
 	s.renderStandalone(r, w, "inventory_control_print.html", map[string]interface{}{
 		"Title":    "Control de Inventario (Kardex) - Imprimible",
@@ -576,7 +583,6 @@ func (s *Server) vatRetentionSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 
 	// 7. LA TRAZA: quién retuvo, cuándo y sobre qué comprobante. Sin esta fila,
 	// quien reconstruya los hechos no puede saberlo si la tabla cambia por fuera.

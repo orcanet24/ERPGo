@@ -1,5 +1,38 @@
 # Comportamiento: Almacén, Inventario y Facturación
 
+## Qué es cada cosa y dónde vive (desde 2026-11)
+
+El catálogo declara el **tipo de ítem** y el sistema lo registra donde
+corresponde. No hay una sola ruta "compra → inventario":
+
+| Tipo de ítem | `item_type` | Mueve stock | Cuenta al comprar | Almacén |
+|---|---|---|---|---|
+| Producto de venta | `venta` | Sí | Papel «Inventario de mercancía» (estándar 1020401) | Almacén de venta |
+| Consumo interno | `consumo` | Sí | Papel «Inventario de suministros» (estándar 1020403) | Almacén de consumo |
+| Servicio / gasto | `servicio` | **No** | Cuenta de gasto del renglón (estándar 4021401) | — |
+
+- **Una compra tiene varios destinos.** Cada renglón elige tipo, almacén y —si es
+  servicio— la cuenta de gasto. El documento sigue siendo uno solo para el Libro
+  de Compras y las retenciones.
+- **El IVA de las compras ya no engorda el inventario**: se asienta en la cuenta
+  de IVA crédito fiscal (1020901).
+- **El stock se lee de `stock_movement`**, con su almacén. Totales por empresa y
+  por sucursal son dos lecturas del mismo libro; los servicios no tienen libro.
+- **El consumo interno** (papelería, limpieza) sale del almacén de consumo al
+  costo promedio y se lleva a gasto (`/consumption`). No pasa por costo de ventas.
+- **Multi-almacén**: los almacenes se administran en `/warehouse` y se clasifican
+  en venta o consumo. Los renglones de un tipo no pueden entrar al almacén del
+  otro.
+- **Las cuentas las decide la empresa.** Cada papel contable (inventarios, gasto
+  de suministros, gasto de servicios, IVA crédito fiscal, costo de ventas...) se
+  ata a una cuenta del plan en **Configuración → Cuentas por defecto**
+  (`/settings/accounts`). Los códigos entre paréntesis son solo el estándar de
+  referencia: si el plan de la empresa usa otra numeración, se cambia ahí.
+  Sin cuenta asignada, la operación se detiene con un mensaje que dice cuál
+  papel falta; no se asienta «donde caiga».
+
+El resto de este documento describe los modos de descuento, que siguen vigentes.
+
 ## Flujo en ERPGo (B2B/Empresarial)
 
 ### Modo `invoice` (Default — comportamiento actual)
@@ -12,7 +45,7 @@ Compra → Factura → Salida Stock
 
 - **Compra**: `product_purchase_details.quantity` → entrada
 - **Factura**: `invoice_details.quantity` → salida (stock se descuenta aquí)
-- **Kardex**: lee entradas de `product_purchase_details`, salidas de `invoice_details`
+- **Kardex**: lee `stock_movement` (entradas y salidas con su almacén); excluye servicios
 - **Validación**: stock físico disponible en el momento de facturar
 - **Cuándo usar**: venta inmediata, cliente paga y recibe mercancía al instante
 
@@ -24,7 +57,7 @@ Compra → Factura → Delivery Order → Salida Stock
   +Q        Reservado    Confirmado     -Q (al shipped/delivered)
 ```
 
-- **Compra**: `product_purchase_details.quantity` → entrada
+- **Compra**: entrada en `stock_movement` al almacén elegido
 - **Factura**: NO descuenta stock (solo reserva vía delivery order)
 - **Delivery Order**:
   - `draft` → borrador, no afecta nada

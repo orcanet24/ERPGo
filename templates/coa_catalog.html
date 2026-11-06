@@ -10,6 +10,21 @@
             el cat&aacute;logo del SENIAT como punto de partida.
         </p>
 
+        {{if .CuentasPendientes}}
+        <div class="alert alert-warning">
+            <strong>Cuentas por defecto pendientes:</strong>
+            el plan cambi&oacute; y estos papeles no tienen una cuenta v&aacute;lida:
+            {{range $i, $p := .CuentasPendientes}}{{if $i}}, {{end}}{{$p}}{{end}}.
+            Las compras y el consumo que los usen se detendr&aacute;n hasta que se asignen.
+            <a href="/settings/accounts" class="alert-link">Asignar cuentas</a>.
+        </div>
+        {{else}}
+        <div class="alert alert-success">
+            <i class="fa fa-check"></i> Las cuentas por defecto de la operaci&oacute;n est&aacute;n
+            asignadas a este plan. <a href="/settings/accounts" class="alert-link">Revisarlas</a>.
+        </div>
+        {{end}}
+
         <div class="row">
             <div class="col-md-6">
                 <div class="box box-primary" style="box-shadow:none">

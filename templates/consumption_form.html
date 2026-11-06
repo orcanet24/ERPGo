@@ -1,0 +1,182 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Registrar Consumo Interno
+                <a href="/consumption/list" class="btn btn-default btn-sm pull-right"><i class="fa fa-arrow-left"></i> Volver</a>
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <form id="consumptionForm">
+            <div class="row">
+                <div class="col-sm-2">
+                    <div class="form-group">
+                        <label>Fecha</label>
+                        <input type="text" class="form-control datepicker" name="date" value="{{today}}" autocomplete="off">
+                    </div>
+                </div>
+                <div class="col-sm-3">
+                    <div class="form-group">
+                        <label>Almacén de consumo</label>
+                        <select class="form-control" name="warehouse_id">
+                            {{range .Almacenes}}<option value="{{.Code}}" {{if eq .Code $.Almacen}}selected{{end}}>{{.Code}} — {{.Name}}</option>{{end}}
+                            {{if not .Almacenes}}<option value="WH-CONSUMO">WH-CONSUMO — Consumo interno</option>{{end}}
+                        </select>
+                    </div>
+                </div>
+                <div class="col-sm-3">
+                    <div class="form-group">
+                        <label>Cuenta de gasto</label>
+                        <select class="form-control" name="coa_id">
+                            {{$def := .CuentaDefecto}}
+                            {{range .CuentasGasto}}<option value="{{.code}}" {{if eq .code $def}}selected{{end}}>{{.code}} — {{.name}}</option>{{end}}
+                        </select>
+                    </div>
+                </div>
+                <div class="col-sm-4">
+                    <div class="form-group">
+                        <label>Concepto <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" name="concept" placeholder="Ej: papelería para administración, limpieza del local">
+                    </div>
+                </div>
+            </div>
+
+            <hr>
+            <h4>Suministros consumidos</h4>
+            <div class="row" style="margin-bottom:10px">
+                <div class="col-sm-8">
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="consProductSearch" placeholder="Buscar suministro de consumo interno..." autocomplete="off">
+                        <span class="input-group-btn">
+                            <button type="button" class="btn btn-primary" id="consAddProduct"><i class="fa fa-plus"></i> Agregar</button>
+                        </span>
+                    </div>
+                    <div id="consResults" class="list-group" style="position:absolute;z-index:1000;width:100%;max-height:280px;overflow-y:auto;display:none"></div>
+                </div>
+            </div>
+
+            <table class="table table-bordered" id="consTable">
+                <thead>
+                    <tr>
+                        <th style="width:40%">Producto</th>
+                        <th style="width:15%">Cantidad</th>
+                        <th style="width:15%" class="text-right">Costo unitario</th>
+                        <th style="width:15%" class="text-right">Total</th>
+                        <th style="width:8%"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td colspan="5" class="text-center text-muted" id="consEmpty">Sin suministros. Busque y agregue arriba.</td></tr>
+                </tbody>
+            </table>
+
+            <div class="row">
+                <div class="col-sm-4 col-sm-offset-8">
+                    <table class="table table-bordered">
+                        <tr class="success">
+                            <th class="text-right">Total del consumo</th>
+                            <td class="text-right"><strong id="consTotal">0.00</strong></td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+            <div class="text-right">
+                <a href="/consumption/list" class="btn btn-default">Cancelar</a>
+                <button type="submit" class="btn btn-success btn-lg"><i class="fa fa-save"></i> Registrar consumo</button>
+            </div>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('.datepicker').datepicker({ dateFormat: 'yy-mm-dd' });
+
+    function num(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
+
+    function recalc() {
+        var t = 0;
+        $('#consTable tbody tr.cons-row').each(function () {
+            var qty = num($(this).find('.cqty').val());
+            var cost = num($(this).find('.ccost').data('cost'));
+            var sub = qty * cost;
+            $(this).find('.ctotal').val(sub.toFixed(2));
+            t += sub;
+        });
+        $('#consTotal').text(t.toFixed(2));
+    }
+
+    function addRow(p) {
+        $('#consEmpty').hide();
+        var $tr = $(
+            '<tr class="cons-row">' +
+            '<td>' + p.name + (p.model ? ' (' + p.model + ')' : '') +
+                '<input type="hidden" name="product_id" value="' + p.id + '"></td>' +
+            '<td><input type="text" class="form-control text-right cqty" name="quantity" value="1"></td>' +
+            '<td class="text-right"><span class="ccost" data-cost="' + num(p.cost) + '">' + num(p.cost).toFixed(2) + '</span></td>' +
+            '<td><input type="text" class="form-control text-right ctotal" value="0.00" readonly></td>' +
+            '<td><button type="button" class="btn btn-danger btn-xs del-cons"><i class="fa fa-times"></i></button></td>' +
+            '</tr>');
+        $('#consTable tbody').append($tr);
+        recalc();
+    }
+
+    $('#consTable').on('input', '.cqty', recalc);
+    $('#consTable').on('click', '.del-cons', function () {
+        $(this).closest('tr').remove();
+        if (!$('#consTable tbody tr.cons-row').length) { $('#consEmpty').show(); }
+        recalc();
+    });
+
+    function buscar(term) {
+        $.getJSON('/product/search', { term: term }, function (lista) {
+            var $r = $('#consResults').empty().show();
+            var usados = (lista || []).filter(function (p) { return p.item_type === 'consumo'; });
+            if (!usados.length) {
+                $r.append('<div class="list-group-item text-muted">No hay suministros de consumo interno que coincidan. Marque el producto como «Consumo interno» en el catálogo.</div>');
+                return;
+            }
+            usados.forEach(function (p) {
+                $r.append($('<a href="#" class="list-group-item"></a>')
+                    .text(p.name + (p.model ? ' (' + p.model + ')' : '') + ' · stock ' + num(p.stock).toFixed(2))
+                    .data('producto', p));
+            });
+        });
+    }
+
+    $('#consProductSearch').on('input', function () {
+        var t = $.trim(this.value);
+        if (t.length < 2) { $('#consResults').hide(); return; }
+        buscar(t);
+    });
+    $('#consResults').on('click', 'a.list-group-item', function (e) {
+        e.preventDefault();
+        var p = $(this).data('producto');
+        if (!p) { return; }
+        $('#consResults').hide();
+        $('#consProductSearch').val('');
+        addRow(p);
+    });
+
+    $('#consumptionForm').on('submit', function (e) {
+        e.preventDefault();
+        if (!$('#consTable tbody tr.cons-row').length) {
+            toastr.warning('Agregue al menos un suministro');
+            return;
+        }
+        $.post('/consumption/save', $(this).serialize(), function (r) {
+            if (r.status == 1) {
+                toastr.success(r.msg + ' ' + r.consumption_no);
+                setTimeout(function () { location.href = '/consumption/list'; }, 700);
+            } else {
+                toastr.error(r.error || 'Error');
+            }
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+    });
+});
+</script>
+{{end}}

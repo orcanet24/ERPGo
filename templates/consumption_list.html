@@ -1,0 +1,74 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Consumo Interno
+                <span class="btn-group pull-right">
+                    <a href="/consumption/new" class="btn btn-primary btn-sm"><i class="fa fa-plus"></i> Registrar consumo</a>
+                </span>
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <p class="help-block">
+            Salidas de suministros de uso propio —papelería, limpieza, cafetería— valorizadas al costo
+            promedio de compra. Se debita la cuenta de gasto y se acredita el inventario de suministros:
+            nunca el costo de ventas ni la mercancía para la venta.
+        </p>
+        <table class="table table-striped table-bordered" id="consumptionTable" width="100%">
+            <thead>
+                <tr>
+                    <th>Consumo Nº</th>
+                    <th>Fecha</th>
+                    <th>Almacén</th>
+                    <th>Cuenta de gasto</th>
+                    <th>Concepto</th>
+                    <th class="text-center">Items</th>
+                    <th class="text-right">Total</th>
+                    <th class="text-center">Acciones</th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#consumptionTable').DataTable({
+        processing: true,
+        pageLength: 25,
+        order: [[0, 'desc']],
+        ajax: { url: '/consumption/data', type: 'GET' },
+        columns: [
+            { data: 'consumption_no', render: function (d) { return '<a href="/consumption/details/' + encodeURIComponent(d) + '">' + d + '</a>'; } },
+            { data: 'date' },
+            { data: 'warehouse' },
+            { data: 'account' },
+            { data: 'concept' },
+            { data: 'items', className: 'text-center' },
+            { data: 'total', className: 'text-right' },
+            { data: 'id', orderable: false, className: 'text-center', render: function (d) {
+                return '<button type="button" class="btn btn-danger btn-xs del-consumo" data-id="' + d + '"><i class="fa fa-trash"></i></button>';
+            } }
+        ]
+    });
+
+    $('#consumptionTable').on('click', '.del-consumo', function () {
+        var id = $(this).data('id');
+        if (!confirm('¿Eliminar este consumo? Se devuelve el stock al almacén y se quita el gasto.')) { return; }
+        $.post('/consumption/delete/' + id, function (r) {
+            if (r && r.status == 1) {
+                toastr.success(r.msg || 'Consumo eliminado');
+                $('#consumptionTable').DataTable().ajax.reload(null, false);
+            } else {
+                toastr.error((r && r.error) || 'No se pudo eliminar');
+            }
+        }).fail(function (x) {
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'No se pudo eliminar');
+        });
+    });
+});
+</script>
+{{end}}

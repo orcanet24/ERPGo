@@ -92,13 +92,16 @@ func (s *Server) adjustmentForm(w http.ResponseWriter, r *http.Request) {
 		Stock                 float64
 	}
 	products := []product{}
+	// Un servicio no se ajusta: no tiene existencias.
 	rows, _ := s.dbFor(r).Query(`
-		SELECT a.product_id, a.product_name, IFNULL(a.product_model,''), IFNULL(a.unit,'')
-		FROM product_information a WHERE a.status = 1 ORDER BY a.product_name LIMIT 500`)
+		SELECT a.product_id, a.product_name, IFNULL(a.product_model,''), IFNULL(a.unit,''), IFNULL(a.item_type,'venta')
+		FROM product_information a WHERE a.status = 1 AND IFNULL(a.item_type,'venta') <> 'servicio'
+		ORDER BY a.product_name LIMIT 500`)
 	if rows != nil {
 		for rows.Next() {
 			var p product
-			_ = rows.Scan(&p.ID, &p.Name, &p.Model, &p.Unit)
+			var tipo string
+			_ = rows.Scan(&p.ID, &p.Name, &p.Model, &p.Unit, &tipo)
 			pidInt, _ := strconv.Atoi(p.ID)
 			p.Stock = s.stockForProduct(r, pidInt)
 			products = append(products, p)
@@ -106,10 +109,14 @@ func (s *Server) adjustmentForm(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 	}
 
-	s.render(w, r, "adjustment_form.html", map[string]interface{}{
+	data := map[string]interface{}{
 		"Title":    "Nuevo Ajuste de Inventario",
 		"Products": products,
-	})
+	}
+	for k, v := range s.almacenesParaFormulario(r) {
+		data[k] = v
+	}
+	s.render(w, r, "adjustment_form.html", data)
 }
 
 // adjustmentSave creates an inventory adjustment and adjusts stock.
@@ -172,6 +179,9 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 		ProductID string
 		Type      string // add or remove
 		Quantity  float64
+		Tipo      string // venta | consumo
+		Costo     float64
+		Almacen   string
 		BatchID   string
 		Reason    string
 	}
@@ -210,37 +220,39 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Adjust stock: insert into product_purchase_details
-		var stockQty float64
-		var batchLabel string
-		if adjType == "remove" {
-			stockQty = -qty
-			batchLabel = fmt.Sprintf("ADJ-REM-%s", adjNo)
-		} else {
-			stockQty = qty
-			batchLabel = fmt.Sprintf("ADJ-ADD-%s", adjNo)
+		// Un ajuste NO es una compra. Antes se escribía una fila en
+		// `product_purchase_details` —con cantidad negativa cuando se restaba—
+		// y eso contaminaba el costo promedio y el historial de compras. Ahora
+		// se escribe en `stock_movement`, que es el libro real del inventario,
+		// con el almacén y el costo del producto.
+		pidInt, _ := strconv.Atoi(pid)
+		tipo := s.tipoItemProducto(r, pidInt)
+		if !itemMueveStock(tipo) {
+			continue // un servicio no tiene existencias que ajustar
 		}
-		// rate 0 since it's an adjustment, not a purchase.
-		//
-		// Dos fallos reales que había aquí y que hacían que NINGÚN ajuste de
-		// inventario funcionara bajo MySQL:
-		//
-		//   * `product_purchase_details` no tiene columna `create_by`. Escribirla
-		//     daba "Unknown column" y el stock no se movía.
-		//   * `purchase_id` es BIGINT y el servidor corre con STRICT_TRANS_TABLES.
-		//     Mandar ahí el texto "ADJ-7" daba Error 1366 "Incorrect integer
-		//     value" y tampoco se movía. Se manda el identificador numérico y
-		//     el texto del ajuste queda en `batch_id` y en
-		//     `store_adjustment_details.adjustment_no`, que sí son de texto.
-		if _, err := tx.Exec(`
-			INSERT INTO product_purchase_details (purchase_id, product_id, quantity, rate, total_amount, batch_id, expiry_date)
-			VALUES (?,?,?,0,0,?,?)`,
-			nextID, pid, stockQty, batchLabel, expiry); err != nil {
+		kind := tipoAlmacenDeItem(tipo)
+		alm := warehouse
+		if err := s.almacenValidoPara(r, alm, kind); err != nil {
+			// Un ajuste puede mezclar mercancía y suministros: el almacén del
+			// documento aplica al tipo que le corresponde y el otro renglón va
+			// al almacén por defecto de su tipo, en vez de obligar a dos ajustes.
+			alm = s.almacenPorDefecto(r, kind)
+		}
+		costo := costoPromedioCompra(tx, pidInt)
+		if costo <= 0 {
+			costo = ultimoCostoCompra(tx, pidInt)
+		}
+		mov := "adjustment_add"
+		if adjType == "remove" {
+			mov = "adjustment_remove"
+		}
+		if err := insertStockMovement(tx, mov, pidInt, alm, qty, costo, "adjustment", int(nextID), adjNo, date); err != nil {
 			jsonError(w, err.Error(), 500)
 			return
 		}
 
-		lines = append(lines, adjLine{ProductID: pid, Type: adjType, Quantity: qty, BatchID: batch, Reason: reason})
+		lines = append(lines, adjLine{ProductID: pid, Type: adjType, Quantity: qty, Tipo: tipo,
+			Costo: costo, Almacen: alm, BatchID: batch, Reason: reason})
 	}
 
 	// Accounting vouchers
@@ -250,35 +262,98 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var totalAdd, totalRemove float64
+	// Los importes se valorizan al costo: antes se sumaba la CANTIDAD como si
+	// fuera dinero, así que ajustar 3 unidades asentaba 3,00 bolívares.
+	var prodAdd, prodRemove, consAdd, consRemove float64
 	for _, l := range lines {
-		if l.Type == "remove" {
-			totalRemove += l.Quantity
-		} else {
-			totalAdd += l.Quantity
+		monto := round2(l.Quantity * l.Costo)
+		switch {
+		case normalizarTipoItem(l.Tipo) == ItemConsumo && l.Type == "remove":
+			consRemove += monto
+		case normalizarTipoItem(l.Tipo) == ItemConsumo:
+			consAdd += monto
+		case l.Type == "remove":
+			prodRemove += monto
+		default:
+			prodAdd += monto
 		}
 	}
 
-	// ADD voucher: Debit Inventory, Credit Adjustment Income (using SalesCode as proxy for income)
-	if totalAdd > 0 {
-		vno := nextVoucherNoTx(tx, "JV")
-		_ = s.insertVoucherRowTx(r, tx, VoucherRow{
-			VNo: vno, Vtype: "JV", ReferenceNo: adjNo, VDate: date,
-			COAID: pre.InventoryCode, RevCodde: pre.SalesCode,
-			Narration: "Inventory Adjustment (Add)", Comment: fmt.Sprintf("Stock increase %s", adjNo),
-			Debit: totalAdd,
-		}, createBy)
+	// Cuentas del asiento: salen del mapa de papeles de la empresa. Un ajuste no
+	// puede asentarse contra una cuenta que no esté asignada en su plan.
+	type cuentaRequerida struct {
+		Codigo int64
+		Papel  string
+	}
+	requeridas := []cuentaRequerida{}
+	if prodAdd > 0 || prodRemove > 0 {
+		requeridas = append(requeridas,
+			cuentaRequerida{pre.CuentaInventarioMercancia(), "Inventario de mercancía para la venta"},
+			cuentaRequerida{pre.COGSCode, "Costo de ventas"})
+	}
+	if consAdd > 0 || consRemove > 0 {
+		requeridas = append(requeridas,
+			cuentaRequerida{pre.CuentaInventarioSuministros(), "Inventario de suministros y consumibles"},
+			cuentaRequerida{pre.CuentaGastoSuministros(), "Gasto por consumo de suministros"})
+	}
+	for _, c := range requeridas {
+		if c.Codigo == 0 {
+			jsonError(w, fmt.Sprintf("El ajuste necesita la cuenta «%s». Asígnela en Configuración → Cuentas por defecto.", c.Papel), 400)
+			return
+		}
 	}
 
-	// REMOVE voucher: Debit Adjustment Expense (using COGSCode as proxy), Credit Inventory
-	if totalRemove > 0 {
+	// Mercancía de venta: el sobrante vuelve del costo de ventas y el faltante
+	// se carga al costo de ventas (es la merma del inventario comercial).
+	if prodAdd > 0 {
 		vno := nextVoucherNoTx(tx, "JV")
-		_ = s.insertVoucherRowTx(r, tx, VoucherRow{
+		if err := s.insertVoucherRowTx(r, tx, VoucherRow{
+			VNo: vno, Vtype: "JV", ReferenceNo: adjNo, VDate: date,
+			COAID: pre.InventoryCode, RevCodde: pre.COGSCode,
+			Narration: "Inventory Adjustment (Add)", Comment: fmt.Sprintf("Stock increase %s", adjNo),
+			Debit: prodAdd,
+		}, createBy); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+	}
+	if prodRemove > 0 {
+		vno := nextVoucherNoTx(tx, "JV")
+		if err := s.insertVoucherRowTx(r, tx, VoucherRow{
 			VNo: vno, Vtype: "JV", ReferenceNo: adjNo, VDate: date,
 			COAID: pre.COGSCode, RevCodde: pre.InventoryCode,
 			Narration: "Inventory Adjustment (Remove)", Comment: fmt.Sprintf("Stock decrease %s", adjNo),
-			Debit: totalRemove,
-		}, createBy)
+			Debit: prodRemove,
+		}, createBy); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+	}
+	// Consumo interno: su inventario es un activo aparte y su gasto no es costo
+	// de ventas. Mezclarlos era justo lo que distorsionaba el margen.
+	if consAdd > 0 {
+		vno := nextVoucherNoTx(tx, "JV")
+		if err := s.insertVoucherRowTx(r, tx, VoucherRow{
+			VNo: vno, Vtype: "JV", ReferenceNo: adjNo, VDate: date,
+			COAID: pre.CuentaInventarioSuministros(), RevCodde: pre.CuentaGastoSuministros(),
+			Narration: "Supplies Adjustment (Add)", Comment: fmt.Sprintf("Supplies increase %s", adjNo),
+			Debit: consAdd,
+		}, createBy); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+	}
+	if consRemove > 0 {
+		vno := nextVoucherNoTx(tx, "JV")
+		if err := s.insertVoucherRowTx(r, tx, VoucherRow{
+			VNo: vno, Vtype: "JV", ReferenceNo: adjNo, VDate: date,
+			COAID: pre.CuentaGastoSuministros(), RevCodde: pre.CuentaInventarioSuministros(),
+			Narration: "Supplies Adjustment (Remove)", Comment: fmt.Sprintf("Supplies decrease %s", adjNo),
+			Debit: consRemove,
+		}, createBy); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -376,8 +451,12 @@ func (s *Server) adjustmentDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Remove stock adjustments
+	// Remove stock adjustments. Los movimientos viven en stock_movement desde
+	// que el stock se calcula de ahí: sin borrarlos, el ajuste desaparecería del
+	// listado pero seguiría sumando (o restando) en el inventario.
 	for _, q := range []string{
+		`DELETE FROM acc_transaction WHERE referenceNo = ?`,
+		`DELETE FROM acc_vaucher WHERE referenceNo = ?`,
 		`DELETE FROM product_purchase_details WHERE purchase_id = ?`,
 		`DELETE FROM store_adjustment_details WHERE adjustment_no = ?`,
 	} {
@@ -386,6 +465,13 @@ func (s *Server) adjustmentDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Los movimientos de stock se identifican por el id del ajuste, no por su
+	// número: el número es texto y reference_id es numérico.
+	if _, err := tx.Exec(`DELETE FROM stock_movement WHERE reference_type = 'adjustment' AND reference_id = ?`, id); err != nil {
+		jsonError(w, fmt.Sprintf("limpiar movimientos del ajuste: %v", err), 500)
+		return
+	}
+
 	// Soft delete header
 	res, err := tx.Exec(`UPDATE store_adjustment SET status=0 WHERE id = ?`, id)
 	if err != nil {

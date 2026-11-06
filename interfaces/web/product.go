@@ -62,11 +62,12 @@ func (s *Server) productListData(w http.ResponseWriter, r *http.Request) {
 	_ = s.dbFor(r).QueryRow("SELECT COUNT(*) FROM product_information").Scan(&total)
 	_ = s.dbFor(r).QueryRow("SELECT COUNT(*) FROM product_information a"+where, args...).Scan(&filtered)
 
-	// stock = purchases - sales (replicates product_stock pattern)
+	// El stock sale de stock_movement (ver inventory_stock.go) y el tipo de ítem
+	// se muestra en la lista: es lo que explica por qué un producto no tiene
+	// existencias o por qué vive en otro almacén.
 	rows, err := s.dbFor(r).Query(`
 		SELECT a.product_id, a.product_name, IFNULL(a.product_model,''), IFNULL(c.category_name,''),
-			IFNULL(a.unit,''), a.price,
-			IFNULL(a.status,1)
+			IFNULL(a.unit,''), a.price, IFNULL(a.status,1), IFNULL(a.item_type,'venta')
 		FROM product_information a
 		LEFT JOIN product_category c ON c.category_id = a.category_id
 		`+where+`
@@ -80,22 +81,25 @@ func (s *Server) productListData(w http.ResponseWriter, r *http.Request) {
 
 	list := []map[string]interface{}{}
 	for rows.Next() {
-		var pid, name, model, cat, unit, price sql.NullString
+		var pid, name, model, cat, unit, price, itemType sql.NullString
 		var status int
-		if err := rows.Scan(&pid, &name, &model, &cat, &unit, &price, &status); err != nil {
+		if err := rows.Scan(&pid, &name, &model, &cat, &unit, &price, &status, &itemType); err != nil {
 			continue
 		}
 		pidInt, _ := strconv.Atoi(pid.String)
 		stock := s.stockForProduct(r, pidInt)
+		tipo := normalizarTipoItem(itemType.String)
 		list = append(list, map[string]interface{}{
-			"id":       pid.String,
-			"name":     name.String,
-			"model":    model.String,
-			"category": cat.String,
-			"unit":     unit.String,
-			"price":    price.String,
-			"stock":    stock,
-			"status":   status,
+			"id":         pid.String,
+			"name":       name.String,
+			"model":      model.String,
+			"category":   cat.String,
+			"unit":       unit.String,
+			"price":      price.String,
+			"stock":      stock,
+			"status":     status,
+			"item_type":  tipo,
+			"type_label": etiquetaTipoItem(tipo),
 		})
 	}
 	writeJSON(w, map[string]interface{}{
@@ -136,14 +140,20 @@ func (s *Server) productForm(w http.ResponseWriter, r *http.Request) {
 	}
 	data["Categories"] = cats
 	data["Units"] = units
+	for k, v := range s.almacenesParaFormulario(r) {
+		data[k] = v
+	}
 
 	if id := r.PathValue("id"); id != "" {
 		var p struct {
 			ID, Name, Model, Cat, Unit, Price, Serial, Vat, Tax, Details, Image, Barcode sql.NullString
+			ItemType, DefaultWarehouse                                                   sql.NullString
 		}
 		err := s.dbFor(r).QueryRow(`SELECT product_id, product_name, product_model, category_id, unit, price,
-			serial_no, product_vat, tax, product_details, image, IFNULL(barcode,'') FROM product_information WHERE product_id = ?`, id).
-			Scan(&p.ID, &p.Name, &p.Model, &p.Cat, &p.Unit, &p.Price, &p.Serial, &p.Vat, &p.Tax, &p.Details, &p.Image, &p.Barcode)
+			serial_no, product_vat, tax, product_details, image, IFNULL(barcode,''),
+			IFNULL(item_type,'venta'), IFNULL(default_warehouse_id,'') FROM product_information WHERE product_id = ?`, id).
+			Scan(&p.ID, &p.Name, &p.Model, &p.Cat, &p.Unit, &p.Price, &p.Serial, &p.Vat, &p.Tax, &p.Details, &p.Image, &p.Barcode,
+				&p.ItemType, &p.DefaultWarehouse)
 		if err != nil {
 			http.Error(w, "Producto no encontrado", 404)
 			return
@@ -161,6 +171,25 @@ func (s *Server) productSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.FormValue("product_id")
+
+	// Tipo de ítem: es lo que decide si el producto va al inventario de venta, al
+	// de consumo interno o a ningún inventario (servicio). Se valida aquí y no
+	// solo en la pantalla porque el alta rápida y la importación también pasan
+	// por este guardado.
+	tipoItem := normalizarTipoItem(r.FormValue("item_type"))
+	almacenDefecto := strings.TrimSpace(r.FormValue("default_warehouse_id"))
+	if !itemMueveStock(tipoItem) {
+		almacenDefecto = ""
+	} else {
+		kind := tipoAlmacenDeItem(tipoItem)
+		if almacenDefecto == "" {
+			almacenDefecto = s.almacenPorDefecto(r, kind)
+		}
+		if err := s.almacenValidoPara(r, almacenDefecto, kind); err != nil {
+			jsonError(w, err.Error(), 400)
+			return
+		}
+	}
 
 	image := ""
 	// Optional image upload via uploadMgr (tenant-aware)
@@ -190,11 +219,12 @@ func (s *Server) productSave(w http.ResponseWriter, r *http.Request) {
 		pid := generator(8)
 		_, err := s.dbFor(r).Exec(`
 			INSERT INTO product_information (product_id, category_id, product_name, price, price_usd, currency_code, unit, tax,
-				serial_no, product_vat, product_model, product_details, image, barcode, status)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`,
+				serial_no, product_vat, product_model, product_details, image, barcode, item_type, default_warehouse_id, status)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`,
 			pid, r.FormValue("category_id"), name, r.FormValue("price"), parseMoney(r.FormValue("price_usd")), orDefault(r.FormValue("currency_code"), "VES"), r.FormValue("unit"),
 			parseMoney(r.FormValue("tax")), r.FormValue("serial_no"), parseMoney(r.FormValue("product_vat")),
-			r.FormValue("product_model"), r.FormValue("product_details"), image, r.FormValue("barcode"))
+			r.FormValue("product_model"), r.FormValue("product_details"), image, r.FormValue("barcode"),
+			tipoItem, almacenDefecto)
 		if err != nil {
 			jsonError(w, err.Error(), 500)
 			return
@@ -223,11 +253,12 @@ func (s *Server) productSave(w http.ResponseWriter, r *http.Request) {
 	if existe == 0 {
 		if _, err := s.dbFor(r).Exec(`
 			INSERT INTO product_information (product_id, category_id, product_name, price, unit, tax,
-				serial_no, product_vat, product_model, product_details, image, barcode, status)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)`,
+				serial_no, product_vat, product_model, product_details, image, barcode, item_type, default_warehouse_id, status)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`,
 			id, r.FormValue("category_id"), name, r.FormValue("price"), r.FormValue("unit"),
 			parseMoney(r.FormValue("tax")), r.FormValue("serial_no"), parseMoney(r.FormValue("product_vat")),
-			r.FormValue("product_model"), r.FormValue("product_details"), image, r.FormValue("barcode")); err != nil {
+			r.FormValue("product_model"), r.FormValue("product_details"), image, r.FormValue("barcode"),
+			tipoItem, almacenDefecto); err != nil {
 			jsonError(w, err.Error(), 500)
 			return
 		}
@@ -239,10 +270,12 @@ func (s *Server) productSave(w http.ResponseWriter, r *http.Request) {
 	if image == "" {
 		_, err := s.dbFor(r).Exec(`
 			UPDATE product_information SET category_id=?, product_name=?, price=?, price_usd=?, currency_code=?, unit=?, tax=?,
-				serial_no=?, product_vat=?, product_model=?, product_details=?, barcode=? WHERE product_id=?`,
+				serial_no=?, product_vat=?, product_model=?, product_details=?, barcode=?,
+				item_type=?, default_warehouse_id=? WHERE product_id=?`,
 			r.FormValue("category_id"), name, r.FormValue("price"), parseMoney(r.FormValue("price_usd")), orDefault(r.FormValue("currency_code"), "VES"), r.FormValue("unit"),
 			parseMoney(r.FormValue("tax")), r.FormValue("serial_no"), parseMoney(r.FormValue("product_vat")),
-			r.FormValue("product_model"), r.FormValue("product_details"), r.FormValue("barcode"), id)
+			r.FormValue("product_model"), r.FormValue("product_details"), r.FormValue("barcode"),
+			tipoItem, almacenDefecto, id)
 		if err != nil {
 			jsonError(w, err.Error(), 500)
 			return
@@ -250,10 +283,12 @@ func (s *Server) productSave(w http.ResponseWriter, r *http.Request) {
 	} else {
 		_, err := s.dbFor(r).Exec(`
 			UPDATE product_information SET category_id=?, product_name=?, price=?, price_usd=?, currency_code=?, unit=?, tax=?,
-				serial_no=?, product_vat=?, product_model=?, product_details=?, image=?, barcode=? WHERE product_id=?`,
+				serial_no=?, product_vat=?, product_model=?, product_details=?, image=?, barcode=?,
+				item_type=?, default_warehouse_id=? WHERE product_id=?`,
 			r.FormValue("category_id"), name, r.FormValue("price"), parseMoney(r.FormValue("price_usd")), orDefault(r.FormValue("currency_code"), "VES"), r.FormValue("unit"),
 			parseMoney(r.FormValue("tax")), r.FormValue("serial_no"), parseMoney(r.FormValue("product_vat")),
-			r.FormValue("product_model"), r.FormValue("product_details"), image, r.FormValue("barcode"), id)
+			r.FormValue("product_model"), r.FormValue("product_details"), image, r.FormValue("barcode"),
+			tipoItem, almacenDefecto, id)
 		if err != nil {
 			jsonError(w, err.Error(), 500)
 			return
@@ -300,6 +335,7 @@ func (s *Server) productSearch(w http.ResponseWriter, r *http.Request) {
 		SELECT a.product_id, a.product_name, IFNULL(a.product_model,''), a.price, IFNULL(a.unit,''),
 			IFNULL(sp.supplier_price, a.price) AS supplier_price,
 			IFNULL(a.barcode,''), IFNULL(a.image,''),
+			IFNULL(a.item_type,'venta'), IFNULL(a.default_warehouse_id,''),
 			IFNULL((SELECT d.rate FROM product_purchase_details d
 				JOIN product_purchase p ON p.purchase_id = d.purchase_id
 				WHERE d.product_id = a.product_id ORDER BY p.id DESC LIMIT 1), 0) AS last_cost
@@ -315,20 +351,25 @@ func (s *Server) productSearch(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	out := []map[string]interface{}{}
 	for rows.Next() {
-		var pid, name, model, price, unit, sprice, barcode, image sql.NullString
+		var pid, name, model, price, unit, sprice, barcode, image, itemType, wh sql.NullString
 		var lastCost float64
-		_ = rows.Scan(&pid, &name, &model, &price, &unit, &sprice, &barcode, &image, &lastCost)
+		_ = rows.Scan(&pid, &name, &model, &price, &unit, &sprice, &barcode, &image, &itemType, &wh, &lastCost)
 		pidInt, _ := strconv.Atoi(pid.String)
 		stock := s.stockForProduct(r, pidInt)
 		label := name.String
 		if model.String != "" {
 			label += " (" + model.String + ")"
 		}
+		tipo := normalizarTipoItem(itemType.String)
+		if tipo != ItemVenta {
+			label += " · " + etiquetaTipoItem(tipo)
+		}
 		out = append(out, map[string]interface{}{
 			"id": pid.String, "label": label,
 			"product_id": pid.String, "name": name.String, "model": model.String,
 			"price": price.String, "supplier_price": sprice.String, "unit": unit.String, "stock": stock,
 			"barcode": barcode.String, "image": image.String, "last_cost": lastCost,
+			"item_type": tipo, "default_warehouse": wh.String,
 		})
 	}
 	writeJSON(w, out)
