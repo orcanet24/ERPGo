@@ -1,4 +1,4 @@
-﻿package web
+package web
 
 import (
 	"database/sql"
@@ -43,6 +43,15 @@ func (s *Server) coaTree(w http.ResponseWriter, r *http.Request) {
 }
 
 // coaData returns the full tree as nested JSON (jsTree compatible).
+//
+// El JSON va SOLO con `children` anidados y sin `parent`. jsTree decide entre
+// sus dos parseadores mirando exclusivamente el primer elemento del array: si
+// tiene `parent`, trata todo el envío como lista plana y exige que cada padre
+// exista entre los nodos. Las cuentas raíz (PHeadCode 0 o NULL) no tienen ese
+// nodo, y jsTree 3.3.7 revienta dentro de su Web Worker con «Cannot read
+// properties of undefined (reading 'core')» —un fallo que además deja el
+// árbol en blanco sin decir nada—. Sin `parent`, jsTree usa el parseador de
+// árbol anidado, que es el que corresponde a la jerarquía real de acc_coa.
 func (s *Server) coaData(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.dbFor(r).Query(`SELECT id, HeadCode, HeadName, PHeadName, PHeadCode, HeadLevel, HeadType,
 		IsActive, IsTransaction, IsGL, isCashNature, isBankNature FROM acc_coa ORDER BY HeadCode`)
@@ -55,7 +64,6 @@ func (s *Server) coaData(w http.ResponseWriter, r *http.Request) {
 	type node struct {
 		ID       string  `json:"id"`
 		Text     string  `json:"text"`
-		Parent   string  `json:"parent"`
 		HeadCode int64   `json:"headcode"`
 		Level    int     `json:"level"`
 		Type     string  `json:"type"`
@@ -63,6 +71,11 @@ func (s *Server) coaData(w http.ResponseWriter, r *http.Request) {
 	}
 	// build flat map
 	byCode := map[int64]*node{}
+	// parentCode guarda el PHeadCode declarado por cada cuenta. Es la fuente de
+	// verdad de la jerarquía: recortar dígitos del HeadCode (parentOf) acierta
+	// casi siempre, pero se equivoca en cuentas como 40301 (Purchase Account),
+	// cuyo PHeadCode es 402 y no el 403 que saldría del recorte.
+	parentCode := map[int64]int64{}
 	var order []int64
 	for rows.Next() {
 		var id, hc, level, active, istrans, isgl, cash, bank int
@@ -75,20 +88,26 @@ func (s *Server) coaData(w http.ResponseWriter, r *http.Request) {
 		n := &node{
 			ID:       fmt.Sprintf("%d", hc),
 			Text:     fmt.Sprintf("%d - %s", hc, hname.String),
-			Parent:   fmt.Sprintf("%d", pcodeI),
 			HeadCode: int64(hc),
 			Level:    level,
 			Type:     htype.String,
 		}
 		byCode[int64(hc)] = n
+		parentCode[int64(hc)] = pcodeI
 		order = append(order, int64(hc))
 	}
 	// attach children
 	var roots []*node
 	for _, code := range order {
 		n := byCode[code]
-		if p, ok := byCode[parentOf(code)]; ok && p != n {
-			p.Children = append(p.Children, n)
+		parent, ok := byCode[parentCode[code]]
+		if !ok || parent == n {
+			// Sin PHeadCode o colgando de una cuenta que no existe: se prueba el
+			// recorte del HeadCode, que era la jerarquía histórica del COA.
+			parent, ok = byCode[parentOf(code)]
+		}
+		if ok && parent != n {
+			parent.Children = append(parent.Children, n)
 		} else {
 			roots = append(roots, n)
 		}
