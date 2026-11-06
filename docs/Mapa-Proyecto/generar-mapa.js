@@ -183,7 +183,7 @@ function construir(datos) {
     id: 'capa_interfaces',
     label: 'interfaces/web',
     parent: 'raiz',
-    sublabel: `${contarHojas(web)} archivos · capa web (HTTP, handlers, plantillas)`,
+    sublabel: `${contarHojas(web)} archivos`,
   });
 
   const sinClasificar = [];
@@ -204,7 +204,7 @@ function construir(datos) {
       id: 'mod_' + m.id,
       label: m.nombre,
       parent: 'capa_interfaces',
-      sublabel: `${porModulo[m.id]} archivos · ${m.desc}`,
+      sublabel: `${porModulo[m.id]} archivos`,
     });
   }
 
@@ -219,7 +219,7 @@ function construir(datos) {
     { id: 'capa_configs', nombre: 'configs', desc: 'Configuración de tenants' },
     { id: 'capa_static', nombre: 'static', desc: 'Recursos estáticos (JS)' },
     { id: 'capa_scripts', nombre: 'scripts', desc: 'Construcción y despliegue' },
-    { id: 'capa_fiscalprinteradapter', nombre: 'fiscalprinteradapter', desc: 'Adaptador de impresora fiscal' },
+    { id: 'capa_fiscalprinteradapter', nombre: 'fiscalprinteradapter', label: 'impresora fiscal', desc: 'Adaptador de impresora fiscal' },
   ];
 
   for (const c of CAPAS) {
@@ -227,10 +227,44 @@ function construir(datos) {
     if (!nodoCapa) continue;
     nodos.push({
       id: c.id,
-      label: c.nombre,
+      label: c.label || c.nombre,
       parent: 'raiz',
-      sublabel: `${contarHojas(nodoCapa)} archivos · ${c.desc}`,
+      sublabel: `${contarHojas(nodoCapa)} archivos`,
     });
+
+    // scripts: se agrupan los archivos sueltos para no ensanchar el mapa.
+    if (c.nombre === 'scripts') {
+      const sueltos = (nodoCapa.hijos || []).filter(h => h.tipo === 'file');
+      const dirs = (nodoCapa.hijos || []).filter(h => h.tipo === 'dir');
+      for (const d of dirs) {
+        nodos.push({
+          id: 'n_' + d.ruta.replace(/[^a-zA-Z0-9_-]/g, '_'),
+          label: d.nombre + '/',
+          parent: c.id,
+          sublabel: `${contarHojas(d)} archivos`,
+        });
+      }
+      if (sueltos.length) {
+        nodos.push({
+          id: 'scripts_sueltos',
+          label: 'build y verificación',
+          parent: c.id,
+          sublabel: `${sueltos.length} archivos`,
+        });
+      }
+      continue;
+    }
+
+    // configs: los tres archivos son un solo nodo de configuración de tenants.
+    if (c.nombre === 'configs') {
+      nodos.push({
+        id: 'configs_nucleo',
+        label: 'configuración de tenants',
+        parent: c.id,
+        sublabel: `${contarHojas(nodoCapa)} archivos`,
+      });
+      continue;
+    }
 
     // migrations: 61 SQL sueltos se agrupan por prefijo para no alargar el mapa.
     if (c.nombre === 'migrations') {

@@ -59,6 +59,8 @@ h2.sec .count{background:var(--panel2);border:1px solid var(--border);border-rad
 .empty .big{font-size:40px;margin-bottom:12px}
 #btn-colapsar{background:var(--panel2);border:1px solid var(--border);color:var(--txt2);border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer}
 #btn-colapsar:hover{color:var(--txt);border-color:var(--accent)}
+#btn-mapa{margin-left:auto;color:var(--accent);text-decoration:none;font-size:12px;border:1px solid var(--border);border-radius:6px;padding:6px 10px;white-space:nowrap;background:var(--panel2)}
+#btn-mapa:hover{border-color:var(--accent);color:#fff}
 .resaltado{background:#3d2e00;border-radius:3px;padding:0 2px}
 @media(max-width:800px){#arbol-panel{width:100%;position:absolute;inset:52px 0 0;z-index:5}main.con-detalles #arbol-panel{display:none}}
 </style>
@@ -70,6 +72,7 @@ h2.sec .count{background:var(--panel2);border:1px solid var(--border);border-rad
   <input id="busqueda" type="search" placeholder="Buscar archivo, función o descripción… (Ctrl+K)">
   <div id="stats"></div>
   <button id="btn-colapsar" onclick="colapsarTodo()">⇤ Colapsar todo</button>
+  <a id="btn-mapa" href="../Mapa-Proyecto/mapa-proyecto.html" target="_blank" rel="noopener">🗺️ Mapa del proyecto</a>
 </header>
 <main id="main">
   <div id="arbol-panel"><div id="arbol"></div></div>

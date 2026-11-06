@@ -1,70 +1,36 @@
 {
   "schemaVersion": 1,
-  "ok": false,
+  "ok": true,
   "command": "finalize",
-  "status": "fail",
+  "status": "pass",
   "type": "tree",
   "quality": "showcase",
   "specification": {
     "path": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\candidate.json",
-    "sha256": "5c0f16121ee8acfc417ae972d10f6efe42650c5592a8eb1c973337066e752b2a",
-    "bytes": 11089
+    "sha256": "1a691d17245aa93f32cb02abfe6fb99f09c25d3171d029639a1c86d31e83b8f3",
+    "bytes": 9721
   },
   "artifact": {
     "path": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\mapa-proyecto.html",
-    "sha256": "8eb1365d4bdf2b9328e7d3004f419890c8bbbb3a9c45c36f179129f698458451",
-    "bytes": 940794
+    "sha256": "eb3571f16bd298840992fc2e3987674b825383f4d2ec69f4a82fcbf791bfacbd",
+    "bytes": 928920
   },
   "gates": {
-    "validate": "fail",
-    "deliver": "not-run",
-    "check": "not-run",
-    "browser-check": "not-run"
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
   },
-  "failedStage": "validate",
-  "diagnostics": [
-    {
-      "code": "composition/desktop-readability",
-      "severity": "error",
-      "message": "Final artifact failed composition/desktop-readability.",
-      "subject": {
-        "check": "composition",
-        "nodeId": "raiz"
-      },
-      "evidence": {
-        "owner": {
-          "kind": "node",
-          "id": "raiz"
-        },
-        "viewportWidth": 1440,
-        "viewportHeight": 900,
-        "availableDiagramWidth": 930,
-        "budgetBasis": "legacy-930",
-        "readerContract": "declared-wide-v1",
-        "requestedTargetPx": 7.5,
-        "requestedTargetMet": false,
-        "budgetLimit": "legacy",
-        "viewBoxWidth": 2321,
-        "scale": 0.4006893580353296,
-        "text": "368 archivos· 2933funciones",
-        "detail": "context",
-        "sourceFontPx": 11,
-        "projectedFontPx": 4.407582938388626,
-        "minimumProjectedFontPx": 6
-      },
-      "supportedFixes": [
-        "Preserve the semantic text and any supplied coordinates, routes, sides, channels, and labels. Compactly reflow automatic spacing and empty corridors so the complete viewBox width is at most 1705px (current 2321px; 11px source text at 930px desktop budget). If supplied geometry fixes that width, use a renderer-supported semantic text-size setting or renderer-level fix instead. Position-only label controls cannot repair its projection."
-      ]
-    }
-  ],
+  "diagnostics": [],
   "diagnosticSummary": {
-    "total": 1,
-    "shown": 1,
+    "total": 0,
+    "shown": 0,
     "truncated": false
   },
   "evidence": {
     "receipt": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\mapa-proyecto.finalize.json",
-    "summaryReceipt": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\mapa-proyecto.finalize-summary.json"
+    "summaryReceipt": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\mapa-proyecto.finalize-summary.json",
+    "browserCheckReceipt": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\mapa-proyecto.browser-check.json"
   },
   "update": {
     "status": "current",
@@ -77,15 +43,9 @@
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 4675,
+  "durationMs": 15380,
   "browserCheck": {
     "requested": true,
-    "ran": false
-  },
-  "nextAction": {
-    "action": "edit-in-place",
-    "candidate": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\candidate.json",
-    "constraint": "Preserve unaffected semantics and geometry; apply each diagnostic's supportedFixes, or the fix its message names, and do not replace the whole candidate.",
-    "then": "finalize-once"
+    "ran": true
   }
 }

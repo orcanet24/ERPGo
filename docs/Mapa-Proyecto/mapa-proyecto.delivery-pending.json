@@ -1,8 +1,0 @@
-{
-  "schemaVersion": 1,
-  "command": "deliver",
-  "status": "pending",
-  "receiptId": "5903163d-3a93-47d5-ab74-0eda6d53844b",
-  "input": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\candidate.json",
-  "output": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\mapa-proyecto.html"
-}

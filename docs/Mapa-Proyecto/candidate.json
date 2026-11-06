@@ -25,79 +25,79 @@
       "id": "capa_interfaces",
       "label": "interfaces/web",
       "parent": "raiz",
-      "sublabel": "212 archivos · capa web (HTTP, handlers, plantillas)"
+      "sublabel": "212 archivos"
     },
     {
       "id": "mod_facturacion",
       "label": "Facturación y ventas",
       "parent": "capa_interfaces",
-      "sublabel": "46 archivos · Facturas, cotizaciones, órdenes, clientes, POS, facturación digital y fiscal"
+      "sublabel": "46 archivos"
     },
     {
       "id": "mod_inventario",
       "label": "Inventario y almacén",
       "parent": "capa_interfaces",
-      "sublabel": "13 archivos · Stock, kardex, costos, conteos cíclicos y punto de reorden"
+      "sublabel": "13 archivos"
     },
     {
       "id": "mod_compras",
       "label": "Compras y proveedores",
       "parent": "capa_interfaces",
-      "sublabel": "10 archivos · Compras, bandeja de entrada y proveedores"
+      "sublabel": "10 archivos"
     },
     {
       "id": "mod_contabilidad",
       "label": "Contabilidad y finanzas",
       "parent": "capa_interfaces",
-      "sublabel": "18 archivos · Cuentas, libros legales, períodos, bancos, cartera y moneda"
+      "sublabel": "18 archivos"
     },
     {
       "id": "mod_rrhh",
       "label": "RRHH y nómina",
       "parent": "capa_interfaces",
-      "sublabel": "8 archivos · Empleados, conceptos, permisos y nómina"
+      "sublabel": "8 archivos"
     },
     {
       "id": "mod_ia",
       "label": "Inteligencia artificial",
       "parent": "capa_interfaces",
-      "sublabel": "43 archivos · Agentes, proveedores, herramientas, esquema y gobernanza"
+      "sublabel": "43 archivos"
     },
     {
       "id": "mod_crm",
       "label": "CRM",
       "parent": "capa_interfaces",
-      "sublabel": "4 archivos · Clientes y remarketing"
+      "sublabel": "4 archivos"
     },
     {
       "id": "mod_reportes",
       "label": "Reportes y dashboard",
       "parent": "capa_interfaces",
-      "sublabel": "6 archivos · Reportes, motor, PDF y panel principal"
+      "sublabel": "6 archivos"
     },
     {
       "id": "mod_addons",
       "label": "Add-ons",
       "parent": "capa_interfaces",
-      "sublabel": "9 archivos · Registro, administración y ganchos de complementos"
+      "sublabel": "9 archivos"
     },
     {
       "id": "mod_administracion",
       "label": "Administración y seguridad",
       "parent": "capa_interfaces",
-      "sublabel": "26 archivos · Menú, permisos, usuarios, sesiones, tenants y auditoría"
+      "sublabel": "26 archivos"
     },
     {
       "id": "mod_plataforma",
       "label": "Plataforma y sistema",
       "parent": "capa_interfaces",
-      "sublabel": "29 archivos · Servidor, caché, gzip, workers, salud y arranque"
+      "sublabel": "29 archivos"
     },
     {
       "id": "capa_internal",
       "label": "internal",
       "parent": "raiz",
-      "sublabel": "27 archivos · Lógica interna, servicios y trabajadores"
+      "sublabel": "27 archivos"
     },
     {
       "id": "n_internal_digitalinvoice",
@@ -169,7 +169,7 @@
       "id": "capa_infrastructure",
       "label": "infrastructure",
       "parent": "raiz",
-      "sublabel": "15 archivos · Infraestructura y persistencia"
+      "sublabel": "15 archivos"
     },
     {
       "id": "n_infrastructure_persistence",
@@ -181,7 +181,7 @@
       "id": "capa_migrations",
       "label": "migrations",
       "parent": "raiz",
-      "sublabel": "61 archivos · Migraciones y esquemas SQL"
+      "sublabel": "61 archivos"
     },
     {
       "id": "mig_base",
@@ -205,7 +205,7 @@
       "id": "capa_cmd",
       "label": "cmd",
       "parent": "raiz",
-      "sublabel": "12 archivos · Comandos y puntos de entrada"
+      "sublabel": "12 archivos"
     },
     {
       "id": "n_cmd_diag",
@@ -241,7 +241,7 @@
       "id": "capa_addons",
       "label": "addons",
       "parent": "raiz",
-      "sublabel": "10 archivos · Complementos (add-ons) del ERP"
+      "sublabel": "10 archivos"
     },
     {
       "id": "n_addons_demo",
@@ -265,7 +265,7 @@
       "id": "capa_tools",
       "label": "tools",
       "parent": "raiz",
-      "sublabel": "5 archivos · Herramientas de desarrollo"
+      "sublabel": "5 archivos"
     },
     {
       "id": "n_tools_estress",
@@ -301,28 +301,19 @@
       "id": "capa_configs",
       "label": "configs",
       "parent": "raiz",
-      "sublabel": "3 archivos · Configuración de tenants"
+      "sublabel": "3 archivos"
     },
     {
-      "id": "n_configs_config_go",
-      "label": "config.go",
-      "parent": "capa_configs"
-    },
-    {
-      "id": "n_configs_tenantcfg_go",
-      "label": "tenantcfg.go",
-      "parent": "capa_configs"
-    },
-    {
-      "id": "n_configs_tenantcfg_test_go",
-      "label": "tenantcfg_test.go",
-      "parent": "capa_configs"
+      "id": "configs_nucleo",
+      "label": "configuración de tenants",
+      "parent": "capa_configs",
+      "sublabel": "3 archivos"
     },
     {
       "id": "capa_static",
       "label": "static",
       "parent": "raiz",
-      "sublabel": "14 archivos · Recursos estáticos (JS)"
+      "sublabel": "14 archivos"
     },
     {
       "id": "n_static_js",
@@ -334,7 +325,7 @@
       "id": "capa_scripts",
       "label": "scripts",
       "parent": "raiz",
-      "sublabel": "6 archivos · Construcción y despliegue"
+      "sublabel": "6 archivos"
     },
     {
       "id": "n_scripts_deploy",
@@ -343,25 +334,16 @@
       "sublabel": "3 archivos"
     },
     {
-      "id": "n_scripts_build_bat",
-      "label": "build.bat",
-      "parent": "capa_scripts"
-    },
-    {
-      "id": "n_scripts_build_sh",
-      "label": "build.sh",
-      "parent": "capa_scripts"
-    },
-    {
-      "id": "n_scripts_verificar_pasarela_respan_py",
-      "label": "verificar_pasarela_respan.py",
-      "parent": "capa_scripts"
+      "id": "scripts_sueltos",
+      "label": "build y verificación",
+      "parent": "capa_scripts",
+      "sublabel": "3 archivos"
     },
     {
       "id": "capa_fiscalprinteradapter",
-      "label": "fiscalprinteradapter",
+      "label": "impresora fiscal",
       "parent": "raiz",
-      "sublabel": "1 archivos · Adaptador de impresora fiscal"
+      "sublabel": "1 archivos"
     },
     {
       "id": "n_fiscalprinteradapter_adapter_go",
