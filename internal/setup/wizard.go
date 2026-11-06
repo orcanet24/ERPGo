@@ -475,7 +475,8 @@ func (w *Wizard) runMaintenance(cfg *configs.Config) error {
 	fmt.Println("  2. Crear una empresa adicional")
 	fmt.Println("  3. Activar la empresa DEMO de práctica (requiere su propia BD)")
 	fmt.Println("  4. Guardar/actualizar las credenciales de BD de una empresa")
-	fmt.Println("  5. Salir")
+	fmt.Println("  5. Restablecer la contraseña del super administrador")
+	fmt.Println("  6. Salir")
 	fmt.Println()
 
 	switch choice := w.askInput("Opción", false); choice {
@@ -487,11 +488,64 @@ func (w *Wizard) runMaintenance(cfg *configs.Config) error {
 		return w.createDemoTenant(cfg)
 	case "4":
 		return w.actualizarCredencialesEmpresa(cfg)
-	case "5", "":
+	case "5":
+		return w.restablecerSuperAdmin(cfg)
+	case "6", "":
 		return nil
 	default:
 		return fmt.Errorf("opción de mantenimiento desconocida: %q", choice)
 	}
+}
+
+// restablecerSuperAdmin es la única vía para recuperar la credencial del dueño
+// del sistema. El panel no puede hacerlo a propósito: si pudiera, cualquier
+// administrador de empresa podría quedarse con el acceso a todas. Aquí hace
+// falta estar en el servidor y ejecutar el binario, que es exactamente el nivel
+// de confianza que esa llave exige.
+func (w *Wizard) restablecerSuperAdmin(cfg *configs.Config) error {
+	master, err := w.openMasterDB(cfg)
+	if err != nil {
+		return fmt.Errorf("abriendo base maestra %q: %w", cfg.DBName, err)
+	}
+	defer master.Close()
+
+	actual, err := SuperAdminActual(master)
+	if err != nil {
+		return err
+	}
+	if actual != "" {
+		fmt.Printf("\n  Super administrador actual: %s\n", actual)
+		fmt.Println("  Se restablecerá SU contraseña (el rol es único y no se reasigna).")
+	} else {
+		fmt.Println("\n  ATENCIÓN: la instalación no tiene super administrador.")
+		fmt.Println("  Se creará la identidad que indique a continuación.")
+	}
+	fmt.Println()
+
+	usuario := ""
+	if actual == "" {
+		usuario = w.askInput("Usuario del super administrador (default: admin)", false)
+		if usuario == "" {
+			usuario = "admin"
+		}
+	}
+	clave := w.askInput("Contraseña nueva", true)
+	if strings.TrimSpace(clave) == "" {
+		return fmt.Errorf("la contraseña no puede quedar vacía")
+	}
+	repetida := w.askInput("Repita la contraseña", true)
+	if clave != repetida {
+		return fmt.Errorf("las contraseñas no coinciden; no se cambió nada")
+	}
+
+	nombre, err := RestablecerCredencialSuperAdmin(master, configuredMasterTenantCode(cfg), usuario, clave)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("\n  ✓ Credencial restablecida para %q.\n", nombre)
+	fmt.Println("    El rol de super administrador sigue siendo uno solo.")
+	fmt.Println()
+	return nil
 }
 
 func (w *Wizard) openMasterDB(cfg *configs.Config) (*sql.DB, error) {
@@ -1155,5 +1209,3 @@ func generateRandomSecret(length int) string {
 	}
 	return string(b)
 }
-
-

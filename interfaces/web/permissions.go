@@ -649,6 +649,28 @@ func (s *Server) permissionUserSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	db := s.dbFor(r)
+
+	// El rol del super administrador no se reparte desde esta pantalla: su nivel
+	// master abre todas las empresas. Se comprueba en las dos bases porque
+	// authenticateUser y el middleware resuelven el nivel en la empresa y luego en
+	// control; basta con que una lo conceda para que la puerta se abra.
+	if err := rechazarRolReservado(db, roleID); err != nil {
+		jsonError(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	if ctl := s.authDB(r); ctl != nil && ctl != db {
+		if err := rechazarRolReservado(ctl, roleID); err != nil {
+			jsonError(w, err.Error(), http.StatusForbidden)
+			return
+		}
+	}
+	// La identidad del dueño del sistema tampoco se reasigna por aquí: perdería
+	// el rol o lo compartiría, y las dos cosas rompen la regla de uno solo.
+	if ctl := s.authDB(r); ctl != nil && usuarioTieneRolSuperAdmin(ctl, userID) {
+		jsonError(w, errSuperAdminReservado.Error(), http.StatusForbidden)
+		return
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
@@ -723,13 +745,26 @@ func (s *Server) permissionRoleSave(w http.ResponseWriter, r *http.Request) {
 	roleType := r.FormValue("type")
 	level := r.FormValue("level")
 
-	validLevels := map[string]bool{"master": true, "admin": true, "manager": true, "employee": true}
+	// Master no es un nivel elegible: es el del super administrador y solo lo
+	// pone la instalación. Antes esta pantalla lo aceptaba y creaba roles master
+	// que después se podían asignar a cualquiera.
+	if strings.EqualFold(strings.TrimSpace(level), nivelSuperAdmin) {
+		jsonError(w, errSuperAdminReservado.Error(), http.StatusForbidden)
+		return
+	}
+	validLevels := map[string]bool{"admin": true, "manager": true, "employee": true}
 	if !validLevels[level] {
 		jsonError(w, "invalid level", http.StatusBadRequest)
 		return
 	}
 
 	db := s.dbFor(r)
+	if roleID != "" {
+		if err := rechazarRolReservado(db, roleID); err != nil {
+			jsonError(w, err.Error(), http.StatusForbidden)
+			return
+		}
+	}
 	if roleID == "" {
 		_, _ = db.Exec(`INSERT INTO sec_role (type, level) VALUES (?, ?)`, roleType, level)
 	} else {

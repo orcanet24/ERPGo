@@ -1,7 +1,7 @@
 {{define "content"}}
 <div class="panel panel-bd">
     <div class="panel-heading">
-        <div class="panel-title"><h4>Usuarios <a href="/user/add" class="btn btn-primary btn-sm pull-right">+ Añadir Usuario</a></h4></div>
+        <div class="panel-title"><h4>Usuarios <small>{{.CompanyName}}</small> <a href="/user/add" class="btn btn-primary btn-sm pull-right">+ Añadir Usuario</a></h4></div>
     </div>
     <div class="panel-body">
         <table class="table table-striped table-bordered" id="userTable" width="100%">
@@ -26,7 +26,8 @@ $(function () {
             { data: 'name' },
             { data: 'phone' },
             { data: 'username' },
-            { data: 'level', render: function (d) {
+            { data: 'level', render: function (d, t, fila) {
+                if (fila.super) return '<span class="label label-danger">Super Admin</span>';
                 if (d === 'admin') return '<span class="label label-primary">Admin</span>';
                 if (d === 'employee') return '<span class="label label-default">Empleado</span>';
                 return '<span class="label label-info">Usuario</span>';
@@ -35,6 +36,9 @@ $(function () {
                 return d == 1 ? '<span class="label label-success">Activo</span>' : '<span class="label label-danger">Inactivo</span>';
             }},
             { data: null, orderable: false, render: function (d) {
+                // El super administrador no se toca desde el panel: su credencial
+                // se restablece con el binario en modo --setup.
+                if (d.super) return '<span class="text-muted">Se administra en la instalación</span>';
                 return '<a class="btn btn-info btn-xs" href="/user/edit/' + d.id + '"><i class="fa fa-pencil"></i></a> ' +
                     '<button class="btn btn-danger btn-xs do-del" data-id="' + d.id + '"><i class="fa fa-trash"></i></button>';
             }}

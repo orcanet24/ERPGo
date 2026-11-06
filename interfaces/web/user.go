@@ -32,14 +32,40 @@ func (s *Server) registerUserRoutes() {
 }
 
 func (s *Server) userList(w http.ResponseWriter, r *http.Request) {
+	// La empresa activa la pone el render (CompanyName): la lista ya es SU lista,
+	// y sin el nombre a la vista el administrador no puede saber a qué empresa le
+	// está dando de alta a la gente.
 	s.render(w, r, "user_list.html", map[string]interface{}{"Title": "Usuarios"})
 }
 
+// userListData lista los usuarios de la EMPRESA ACTIVA.
+//
+// Antes listaba todos los usuarios de la base de control sin filtrar: cada
+// empresa veía las identidades de todas las demás y un usuario dado de alta en
+// una aparecía en la lista de la otra, que es el «salto» que se corrige aquí.
+//
+// La pertenencia se comprueba en tenant_users (la autoridad del login y del
+// selector de empresa) y, como compatibilidad, en user_company_access (la que
+// escribía el alta anterior). La bandera `super` marca al dueño del sistema para
+// que la plantilla no le ofrezca editar ni borrar: esa identidad no se toca desde
+// el panel.
 func (s *Server) userListData(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.authDB(r).Query(`
-		SELECT u.user_id, u.first_name, u.last_name, IFNULL(u.phone,''), ul.username, IFNULL(ul.user_type, 2), u.status
-		FROM users u JOIN user_login ul ON ul.user_id = u.user_id
-		ORDER BY u.id`)
+	empresa, err := s.empresaDeLaSesion(r)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	ctl := s.authDB(r)
+	rows, err := ctl.Query(`
+		SELECT u.user_id, u.first_name, u.last_name, IFNULL(u.phone,''), ul.username,
+		       IFNULL(ul.user_type, 2), u.status
+		FROM users u
+		JOIN user_login ul ON ul.user_id = u.user_id
+		WHERE EXISTS (SELECT 1 FROM tenant_users tu
+		              WHERE tu.tenant_code = ? AND tu.username = ul.username AND tu.status = 1)
+		   OR EXISTS (SELECT 1 FROM user_company_access uca
+		              WHERE uca.tenant_code = ? AND uca.user_id = u.user_id)
+		ORDER BY u.id`, empresa, empresa)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -61,34 +87,10 @@ func (s *Server) userListData(w http.ResponseWriter, r *http.Request) {
 		list = append(list, map[string]interface{}{
 			"id": uid, "name": strings.TrimSpace(first.String + " " + last.String),
 			"phone": phone.String, "username": username.String, "level": level, "status": status,
+			"super": usuarioTieneRolSuperAdmin(ctl, uid),
 		})
 	}
 	writeJSON(w, map[string]interface{}{"data": list})
-}
-
-// rolesParaAgentes lista los roles de seguridad para el desplegable del alta de
-// usuario agente.
-//
-// Si la tabla está vacía devuelve vacío en vez de fallar: el ERP recién instalado
-// puede no tener roles, y en ese caso lo que falla es que el alta de un agente
-// eche "necesita un rol", que ya es un mensaje claro. Un error de base de datos
-// aquí dejaría la pantalla de usuarios entera sin abrir.
-func (s *Server) rolesParaAgentes(r *http.Request) []map[string]interface{} {
-	rows, err := s.authDB(r).Query(`SELECT id, type FROM sec_role ORDER BY id`)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	var lista []map[string]interface{}
-	for rows.Next() {
-		var id int64
-		var tipo string
-		if err := rows.Scan(&id, &tipo); err != nil {
-			continue
-		}
-		lista = append(lista, map[string]interface{}{"ID": id, "Type": tipo})
-	}
-	return lista
 }
 
 // opcionesDeDepartamento es lo que necesita el formulario: el valor que se
@@ -111,15 +113,36 @@ func opcionesDeDepartamentos() []opcionDeDepartamento {
 }
 
 func (s *Server) userForm(w http.ResponseWriter, r *http.Request) {
+	// La empresa de la sesión es la que va a recibir al usuario: se muestra en el
+	// formulario para que el administrador vea DÓNDE lo está creando antes de
+	// guardar. Sin ese dato a la vista, el alta en la empresa equivocada era un
+	// error invisible hasta que el usuario intentaba entrar desde otra.
+	empresa, _ := s.empresaDeLaSesion(r)
 	data := map[string]interface{}{
 		"Title":         "Añadir Usuario",
 		"Departamentos": opcionesDeDepartamentos(),
-		"Roles":         s.rolesParaAgentes(r),
+		"Roles":         s.rolesAsignablesParaUsuario(r),
 	}
 	if id := r.PathValue("id"); id != "" {
+		ctl := s.authDB(r)
+		// El super administrador no se toca desde el panel: su credencial se
+		// restablece con el binario (--setup) y su rol no se reasigna. Dejarlo
+		// editar aquí abriría la puerta que este archivo cierra por el otro lado.
+		if usuarioTieneRolSuperAdmin(ctl, id) {
+			http.Error(w, "El super administrador no se administra desde el panel: "+
+				"su credencial se restablece con el binario en modo --setup.", http.StatusForbidden)
+			return
+		}
+		// Un administrador solo edita usuarios de SU empresa. Sin esta
+		// comprobación bastaba con cambiar el id de la URL para editar la
+		// identidad de otra empresa.
+		if empresa != "" && !usuarioEsMiembroDeEmpresa(ctl, id, empresa) {
+			http.Error(w, "Ese usuario no pertenece a la empresa activa.", http.StatusForbidden)
+			return
+		}
 		var uid, first, last, phone, username sql.NullString
 		var utype, status int
-		err := s.authDB(r).QueryRow(`
+		err := ctl.QueryRow(`
 			SELECT u.user_id, u.first_name, u.last_name, u.phone, ul.username, IFNULL(ul.user_type, 2), u.status
 			FROM users u JOIN user_login ul ON ul.user_id = u.user_id WHERE u.user_id = ?`, id).
 			Scan(&uid, &first, &last, &phone, &username, &utype, &status)
@@ -142,7 +165,7 @@ func (s *Server) userForm(w http.ResponseWriter, r *http.Request) {
 		var rolID int64
 		var dept sql.NullString
 		var cfg sql.NullString
-		if err := s.authDB(r).QueryRow(`SELECT role_id, department, IFNULL(config_prompt,'')
+		if err := ctl.QueryRow(`SELECT role_id, department, IFNULL(config_prompt,'')
 			FROM ai_agent WHERE user_id = ? ORDER BY id LIMIT 1`, id).
 			Scan(&rolID, &dept, &cfg); err == nil {
 			data["Agente"] = map[string]interface{}{
@@ -158,12 +181,45 @@ func (s *Server) userSave(w http.ResponseWriter, r *http.Request) {
 	first := strings.TrimSpace(r.FormValue("first_name"))
 	username := strings.TrimSpace(r.FormValue("username"))
 	password := r.FormValue("password")
-	id := r.FormValue("user_id")
+	id := strings.TrimSpace(r.FormValue("user_id"))
 	utype, _ := strconv.Atoi(orDefault(r.FormValue("user_type"), "2"))
 
 	if first == "" || username == "" {
 		jsonError(w, "Nombre y usuario son obligatorios", 400)
 		return
+	}
+
+	// LA EMPRESA SALE DE LA SESIÓN. Antes se preguntaba «cuál es el primer tenant
+	// activo» y ese era el destino de todo usuario nuevo: la empresa maestra o la
+	// demo, nunca la que el administrador tenía abierta. La consulta ordenada por
+	// id no puede saber en qué empresa está trabajando nadie.
+	empresa, err := s.empresaDeLaSesion(r)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusForbidden)
+		return
+	}
+
+	ctl := s.authDB(r)
+
+	// El rol se valida ANTES de abrir la transacción y contra el catálogo: id
+	// inexistente o rol reservado del super administrador se rechazan aquí, no
+	// después de haber creado la identidad.
+	rolID, err := rolElegidoParaUsuario(ctl, r.FormValue("role_id"))
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusForbidden)
+		return
+	}
+
+	if id != "" {
+		if usuarioTieneRolSuperAdmin(ctl, id) {
+			jsonError(w, "El super administrador no se edita desde el panel: "+
+				"su credencial se restablece con el binario en modo --setup.", http.StatusForbidden)
+			return
+		}
+		if !usuarioEsMiembroDeEmpresa(ctl, id, empresa) {
+			jsonError(w, "Ese usuario no pertenece a la empresa activa", http.StatusForbidden)
+			return
+		}
 	}
 
 	// Agente IA: el usuario se crea como cualquier otro, pero además puede
@@ -187,7 +243,7 @@ func (s *Server) userSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	tx, err := s.authDB(r).Begin()
+	tx, err := ctl.Begin()
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -219,7 +275,11 @@ func (s *Server) userSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		newID, _ := res.LastInsertId()
-		nuevoUID := fmt.Sprintf("%d", newID)
+		// OJO: asignación, no declaración corta. Aquí había un `nuevoUID :=`
+		// dentro del bloque, que dejaba en cero la variable de fuera: el rol
+		// terminaba llamándose con user_id vacío y el usuario nacía sin rol
+		// aunque el formulario lo trajera.
+		nuevoUID = fmt.Sprintf("%d", newID)
 		uid := nuevoUID
 		// users.user_id debe ser MISMO valor que user_login.user_id: el JOIN
 		// `ul.user_id = u.user_id` es el que alimenta la lista de usuarios y el
@@ -240,13 +300,9 @@ func (s *Server) userSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Asignar usuario a la empresa activa
-		var activeTenant string
-		_ = s.authDB(r).QueryRow("SELECT code FROM tenants WHERE status = 1 ORDER BY id LIMIT 1").Scan(&activeTenant)
-		if activeTenant == "" {
-			activeTenant = "default"
-		}
-		if _, err := tx.Exec(`INSERT IGNORE INTO user_company_access (user_id, tenant_code, role_id) VALUES (?, ?, 2)`, uid, activeTenant); err != nil {
+		// Pertenece a la empresa donde se está creando, y solo a esa. La
+		// identidad es global; la pertenencia no.
+		if err := vincularUsuarioAEmpresaTx(tx, uid, username, empresa, rolID); err != nil {
 			jsonError(w, err.Error(), 500)
 			return
 		}
@@ -300,7 +356,7 @@ func (s *Server) userSave(w http.ResponseWriter, r *http.Request) {
 	if uid == "" {
 		uid = nuevoUID
 	}
-	if err := s.asignarRolUsuarioTx(tx, uid, strings.TrimSpace(r.FormValue("role_id"))); err != nil {
+	if err := s.asignarRolUsuarioTx(tx, uid, rolID); err != nil {
 		jsonError(w, "no se pudo asignar el rol: "+err.Error(), 500)
 		return
 	}
@@ -350,16 +406,12 @@ func (s *Server) rolActualDeUsuario(r *http.Request, userID string) int64 {
 // El id se calcula a mano porque la tabla NO declara AUTO_INCREMENT en todas
 // las conversiones del esquema (SQLite solo tiene UNIQUE), y un INSERT sin id
 // revienta allí con NOT NULL (es el mismo motivo que documenta ai_agents.go).
-// roleID vacío NO borra el rol: significa «no lo toques». Borrarlo cuando el
+// roleID 0 NO borra el rol: significa «no lo toques». Borrarlo cuando el
 // formulario no trae el campo convertiría a un usuario delegado en alguien sin
 // permisos por el simple hecho de editarle el teléfono.
-func (s *Server) asignarRolUsuarioTx(tx *sql.Tx, userID, roleID string) error {
-	if strings.TrimSpace(roleID) == "" || userID == "" {
+func (s *Server) asignarRolUsuarioTx(tx *sql.Tx, userID string, roleID int64) error {
+	if roleID <= 0 || strings.TrimSpace(userID) == "" {
 		return nil
-	}
-	id, err := strconv.ParseInt(roleID, 10, 64)
-	if err != nil || id <= 0 {
-		return fmt.Errorf("rol inválido: %q", roleID)
 	}
 	if _, err := tx.Exec(`DELETE FROM sec_userrole WHERE user_id = ?`, userID); err != nil {
 		return err
@@ -368,11 +420,23 @@ func (s *Server) asignarRolUsuarioTx(tx *sql.Tx, userID, roleID string) error {
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(id),0)+1 FROM sec_userrole`).Scan(&siguiente); err != nil {
 		siguiente = 1
 	}
-	_, err = tx.Exec(`INSERT INTO sec_userrole (id, user_id, roleid, createby, createdate)
-		VALUES (?,?,?,?,?)`, siguiente, userID, id, "system", now())
+	_, err := tx.Exec(`INSERT INTO sec_userrole (id, user_id, roleid, createby, createdate)
+		VALUES (?,?,?,?,?)`, siguiente, userID, roleID, "system", now())
 	return err
 }
 
+// userDelete quita un usuario de la empresa activa.
+//
+// Distingue dos casos a propósito:
+//
+//   - el usuario pertenece a otras empresas: se le quita SOLO esta. Borrar la
+//     identidad global le quitaría el acceso a las demás y eso es exactamente el
+//     salto entre empresas que no debe pasar;
+//   - era su última empresa: se elimina la identidad (credencial y usuario), que
+//     es lo que el administrador espera cuando dice «eliminar».
+//
+// En los dos casos se comprueba antes que el usuario sea de esta empresa y que no
+// sea el super administrador: esa identidad solo se toca desde la instalación.
 func (s *Server) userDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	sess := s.sessionFromRequest(r)
@@ -380,21 +444,78 @@ func (s *Server) userDelete(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "No puede eliminar su propio usuario", 400)
 		return
 	}
-	// keep at least one admin
-	var admins int
-	_ = s.authDB(r).QueryRow(`SELECT COUNT(*) FROM user_login WHERE user_type=1 AND status=1`).Scan(&admins)
-	var utype int
-	_ = s.authDB(r).QueryRow(`SELECT user_type FROM user_login WHERE user_id=?`, id).Scan(&utype)
-	if utype == 1 && admins <= 1 {
-		jsonError(w, "Debe existir al menos un administrador", 400)
+	empresa, err := s.empresaDeLaSesion(r)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusForbidden)
 		return
 	}
-	tx, err := s.authDB(r).Begin()
+	ctl := s.authDB(r)
+	if usuarioTieneRolSuperAdmin(ctl, id) {
+		jsonError(w, "El super administrador no se elimina desde el panel: "+
+			"se administra con el binario en modo --setup.", http.StatusForbidden)
+		return
+	}
+	if !usuarioEsMiembroDeEmpresa(ctl, id, empresa) {
+		jsonError(w, "Ese usuario no pertenece a la empresa activa", http.StatusForbidden)
+		return
+	}
+
+	var username string
+	var utype int
+	if err := ctl.QueryRow(`SELECT IFNULL(username,''), IFNULL(user_type, 2) FROM user_login WHERE user_id = ?`,
+		id).Scan(&username, &utype); err != nil {
+		jsonError(w, "Usuario no encontrado", 404)
+		return
+	}
+
+	// La empresa no puede quedarse sin administrador. Se cuentan los de ESTA
+	// empresa (antes se contaba el total del sistema, que no dice nada de ella).
+	if utype == 1 {
+		var otros int
+		_ = ctl.QueryRow(`SELECT COUNT(*)
+			FROM user_login ul
+			JOIN tenant_users tu ON tu.username = ul.username AND tu.tenant_code = ?
+			WHERE ul.user_type = 1 AND ul.status = 1 AND ul.user_id <> ?`, empresa, id).Scan(&otros)
+		if otros == 0 {
+			jsonError(w, "Debe existir al menos un administrador en la empresa", 400)
+			return
+		}
+	}
+
+	// Se leen las empresas ANTES de abrir la transacción: consultar el mismo
+	// handle con una transacción abierta espera una conexión libre y, con un
+	// pool de una sola (las pruebas y las instalaciones SQLite), se queda
+	// esperando para siempre.
+	empresas := empresasDelUsuario(ctl, id)
+
+	tx, err := ctl.Begin()
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	if err := desvincularUsuarioDeEmpresaTx(tx, id, username, empresa); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if len(empresas) > 1 {
+		if err := tx.Commit(); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		writeJSON(w, map[string]interface{}{
+			"status": 1,
+			"msg":    "Se le quitó el acceso a esta empresa; sigue perteneciendo a " + strings.Join(otrasEmpresas(empresas, empresa), ", "),
+		})
+		return
+	}
+
+	// Última empresa: se borra la identidad completa, incluido su rol.
+	if _, err := tx.Exec(`DELETE FROM sec_userrole WHERE user_id = ?`, id); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
 	_, _ = tx.Exec(`DELETE FROM user_login WHERE user_id=?`, id)
 	res, err := tx.Exec(`DELETE FROM users WHERE user_id=?`, id)
 	if err != nil {
@@ -405,8 +526,23 @@ func (s *Server) userDelete(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "Usuario no encontrado", 404)
 		return
 	}
-	_ = tx.Commit()
+	if err := tx.Commit(); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Eliminado", "redirect": saveRedirect(r, "/user/list")})
+}
+
+// otrasEmpresas devuelve las empresas de la lista menos la que se acaba de
+// quitar. Se usa solo para el mensaje: «sigue perteneciendo a X, Y».
+func otrasEmpresas(empresas []string, quitada string) []string {
+	out := make([]string, 0, len(empresas))
+	for _, code := range empresas {
+		if code != quitada {
+			out = append(out, code)
+		}
+	}
+	return out
 }
 
 func (s *Server) userProfile(w http.ResponseWriter, r *http.Request) {
@@ -521,11 +657,17 @@ func (s *Server) roleList(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "role_list.html", map[string]interface{}{"Title": "Roles"})
 }
 
+// roleListData lista el catálogo de roles y marca el reservado.
+//
+// El rol del super administrador se sigue mostrando —existe y hay que poder
+// verlo— pero con la marca `reservado` para que la pantalla no ofrezca editarlo,
+// borrarlo ni cambiarle la matriz. La lista de roles es del sistema, no de una
+// empresa: vive en la base de control, la misma que usa el login.
 func (s *Server) roleListData(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.authDB(r).Query(`
-		SELECT r.id, r.type, r.level, COUNT(ur.id) AS users
+		SELECT r.id, r.type, IFNULL(r.level,''), IFNULL(r.is_system,0), COUNT(ur.id) AS users
 		FROM sec_role r LEFT JOIN sec_userrole ur ON ur.roleid = r.id
-		GROUP BY r.id, r.type, r.level`)
+		GROUP BY r.id, r.type, r.level, r.is_system`)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -533,10 +675,13 @@ func (s *Server) roleListData(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	list := []map[string]interface{}{}
 	for rows.Next() {
-		var id, users int
+		var id, users, sistema int
 		var typ, level string
-		_ = rows.Scan(&id, &typ, &level, &users)
-		list = append(list, map[string]interface{}{"id": id, "type": typ, "level": level, "users": users})
+		_ = rows.Scan(&id, &typ, &level, &sistema, &users)
+		list = append(list, map[string]interface{}{
+			"id": id, "type": typ, "level": level, "users": users,
+			"system": sistema == 1, "reservado": esRolReservado(level),
+		})
 	}
 	writeJSON(w, list)
 }
@@ -551,18 +696,35 @@ func (s *Server) roleSave(w http.ResponseWriter, r *http.Request) {
 	if level == "" {
 		level = "employee"
 	}
-	validLevels := map[string]bool{"master": true, "admin": true, "manager": true, "employee": true}
+	// El nivel master no se crea ni se edita desde el panel: es el del super
+	// administrador y solo lo pone la instalación. Antes bastaba con elegirlo en
+	// este desplegable para fabricar un segundo dueño del sistema.
+	if strings.EqualFold(level, nivelSuperAdmin) {
+		jsonError(w, errSuperAdminReservado.Error(), http.StatusForbidden)
+		return
+	}
+	validLevels := map[string]bool{"admin": true, "manager": true, "employee": true}
 	if !validLevels[level] {
 		level = "employee"
 	}
-	id := r.FormValue("id")
-	if id == "" {
-		if _, err := s.authDB(r).Exec(`INSERT INTO sec_role (type, level) VALUES (?, ?)`, typ, level); err != nil {
+	id := strings.TrimSpace(r.FormValue("id"))
+	if id != "" {
+		var nivelActual string
+		if err := s.authDB(r).QueryRow(`SELECT IFNULL(level,'') FROM sec_role WHERE id = ?`, id).
+			Scan(&nivelActual); err != nil {
+			jsonError(w, "Rol no encontrado", 404)
+			return
+		}
+		if esRolReservado(nivelActual) {
+			jsonError(w, errSuperAdminReservado.Error(), http.StatusForbidden)
+			return
+		}
+		if _, err := s.authDB(r).Exec(`UPDATE sec_role SET type=?, level=? WHERE id=?`, typ, level, id); err != nil {
 			jsonError(w, err.Error(), 500)
 			return
 		}
 	} else {
-		if _, err := s.authDB(r).Exec(`UPDATE sec_role SET type=?, level=? WHERE id=?`, typ, level, id); err != nil {
+		if _, err := s.authDB(r).Exec(`INSERT INTO sec_role (type, level) VALUES (?, ?)`, typ, level); err != nil {
 			jsonError(w, err.Error(), 500)
 			return
 		}
@@ -577,6 +739,12 @@ func (s *Server) rolePermissionsForm(w http.ResponseWriter, r *http.Request) {
 	var typ, level string
 	if err := s.authDB(r).QueryRow(`SELECT type, level FROM sec_role WHERE id=?`, id).Scan(&typ, &level); err != nil {
 		http.Error(w, "Rol no encontrado", 404)
+		return
+	}
+	// El rol del super administrador no tiene matriz que editar: su nivel master
+	// ya concede todo y tocarlo solo puede quitarle algo al dueño del sistema.
+	if esRolReservado(level) {
+		http.Error(w, errSuperAdminReservado.Error(), http.StatusForbidden)
 		return
 	}
 
@@ -631,6 +799,15 @@ func (s *Server) rolePermissionsForm(w http.ResponseWriter, r *http.Request) {
 // usuarios asociados (sec_userrole) — eso dejaría a esos usuarios sin nivel.
 func (s *Server) roleDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// El rol reservado no se borra ni teniendo cero usuarios: sin él, el nivel
+	// master del dueño del sistema dejaría de resolverse.
+	var nivel string
+	if err := s.authDB(r).QueryRow(`SELECT IFNULL(level,'') FROM sec_role WHERE id = ?`, id).Scan(&nivel); err == nil {
+		if esRolReservado(nivel) {
+			jsonError(w, errSuperAdminReservado.Error(), http.StatusForbidden)
+			return
+		}
+	}
 	var userCount int
 	if err := s.authDB(r).QueryRow(`SELECT COUNT(*) FROM sec_userrole WHERE roleid = ?`, id).Scan(&userCount); err != nil {
 		jsonError(w, err.Error(), 500)
@@ -663,6 +840,10 @@ func (s *Server) rolePermissionsSave(w http.ResponseWriter, r *http.Request) {
 	roleID := r.FormValue("role_id")
 	if roleID == "" {
 		jsonError(w, "Rol inválido", 400)
+		return
+	}
+	if err := rechazarRolReservado(s.authDB(r), roleID); err != nil {
+		jsonError(w, err.Error(), http.StatusForbidden)
 		return
 	}
 	r.ParseMultipartForm(32 << 20)

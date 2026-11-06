@@ -4,6 +4,17 @@
         <div class="panel-title"><h4>{{.Title}}</h4></div>
     </div>
     <div class="panel-body">
+        {{/* La empresa se dice ANTES de guardar: el usuario se crea en la empresa
+             activa y no en otra, y sin este dato el alta en el sitio equivocado
+             solo se descubría cuando la persona intentaba entrar. */}}
+        <div class="alert alert-info">
+            <i class="fa fa-building"></i>
+            {{if .U}}
+            Este usuario pertenece a <strong>{{.CompanyName}}</strong>. Para darle acceso a otra empresa, cambie de empresa y gestiónelo allí.
+            {{else}}
+            El usuario se creará en <strong>{{.CompanyName}}</strong>, la empresa con la que está trabajando ahora.
+            {{end}}
+        </div>
         <form id="userForm" style="max-width:600px">
             <input type="hidden" name="user_id" value="{{if .U}}{{.U.ID}}{{end}}">
             <div class="row">

@@ -229,6 +229,16 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 		log.Printf("AVISO: no se pudo preparar el tenant maestro: %v", err)
 	}
 	s.EnsureDefaultTenant()
+
+	// El super administrador es UNA sola identidad y su rol no se reparte desde
+	// el panel (ver super_admin.go). Se comprueba en cada arranque porque el
+	// estado pudo quedar mal con datos heredados: la pantalla de roles permitía
+	// asignarlo y la de usuarios ofrecía ese rol en el desplegable. Si no hay
+	// ninguno, aquí NO se crea —una clave que nadie eligió volvería a repartir la
+	// llave del sistema—: se avisa y se restablece con el binario en modo --setup.
+	if err := s.asegurarSuperAdminUnico(); err != nil {
+		log.Printf("AVISO: no se pudo comprobar el super administrador: %v", err)
+	}
 	// La empresa de práctica (DEMO) se auto-provisiona y queda SIEMPRE
 	// disponible para cualquier usuario. El admin puede desactivarla con
 	// POST /guia/demo-marcar (code=demo, demo=0).

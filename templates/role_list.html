@@ -29,7 +29,8 @@
                     <div class="form-group">
                         <label>Nivel *</label>
                         <select class="form-control" name="level" id="role_level">
-                            <option value="master">Master</option>
+                            {{/* El nivel master es del super administrador y solo lo pone
+                                 la instalación: no es una opción elegible aquí. */}}
                             <option value="admin">Admin</option>
                             <option value="manager">Manager</option>
                             <option value="employee" selected>Employee</option>
@@ -75,9 +76,16 @@ $(function () {
         columns: [
             { data: 'id' },
             { data: 'type' },
-            { data: 'level' },
+            { data: 'level', render: function (d, t, fila) {
+                if (fila.reservado) return '<span class="label label-danger">master</span> <span class="label label-default">del sistema</span>';
+                if (fila.system) return d + ' <span class="label label-default">del sistema</span>';
+                return d;
+            }},
             { data: 'users', className: 'text-right' },
             { data: null, orderable: false, render: function (d) {
+                // El rol del super administrador no se edita, no se borra y no
+                // tiene matriz: su nivel master ya concede todo.
+                if (d.reservado) return '<span class="text-muted">Reservado a la instalación</span>';
                 return '<a class="btn btn-primary btn-xs" href="/role/permissions/' + d.id + '"><i class="fa fa-key"></i> Permisos</a> ' +
                        '<button class="btn btn-warning btn-xs" onclick="editRole(' + d.id + ', \'' + d.type + '\', \'' + d.level + '\')"><i class="fa fa-edit"></i> Editar</button> ' +
                        '<button class="btn btn-danger btn-xs" onclick="deleteRole(' + d.id + ', \'' + d.type + '\')"><i class="fa fa-trash"></i> Borrar</button>';
