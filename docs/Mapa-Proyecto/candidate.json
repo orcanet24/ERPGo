@@ -103,19 +103,19 @@
       "id": "n_internal_digitalinvoice",
       "label": "digitalinvoice/",
       "parent": "capa_internal",
-      "sublabel": "1 archivos"
+      "sublabel": "1 archivo"
     },
     {
       "id": "n_internal_logger",
       "label": "logger/",
       "parent": "capa_internal",
-      "sublabel": "1 archivos"
+      "sublabel": "1 archivo"
     },
     {
       "id": "n_internal_migrationcheck",
       "label": "migrationcheck/",
       "parent": "capa_internal",
-      "sublabel": "1 archivos"
+      "sublabel": "1 archivo"
     },
     {
       "id": "n_internal_orchestrator",
@@ -139,7 +139,7 @@
       "id": "n_internal_security",
       "label": "security/",
       "parent": "capa_internal",
-      "sublabel": "1 archivos"
+      "sublabel": "1 archivo"
     },
     {
       "id": "n_internal_service",
@@ -157,7 +157,7 @@
       "id": "n_internal_upload",
       "label": "upload/",
       "parent": "capa_internal",
-      "sublabel": "1 archivos"
+      "sublabel": "1 archivo"
     },
     {
       "id": "n_internal_webcheck",
@@ -199,7 +199,13 @@
       "id": "mig_ampliaciones",
       "label": "Ampliaciones z",
       "parent": "capa_migrations",
-      "sublabel": "43 archivos SQL"
+      "sublabel": "41 archivos SQL"
+    },
+    {
+      "id": "mig_ajustes",
+      "label": "Ajustes finales",
+      "parent": "capa_migrations",
+      "sublabel": "2 archivos SQL"
     },
     {
       "id": "capa_cmd",
@@ -211,7 +217,7 @@
       "id": "n_cmd_diag",
       "label": "diag/",
       "parent": "capa_cmd",
-      "sublabel": "1 archivos"
+      "sublabel": "1 archivo"
     },
     {
       "id": "n_cmd_docgen",
@@ -223,13 +229,13 @@
       "id": "n_cmd_genhash",
       "label": "genhash/",
       "parent": "capa_cmd",
-      "sublabel": "1 archivos"
+      "sublabel": "1 archivo"
     },
     {
       "id": "n_cmd_semillar",
       "label": "semillar/",
       "parent": "capa_cmd",
-      "sublabel": "1 archivos"
+      "sublabel": "1 archivo"
     },
     {
       "id": "n_cmd_server",
@@ -271,31 +277,31 @@
       "id": "n_tools_estress",
       "label": "estress/",
       "parent": "capa_tools",
-      "sublabel": "1 archivos"
+      "sublabel": "1 archivo"
     },
     {
       "id": "n_tools_firmar",
       "label": "firmar/",
       "parent": "capa_tools",
-      "sublabel": "1 archivos"
+      "sublabel": "1 archivo"
     },
     {
       "id": "n_tools_firmaraddon",
       "label": "firmaraddon/",
       "parent": "capa_tools",
-      "sublabel": "1 archivos"
+      "sublabel": "1 archivo"
     },
     {
       "id": "n_tools_limpiar",
       "label": "limpiar/",
       "parent": "capa_tools",
-      "sublabel": "1 archivos"
+      "sublabel": "1 archivo"
     },
     {
       "id": "n_tools_loadtest",
       "label": "loadtest/",
       "parent": "capa_tools",
-      "sublabel": "1 archivos"
+      "sublabel": "1 archivo"
     },
     {
       "id": "capa_configs",
@@ -343,7 +349,7 @@
       "id": "capa_fiscalprinteradapter",
       "label": "impresora fiscal",
       "parent": "raiz",
-      "sublabel": "1 archivos"
+      "sublabel": "1 archivo"
     },
     {
       "id": "n_fiscalprinteradapter_adapter_go",
