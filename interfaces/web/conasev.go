@@ -180,6 +180,12 @@ type SeedCOAResult struct {
 	Inserted   int      // cuentas agregadas
 	Skipped    int      // cuentas que ya existían
 	Collisions []string // códigos que CONASEV y el plan anterior definen distinto
+
+	// Después de cargar un plan hay que volver a atar los papeles contables del
+	// sistema (inventario, gastos, IVA) a las cuentas del plan nuevo. Si el
+	// catálogo no trae un equivalente, el papel queda pendiente y se informa.
+	CuentasAsignadas  []string
+	CuentasPendientes []string
 }
 
 // SeedCONASEV carga el plan de cuentas CONASEV en acc_coa.

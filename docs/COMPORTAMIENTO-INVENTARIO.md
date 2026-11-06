@@ -7,9 +7,9 @@ corresponde. No hay una sola ruta "compra → inventario":
 
 | Tipo de ítem | `item_type` | Mueve stock | Cuenta al comprar | Almacén |
 |---|---|---|---|---|
-| Producto de venta | `venta` | Sí | Inventario de mercancía (1020401) | Almacén de venta |
-| Consumo interno | `consumo` | Sí | Inventario de suministros (1020403) | Almacén de consumo |
-| Servicio / gasto | `servicio` | **No** | Cuenta de gasto del renglón (4021401…) | — |
+| Producto de venta | `venta` | Sí | Papel «Inventario de mercancía» (estándar 1020401) | Almacén de venta |
+| Consumo interno | `consumo` | Sí | Papel «Inventario de suministros» (estándar 1020403) | Almacén de consumo |
+| Servicio / gasto | `servicio` | **No** | Cuenta de gasto del renglón (estándar 4021401) | — |
 
 - **Una compra tiene varios destinos.** Cada renglón elige tipo, almacén y —si es
   servicio— la cuenta de gasto. El documento sigue siendo uno solo para el Libro
@@ -23,6 +23,13 @@ corresponde. No hay una sola ruta "compra → inventario":
 - **Multi-almacén**: los almacenes se administran en `/warehouse` y se clasifican
   en venta o consumo. Los renglones de un tipo no pueden entrar al almacén del
   otro.
+- **Las cuentas las decide la empresa.** Cada papel contable (inventarios, gasto
+  de suministros, gasto de servicios, IVA crédito fiscal, costo de ventas...) se
+  ata a una cuenta del plan en **Configuración → Cuentas por defecto**
+  (`/settings/accounts`). Los códigos entre paréntesis son solo el estándar de
+  referencia: si el plan de la empresa usa otra numeración, se cambia ahí.
+  Sin cuenta asignada, la operación se detiene con un mensaje que dice cuál
+  papel falta; no se asienta «donde caiga».
 
 El resto de este documento describe los modos de descuento, que siguen vigentes.
 

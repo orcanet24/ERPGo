@@ -79,10 +79,24 @@ INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `
   WHERE NOT EXISTS (SELECT 1 FROM `acc_coa` WHERE `HeadCode` = 4021402);
 
 -- Asignación de las cuentas nuevas a la configuración de la empresa.
-UPDATE `acc_predefine_account` SET `supplies_inventory_code` = 1020403 WHERE IFNULL(`supplies_inventory_code`, 0) = 0;
-UPDATE `acc_predefine_account` SET `supplies_expense_code` = 4021402 WHERE IFNULL(`supplies_expense_code`, 0) = 0;
-UPDATE `acc_predefine_account` SET `service_expense_code` = 4021401 WHERE IFNULL(`service_expense_code`, 0) = 0;
-UPDATE `acc_predefine_account` SET `purchase_vat_code` = 1020901 WHERE IFNULL(`purchase_vat_code`, 0) = 0;
+--
+-- El código solo se asigna si la cuenta EXISTE en el plan con la naturaleza que
+-- el papel necesita (activo para inventarios e IVA crédito, gasto para los
+-- gastos). Así, una empresa que ya usa el código 1020403 para otra cosa no queda
+-- apuntando a una cuenta equivocada: el papel queda sin asignar y se elige en
+-- Configuración → Cuentas por defecto.
+UPDATE `acc_predefine_account` SET `supplies_inventory_code` = 1020403
+ WHERE IFNULL(`supplies_inventory_code`, 0) = 0
+   AND EXISTS (SELECT 1 FROM `acc_coa` WHERE `HeadCode` = 1020403 AND `HeadType` = 'A' AND `IsActive` = 1 AND `IsTransaction` = 1);
+UPDATE `acc_predefine_account` SET `supplies_expense_code` = 4021402
+ WHERE IFNULL(`supplies_expense_code`, 0) = 0
+   AND EXISTS (SELECT 1 FROM `acc_coa` WHERE `HeadCode` = 4021402 AND `HeadType` = 'E' AND `IsActive` = 1 AND `IsTransaction` = 1);
+UPDATE `acc_predefine_account` SET `service_expense_code` = 4021401
+ WHERE IFNULL(`service_expense_code`, 0) = 0
+   AND EXISTS (SELECT 1 FROM `acc_coa` WHERE `HeadCode` = 4021401 AND `HeadType` = 'E' AND `IsActive` = 1 AND `IsTransaction` = 1);
+UPDATE `acc_predefine_account` SET `purchase_vat_code` = 1020901
+ WHERE IFNULL(`purchase_vat_code`, 0) = 0
+   AND EXISTS (SELECT 1 FROM `acc_coa` WHERE `HeadCode` = 1020901 AND `HeadType` = 'A' AND `IsActive` = 1 AND `IsTransaction` = 1);
 
 -- 8. Consumo interno ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `internal_consumption` (

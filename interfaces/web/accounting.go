@@ -335,23 +335,18 @@ type PredefineAccount struct {
 func (p *PredefineAccount) CuentaInventarioMercancia() int64 { return p.InventoryCode }
 
 // CuentaInventarioSuministros: el inventario de lo que se consume dentro de la
-// empresa (papelería, limpieza). Si la empresa no la configuró, cae al
-// inventario general para no romper una base vieja, pero el asiento de compras
-// de consumo queda separado en cuanto la cuenta exista.
+// empresa (papelería, limpieza). NO cae al inventario de mercancía: mezclar los
+// dos es el defecto que esta separación corrige, y un respaldo silencioso lo
+// reintroduciría sin que nadie lo note. Si falta, la operación se detiene con un
+// mensaje que manda a Configuración → Cuentas por defecto.
 func (p *PredefineAccount) CuentaInventarioSuministros() int64 {
-	if p.SuppliesInventoryCode > 0 {
-		return p.SuppliesInventoryCode
-	}
-	return p.InventoryCode
+	return p.SuppliesInventoryCode
 }
 
 // CuentaGastoSuministros: gasto por consumo de suministros (no es costo de
-// ventas: la papelería no se vende).
+// ventas: la papelería no se vende). Tampoco cae al costo de ventas.
 func (p *PredefineAccount) CuentaGastoSuministros() int64 {
-	if p.SuppliesExpenseCode > 0 {
-		return p.SuppliesExpenseCode
-	}
-	return p.COGSCode
+	return p.SuppliesExpenseCode
 }
 
 // CuentaGastoServicio: gasto por servicios recibidos (luz, agua, internet).
@@ -362,11 +357,11 @@ func (p *PredefineAccount) CuentaGastoServicio() int64 { return p.ServiceExpense
 // CuentaIvaCompras: IVA crédito fiscal de las compras. Antes el IVA se sumaba
 // al inventario (el asiento debitaba el total del documento contra la cuenta de
 // inventario); con la cuenta separada el IVA queda donde corresponde.
+//
+// No cae a la cuenta de IVA por pagar: un crédito fiscal no es un pasivo, y
+// asentarlo ahí descuadra la declaración.
 func (p *PredefineAccount) CuentaIvaCompras() int64 {
-	if p.PurchaseVatCode > 0 {
-		return p.PurchaseVatCode
-	}
-	return p.VatCode
+	return p.PurchaseVatCode
 }
 
 func (s *Server) predefineAccount(r *http.Request) (*PredefineAccount, error) {

@@ -22,6 +22,7 @@ mismo error se propagaba al inventario, al costo y a la contabilidad.
 | El módulo de servicios usaba una cuenta de ingreso | `accounting.go` (`ServiceCode` → 3010401) | Un gasto se registraba como ingreso, con el signo económico invertido |
 | El POS consultaba una tabla inexistente | `internal/pos/sync_server.go` (`product_inventory_config`) | La consulta fallaba en silencio y **los servicios descontaban stock** en el POS |
 | No había pantalla de almacenes ni de consumo interno | — | No se podía configurar la separación aunque la tabla `warehouse` existiera |
+| Las cuentas no se podían atar al plan del comercio | `accounting.go` y `acc_predefine_account`, sin pantalla | Al cambiar de plan, los asientos seguían apuntando a códigos que ya significaban otra cosa (o no existían) |
 
 La causa de fondo era una sola: **el destino del renglón no era un dato**. Se
 decidía “por documento” o, directamente, no se decidía. Este trabajo convierte el
@@ -119,6 +120,47 @@ Las cuentas nuevas se siembran en `acc_coa` y se enlazan en
 existe todavía, cae a un valor seguro) y métodos que **no** caen a la cuenta de
 ingreso: un gasto nunca se asienta contra 3010401.
 
+### 2.5. Las cuentas se atan al plan del comercio, no a un código fijo
+
+Una separación contable solo sirve si cada papel se asienta en la cuenta que la
+empresa realmente usa. El sistema pide las cuentas **por papel**, no por código:
+
+| Papel | Dónde se usa |
+|---|---|
+| Inventario de mercancía para la venta | Entrada de renglones de venta |
+| Costo de ventas | Salida de mercancía, faltantes de inventario |
+| Inventario de suministros y consumibles | Entrada de consumo y consumo interno |
+| Gasto por consumo de suministros | Contrapartida del consumo interno |
+| Gasto por servicios recibidos | Valor por defecto del renglón de servicio |
+| IVA crédito fiscal (compras) | IVA de todas las compras |
+| Caja, banco, clientes, proveedores, ventas, IVA por pagar, impuestos, sueldos | Operación general |
+
+Cada papel se guarda en `acc_predefine_account` y se administra en
+**Configuración → Cuentas por defecto** (`/settings/accounts`), donde el contador
+elige cualquier cuenta de detalle del plan de la empresa. Reglas:
+
+- la cuenta debe existir, estar activa, admitir movimientos y ser de la
+  naturaleza del papel (activo para inventarios e IVA crédito, gasto para
+  gastos, ingreso para ventas). Así se impide el defecto original: un gasto
+  contra una cuenta de ingreso;
+- **no hay respaldos silenciosos**: si un papel no tiene cuenta, la compra o el
+  consumo se detienen con un mensaje que dice cuál papel falta y dónde
+  asignarlo. Antes caía al inventario general o al costo de ventas y el error
+  pasaba inadvertido;
+- **«Vincular al plan estándar»** solo ata los papeles de la separación
+  (inventarios, gastos de suministros/servicios e IVA crédito). Exige tres
+  cosas: que el código exista, que su naturaleza sirva y que su **nombre**
+  corresponda al papel. Así, si el plan nuevo usa el código 4010101 para otra
+  cosa, no se ata «Costo de ventas» a ciegas;
+- los papeles generales (caja, banco, ventas, clientes, proveedores) **no se
+  tocan automáticamente**: la empresa los configuró antes y reemplazarlos por
+  código sería adivinar. Si dejaron de ser válidos, se marcan y se corrigen en
+  la pantalla;
+- al cargar el catálogo CONASEV, el sistema **revalida** todos los papeles y
+  re-ata los de la separación cuando encuentra equivalente seguro; el resto
+  queda pendiente y se informa en la pantalla y en el catálogo, en vez de seguir
+  apuntando a un código que ahora significa otra cosa.
+
 ---
 
 ## 3. Consumo interno: el módulo que faltaba
@@ -181,6 +223,9 @@ exactamente el número que distorsionaba el margen.
 | `interfaces/web/purchase_renglones.go` | Interpreta los renglones del formulario, valida tipo contra catálogo, concepto de servicio, cuenta de gasto y reparte importes al centavo |
 | `interfaces/web/consumo_interno.go` | Módulo de consumo interno (lista, alta, detalle, baja) con su asiento |
 | `interfaces/web/almacen.go` | CRUD de almacenes, tipo, predeterminado por tipo, protección de borrado, datos para formularios |
+| `interfaces/web/cuentas_rol.go` | Papeles contables, validación por naturaleza, guardado del mapa, vínculo con el plan estándar y detección de papeles pendientes |
+| `interfaces/web/cuentas_rol_test.go` | Pruebas del mapa: rechazo de cuentas de ingreso como gasto, cuentas de grupo, re-vínculo que respeta lo propio y limpia lo inexistente |
+| `templates/settings_accounts.html` | Pantalla Configuración → Cuentas por defecto |
 | `interfaces/web/items_almacen_test.go` | Pruebas del núcleo: normalización, destino, cuentas sin caer a ingreso, respaldo de almacén, reparto al centavo, stock por almacén, devolución a proveedor |
 | `templates/warehouse_list.html`, `warehouse_form.html` | Pantalla de almacenes |
 | `templates/consumption_list.html`, `consumption_form.html`, `consumption_details.html` | Pantalla de consumo interno |
@@ -191,7 +236,12 @@ exactamente el número que distorsionaba el margen.
 
 | Archivo | Cambio y motivo |
 |---|---|
-| `interfaces/web/accounting.go` | Cuentas nuevas y helpers que no caen a la cuenta de ingreso |
+| `interfaces/web/accounting.go` | Cuentas nuevas y helpers que no caen a la cuenta de ingreso ni al IVA por pagar |
+| `interfaces/web/coa_catalog.go` | Al cargar un plan, revalida y re-ata los papeles contables al catálogo nuevo |
+| `interfaces/web/coa_catalog_handlers.go` | Informa papeles pendientes y resultado del re-vínculo |
+| `interfaces/web/conasev.go` | El resultado del sembrado incluye qué papeles se asignaron y cuáles quedaron pendientes |
+| `templates/setting.html` | Acceso a la pantalla de cuentas por defecto desde Configuración |
+| `templates/coa_catalog.html` | Aviso de papeles sin cuenta válida después de cambiar de plan |
 | `interfaces/web/purchase.go` | `purchaseSave` valida destinos, asienta por renglón con IVA aparte, guarda tipo/almacén/cuenta/concepto y mueve stock solo si corresponde; el borrado limpia movimientos; formulario y detalle muestran el destino |
 | `interfaces/web/inventory_stock.go` | Stock desde `stock_movement`, por almacén, sin servicios; reservas compatibles |
 | `interfaces/web/invoice.go` | Almacén de salida por documento, bloqueo de consumo interno, sin stock/COGS en servicios |
@@ -239,8 +289,12 @@ sola al arrancar, después de todas las demás; es idempotente).
 2. **Detalle de compra**: `item_type`, `coa_id`, `warehouse_id`, `concept`.
 3. **Almacenes**: `warehouse.kind`; se crea `WH-CONSUMO`; `WH-MAIN` queda como
    almacén de venta por defecto si no hay otro.
-4. **Cuentas**: se crean 1020403, 1020901, 4021401 y 4021402 en `acc_coa`; se
-   enlazan en `acc_predefine_account` sin pisar una configuración existente.
+4. **Cuentas**: se crean 1020403, 1020901, 4021401 y 4021402 en `acc_coa` como
+   punto de partida. El enlace en `acc_predefine_account` solo se hace si la
+   cuenta existe con la naturaleza del papel (activo para inventarios e IVA
+   crédito, gasto para los gastos) y no pisa una configuración existente. Si el
+   plan de la empresa usa otra numeración, los papeles se atan desde
+   Configuración → Cuentas por defecto.
 5. **`stock_movement.movement_type`**: de ENUM a `VARCHAR(30)` para admitir
    `consumo`, `transfer_in`, `transfer_out`; índices por almacén y por tipo/fecha.
 6. **Consumo interno**: tablas `internal_consumption` e
@@ -300,8 +354,11 @@ SELECT product_id, warehouse_id,
    `consumo` la papelería/limpieza. Los ítems existentes quedan como `venta`.
 3. Crear los almacenes de cada sucursal (`/warehouse`) y elegir el predeterminado
    de venta y de consumo.
-4. Revisar las cuentas en Configuración → cuentas predefinidas: inventario de
-   suministros, gasto de suministros, gasto de servicios e IVA de compras.
+4. Abrir Configuración → Cuentas por defecto y confirmar que cada papel esté
+   atado a una cuenta del plan de la empresa (inventario de mercancía,
+   inventario de suministros, gasto de suministros, gasto de servicios, IVA
+   crédito fiscal). Si el plan es propio, asígnelas ahí; si usa el estándar,
+   «Vincular al plan estándar» lo hace sin crear cuentas.
 5. Cargar una compra de prueba con los tres tipos y comprobar: kárdex por almacén,
    reporte de existencias filtrado y los asientos del período.
 6. Registrar un consumo interno de prueba y verificar que baja el almacén de
@@ -324,7 +381,10 @@ Con Go 1.27.3 en `$HOME/sdk/go/bin`:
 Las pruebas unitarias cubren las reglas que deciden dinero y stock
 (`items_almacen_test.go`): normalización de tipos, destino por renglón, que una
 cuenta de ingreso no se acepte como gasto, respaldo de almacén por tipo, reparto
-al centavo y stock por almacén.
+al centavo y stock por almacén. `cuentas_rol_test.go` cubre el mapa contable:
+rechazo de cuentas de ingreso en papeles de gasto, cuentas de grupo, cuentas
+inactivas e inexistentes, y que el vínculo con el plan estándar respete lo ya
+configurado, complete lo que falta y no invente cuentas.
 
 ---
 
@@ -346,6 +406,10 @@ al centavo y stock por almacén.
   recalcular `acc_monthly_balance`; es el mismo comportamiento que ya tenían los
   borrados del ERP. Si el período está cerrado, el borrado debe rechazarse (lo
   hace `exigirPeriodoAbierto`).
+- **La pantalla de cuentas no crea cuentas**: si el plan no tiene una cuenta de
+  inventario de suministros, el contador debe crearla en el árbol de cuentas y
+  luego asignarla. Es deliberado: escribir cuentas en el plan de un comercio sin
+  su decisión es lo que este cambio evita.
 - **El reparto del crédito entre cuentas de destino** es proporcional al importe
   de cada renglón. El total por cuenta es correcto y la partida cierra al centavo,
   pero el detalle “cuánto de caja pagó cada renglón” es una asignación analítica,

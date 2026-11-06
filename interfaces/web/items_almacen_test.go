@@ -117,18 +117,20 @@ func TestServicioSinCuentaDeGastoNoSeAsienta(t *testing.T) {
 	}
 }
 
-func TestRespaldoDeCuentasNuevas(t *testing.T) {
-	// Base anterior a la migración: sin cuentas nuevas. El sistema no puede
-	// romperse ni volver a usar la cuenta de ingreso para un gasto.
+func TestCuentasNuevasSinRespaldoSilencioso(t *testing.T) {
+	// Papel sin cuenta asignada: se devuelve 0 para que la operación se detenga
+	// con un mensaje que manda a Configuración → Cuentas por defecto. Caer al
+	// inventario general, al costo de ventas o al IVA por pagar reintroduciría
+	// exactamente la mezcla que esta separación corrige.
 	pre := &PredefineAccount{InventoryCode: 1020401, COGSCode: 4010101, VatCode: 1020801, ServiceCode: 3010401}
-	if got := pre.CuentaInventarioSuministros(); got != 1020401 {
-		t.Errorf("sin cuenta propia, suministros cae al inventario general: %d", got)
+	if got := pre.CuentaInventarioSuministros(); got != 0 {
+		t.Errorf("suministros no puede caer al inventario de mercancía: %d", got)
 	}
-	if got := pre.CuentaGastoSuministros(); got != 4010101 {
-		t.Errorf("sin cuenta propia, el gasto de suministros cae al costo de ventas: %d", got)
+	if got := pre.CuentaGastoSuministros(); got != 0 {
+		t.Errorf("el gasto de suministros no puede caer al costo de ventas: %d", got)
 	}
-	if got := pre.CuentaIvaCompras(); got != 1020801 {
-		t.Errorf("sin cuenta propia, el IVA de compras cae a la de ventas: %d", got)
+	if got := pre.CuentaIvaCompras(); got != 0 {
+		t.Errorf("el IVA de compras no puede caer al IVA por pagar: %d", got)
 	}
 	if got := pre.CuentaGastoServicio(); got != 0 {
 		t.Errorf("un gasto de servicio NUNCA debe caer a la cuenta de ingreso; se obtuvo %d", got)

@@ -428,6 +428,13 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 	// proveedor si quedó a crédito. Cada pata del crédito se reparte entre los
 	// mismos destinos para que la partida doble cierre al centavo.
 	ivaTotal := parseMoney(r.FormValue("total_vat_amnt"))
+	// El IVA va a su propia cuenta y esa cuenta la decide la empresa. Si no está
+	// configurada no se asienta «donde caiga»: se detiene y se dice dónde
+	// arreglarlo.
+	if ivaTotal > 0 && pre.CuentaIvaCompras() == 0 {
+		jsonError(w, "La compra tiene IVA y no hay cuenta de IVA crédito fiscal asignada. Asígnela en Configuración → Cuentas por defecto (papel «IVA crédito fiscal (compras)»).", 400)
+		return
+	}
 	baseTotal := round2(grandTotal - ivaTotal)
 	if baseTotal < 0 {
 		baseTotal = 0

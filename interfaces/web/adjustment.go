@@ -279,6 +279,30 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Cuentas del asiento: salen del mapa de papeles de la empresa. Un ajuste no
+	// puede asentarse contra una cuenta que no esté asignada en su plan.
+	type cuentaRequerida struct {
+		Codigo int64
+		Papel  string
+	}
+	requeridas := []cuentaRequerida{}
+	if prodAdd > 0 || prodRemove > 0 {
+		requeridas = append(requeridas,
+			cuentaRequerida{pre.CuentaInventarioMercancia(), "Inventario de mercancía para la venta"},
+			cuentaRequerida{pre.COGSCode, "Costo de ventas"})
+	}
+	if consAdd > 0 || consRemove > 0 {
+		requeridas = append(requeridas,
+			cuentaRequerida{pre.CuentaInventarioSuministros(), "Inventario de suministros y consumibles"},
+			cuentaRequerida{pre.CuentaGastoSuministros(), "Gasto por consumo de suministros"})
+	}
+	for _, c := range requeridas {
+		if c.Codigo == 0 {
+			jsonError(w, fmt.Sprintf("El ajuste necesita la cuenta «%s». Asígnela en Configuración → Cuentas por defecto.", c.Papel), 400)
+			return
+		}
+	}
+
 	// Mercancía de venta: el sobrante vuelve del costo de ventas y el faltante
 	// se carga al costo de ventas (es la merma del inventario comercial).
 	if prodAdd > 0 {

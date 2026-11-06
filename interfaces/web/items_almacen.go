@@ -248,7 +248,7 @@ func destinoDeRenglonCompra(pre *PredefineAccount, tipoItem, almacen string, cue
 			d.Cuenta = pre.CuentaGastoServicio()
 		}
 		if d.Cuenta == 0 {
-			return d, fmt.Errorf("no hay cuenta de gasto para el servicio: elíjala en el renglón o configure la cuenta de gasto de servicios")
+			return d, fmt.Errorf("no hay cuenta de gasto para el servicio: elíjala en el renglón o asígnela en Configuración → Cuentas por defecto (papel «Gasto por servicios recibidos»)")
 		}
 		d.Almacen = ""
 		return d, nil
@@ -264,7 +264,11 @@ func destinoDeRenglonCompra(pre *PredefineAccount, tipoItem, almacen string, cue
 		}
 	}
 	if d.Cuenta == 0 {
-		return d, fmt.Errorf("no hay cuenta de inventario configurada para %s", etiquetaTipoItem(tipo))
+		papel := "Inventario de mercancía para la venta"
+		if tipo == ItemConsumo {
+			papel = "Inventario de suministros y consumibles"
+		}
+		return d, fmt.Errorf("no hay cuenta para %s: asígnela en Configuración → Cuentas por defecto (papel «%s»)", etiquetaTipoItem(tipo), papel)
 	}
 	return d, nil
 }

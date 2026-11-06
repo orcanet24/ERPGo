@@ -122,8 +122,18 @@ func (s *Server) consumoSave(w http.ResponseWriter, r *http.Request) {
 	if coa == 0 {
 		coa = pre.CuentaGastoSuministros()
 	}
+	if coa == 0 {
+		jsonError(w, "No hay cuenta de gasto por consumo de suministros asignada. Elíjala en el documento o asígnela en Configuración → Cuentas por defecto (papel «Gasto por consumo de suministros»).", 400)
+		return
+	}
 	if err := s.cuentaDeGastoValida(r, coa); err != nil {
 		jsonError(w, "Cuenta de gasto del consumo: "+err.Error(), 400)
+		return
+	}
+	// El consumo acredita el inventario de suministros: si ese papel no está
+	// atado al plan de la empresa, no se puede valorizar la salida.
+	if pre.CuentaInventarioSuministros() == 0 {
+		jsonError(w, "No hay cuenta de inventario de suministros asignada. Asígnela en Configuración → Cuentas por defecto (papel «Inventario de suministros y consumibles»).", 400)
 		return
 	}
 
