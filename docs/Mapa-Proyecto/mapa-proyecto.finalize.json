@@ -5,16 +5,16 @@
   "status": "pass",
   "type": "tree",
   "quality": "showcase",
-  "startedAt": "2026-11-06T16:10:11.734Z",
+  "startedAt": "2026-11-06T16:33:38.635Z",
   "specification": {
     "path": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\candidate.json",
-    "sha256": "1a691d17245aa93f32cb02abfe6fb99f09c25d3171d029639a1c86d31e83b8f3",
-    "bytes": 9721
+    "sha256": "0bb2b8899d6da206844297cfc778c50df4c1456e9267e2249843e6d604b36303",
+    "bytes": 9851
   },
   "artifact": {
     "path": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\mapa-proyecto.html",
-    "sha256": "eb3571f16bd298840992fc2e3987674b825383f4d2ec69f4a82fcbf791bfacbd",
-    "bytes": 928920
+    "sha256": "6815d2b7360a8cc2d9874e05ca64e3a61e37f1b07bdfb184a22b7115547a25d3",
+    "bytes": 930518
   },
   "stages": {
     "validate": {
@@ -38,8 +38,8 @@
         "ok": true,
         "command": "validate",
         "specification": {
-          "sha256": "1a691d17245aa93f32cb02abfe6fb99f09c25d3171d029639a1c86d31e83b8f3",
-          "bytes": 9721
+          "sha256": "0bb2b8899d6da206844297cfc778c50df4c1456e9267e2249843e6d604b36303",
+          "bytes": 9851
         },
         "validation": {
           "checksPassed": 9,
@@ -54,7 +54,7 @@
     "deliver": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 1623,
+      "durationMs": 3734,
       "command": [
         "C:\\Program Files\\nodejs\\node.exe",
         "C:\\Users\\orcanet24\\.agents\\skills\\archify\\bin\\archify.mjs",
@@ -68,19 +68,19 @@
       ],
       "receipt": {
         "schemaVersion": 1,
-        "receiptId": "917b9c39-e71d-4e1a-be10-62b0cff540bb",
+        "receiptId": "14223aa7-d373-48e4-b006-64e1057ab14b",
         "ok": true,
         "command": "deliver",
         "type": "tree",
         "input": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\candidate.json",
         "output": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\mapa-proyecto.html",
         "specification": {
-          "sha256": "1a691d17245aa93f32cb02abfe6fb99f09c25d3171d029639a1c86d31e83b8f3",
-          "bytes": 9721
+          "sha256": "0bb2b8899d6da206844297cfc778c50df4c1456e9267e2249843e6d604b36303",
+          "bytes": 9851
         },
         "artifact": {
-          "sha256": "eb3571f16bd298840992fc2e3987674b825383f4d2ec69f4a82fcbf791bfacbd",
-          "bytes": 928920
+          "sha256": "6815d2b7360a8cc2d9874e05ca64e3a61e37f1b07bdfb184a22b7115547a25d3",
+          "bytes": 930518
         },
         "validation": {
           "checksPassed": 9,
@@ -106,7 +106,7 @@
     "check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 578,
+      "durationMs": 1886,
       "command": [
         "C:\\Program Files\\nodejs\\node.exe",
         "C:\\Users\\orcanet24\\.agents\\skills\\archify\\bin\\archify.mjs",
@@ -118,8 +118,8 @@
         "ok": true,
         "file": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\mapa-proyecto.html",
         "artifact": {
-          "sha256": "eb3571f16bd298840992fc2e3987674b825383f4d2ec69f4a82fcbf791bfacbd",
-          "bytes": 928920
+          "sha256": "6815d2b7360a8cc2d9874e05ca64e3a61e37f1b07bdfb184a22b7115547a25d3",
+          "bytes": 930518
         },
         "checks": [
           {
@@ -236,18 +236,18 @@
             },
             "minimumSourceTextPx": 11,
             "minimumProjectedTextPx": 6.711695376246601,
-            "semanticTextCount": 113
+            "semanticTextCount": 115
           },
           "issues": []
         },
         "provenance": "current",
-        "deliveryReceiptId": "917b9c39-e71d-4e1a-be10-62b0cff540bb"
+        "deliveryReceiptId": "14223aa7-d373-48e4-b006-64e1057ab14b"
       }
     },
     "browser-check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 11686,
+      "durationMs": 29231,
       "command": [
         "C:\\Program Files\\nodejs\\node.exe",
         "C:\\Users\\orcanet24\\.agents\\skills\\archify\\bin\\archify.mjs",
@@ -265,11 +265,11 @@
         "status": "pass",
         "visualReview": "not-requested",
         "provenance": "current",
-        "deliveryReceiptId": "917b9c39-e71d-4e1a-be10-62b0cff540bb",
+        "deliveryReceiptId": "14223aa7-d373-48e4-b006-64e1057ab14b",
         "artifact": {
           "path": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\mapa-proyecto.html",
-          "sha256": "eb3571f16bd298840992fc2e3987674b825383f4d2ec69f4a82fcbf791bfacbd",
-          "bytes": 928920
+          "sha256": "6815d2b7360a8cc2d9874e05ca64e3a61e37f1b07bdfb184a22b7115547a25d3",
+          "bytes": 930518
         },
         "state": {
           "detail": "read",
@@ -967,8 +967,8 @@
     "browserCheckReceipt": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\mapa-proyecto.browser-check.json"
   },
   "visualReview": "not-requested",
-  "finishedAt": "2026-11-06T16:10:27.115Z",
-  "durationMs": 15380,
+  "finishedAt": "2026-11-06T16:34:17.869Z",
+  "durationMs": 39233,
   "update": {
     "status": "current",
     "installedVersion": "3.2.0",

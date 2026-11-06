@@ -42,6 +42,11 @@ function archivosDe(nodo, out = []) {
   return out;
 }
 
+// "1 archivo" / "N archivos"
+function plural(n) {
+  return n === 1 ? '1 archivo' : `${n} archivos`;
+}
+
 // ----------------------------------------------------- módulos de negocio (web)
 // Reglas evaluadas en orden; la primera coincidencia asigna el módulo.
 const MODULOS_WEB = [
@@ -183,7 +188,7 @@ function construir(datos) {
     id: 'capa_interfaces',
     label: 'interfaces/web',
     parent: 'raiz',
-    sublabel: `${contarHojas(web)} archivos`,
+    sublabel: plural(contarHojas(web)),
   });
 
   const sinClasificar = [];
@@ -204,7 +209,7 @@ function construir(datos) {
       id: 'mod_' + m.id,
       label: m.nombre,
       parent: 'capa_interfaces',
-      sublabel: `${porModulo[m.id]} archivos`,
+      sublabel: plural(porModulo[m.id]),
     });
   }
 
@@ -229,7 +234,7 @@ function construir(datos) {
       id: c.id,
       label: c.label || c.nombre,
       parent: 'raiz',
-      sublabel: `${contarHojas(nodoCapa)} archivos`,
+      sublabel: plural(contarHojas(nodoCapa)),
     });
 
     // scripts: se agrupan los archivos sueltos para no ensanchar el mapa.
@@ -241,7 +246,7 @@ function construir(datos) {
           id: 'n_' + d.ruta.replace(/[^a-zA-Z0-9_-]/g, '_'),
           label: d.nombre + '/',
           parent: c.id,
-          sublabel: `${contarHojas(d)} archivos`,
+          sublabel: plural(contarHojas(d)),
         });
       }
       if (sueltos.length) {
@@ -249,7 +254,7 @@ function construir(datos) {
           id: 'scripts_sueltos',
           label: 'build y verificación',
           parent: c.id,
-          sublabel: `${sueltos.length} archivos`,
+          sublabel: plural(sueltos.length),
         });
       }
       continue;
@@ -261,7 +266,7 @@ function construir(datos) {
         id: 'configs_nucleo',
         label: 'configuración de tenants',
         parent: c.id,
-        sublabel: `${contarHojas(nodoCapa)} archivos`,
+        sublabel: plural(contarHojas(nodoCapa)),
       });
       continue;
     }
@@ -271,7 +276,7 @@ function construir(datos) {
       const GRUPOS = [
         { id: 'mig_base', nombre: 'Esquema base', match: /^schema(_[a-z]+)?\.sql$|^schema_menu_|^schema_ve_|^schema_zz_vendor/ },
         { id: 'mig_reconstruido', nombre: 'Reconstrucción por módulos', match: /^schema_reconstruido_/ },
-        { id: 'mig_ampliaciones', nombre: 'Ampliaciones z', match: /^schema_z/ },
+        { id: 'mig_ampliaciones', nombre: 'Ampliaciones z', match: /^schema_z_/ },
         { id: 'mig_ajustes', nombre: 'Ajustes finales', match: /^schema_zz/ },
       ];
       const porGrupo = {};
@@ -291,7 +296,7 @@ function construir(datos) {
           id: g.id,
           label: g.nombre,
           parent: c.id,
-          sublabel: `${porGrupo[g.id]} archivos SQL`,
+          sublabel: `${plural(porGrupo[g.id])} SQL`,
         });
       }
       continue;
@@ -306,7 +311,7 @@ function construir(datos) {
           id: 'n_' + h.ruta.replace(/[^a-zA-Z0-9_-]/g, '_'),
           label: h.nombre + '/',
           parent: c.id,
-          sublabel: `${contarHojas(h)} archivos`,
+          sublabel: plural(contarHojas(h)),
         });
       }
     }

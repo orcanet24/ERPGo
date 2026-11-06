@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
-  "receiptId": "917b9c39-e71d-4e1a-be10-62b0cff540bb",
+  "receiptId": "14223aa7-d373-48e4-b006-64e1057ab14b",
   "status": "current",
   "command": "deliver",
   "type": "tree",
   "input": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\candidate.json",
   "output": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\mapa-proyecto.html",
   "specification": {
-    "sha256": "1a691d17245aa93f32cb02abfe6fb99f09c25d3171d029639a1c86d31e83b8f3",
-    "bytes": 9721
+    "sha256": "0bb2b8899d6da206844297cfc778c50df4c1456e9267e2249843e6d604b36303",
+    "bytes": 9851
   },
   "artifact": {
-    "sha256": "eb3571f16bd298840992fc2e3987674b825383f4d2ec69f4a82fcbf791bfacbd",
-    "bytes": 928920
+    "sha256": "6815d2b7360a8cc2d9874e05ca64e3a61e37f1b07bdfb184a22b7115547a25d3",
+    "bytes": 930518
   }
 }

@@ -6,11 +6,11 @@
   "status": "pass",
   "visualReview": "not-requested",
   "provenance": "current",
-  "deliveryReceiptId": "917b9c39-e71d-4e1a-be10-62b0cff540bb",
+  "deliveryReceiptId": "14223aa7-d373-48e4-b006-64e1057ab14b",
   "artifact": {
     "path": "C:\\Proyectos\\GO\\ERPGo\\docs\\Mapa-Proyecto\\mapa-proyecto.html",
-    "sha256": "eb3571f16bd298840992fc2e3987674b825383f4d2ec69f4a82fcbf791bfacbd",
-    "bytes": 928920
+    "sha256": "6815d2b7360a8cc2d9874e05ca64e3a61e37f1b07bdfb184a22b7115547a25d3",
+    "bytes": 930518
   },
   "state": {
     "detail": "read",
