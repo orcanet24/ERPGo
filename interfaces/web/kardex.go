@@ -52,6 +52,7 @@ type kardexMovement struct {
 	QtyOut       float64 `json:"qty_out"`
 	CostOut      float64 `json:"cost_out"`
 	TotalOut     float64 `json:"total_out"`
+	Almacen      string  `json:"warehouse"`
 	QtyBalance   float64 `json:"qty_balance"`
 	AvgCost      float64 `json:"avg_cost"`
 	TotalBalance float64 `json:"total_balance"`
@@ -84,178 +85,78 @@ func kardexRango(r *http.Request) (from, to string) {
 // repetía su propia copia del cálculo y las tres diferían; un libro fiscal no
 // puede tener tres respuestas distintas para la misma pregunta.
 func (s *Server) kardexMovements(r *http.Request, pid, from, to string) ([]kardexMovement, error) {
-	db := s.dbFor(r)
+	// UNA SOLA FUENTE: `stock_movement`.
+	//
+	// Antes el libro mezclaba compras leídas de `product_purchase_details`,
+	// ventas de `stock_movement`, devoluciones de `product_return` y ajustes de
+	// `store_adjustment`: cuatro fuentes que podían no coincidir entre sí. Y la
+	// consulta de "venta de servicio" leía una columna que no existía
+	// (`product_information.product_type`), fallaba y se saltaba en silencio.
+	//
+	// Ahora todo movimiento de inventario se escribe en stock_movement con su
+	// almacén. El libro se arma de ahí: si algo no está en el libro, es porque
+	// no movió inventario. Un servicio, por definición, no aparece.
+	rows, err := s.dbFor(r).Query(`
+		SELECT date, movement_type, IFNULL(reference_no,''), quantity, IFNULL(unit_cost,0),
+			IFNULL(warehouse_id,'')
+		FROM stock_movement
+		WHERE product_id = ? AND date BETWEEN ? AND ? AND IFNULL(is_posted,1) = 1
+		ORDER BY date ASC, id ASC`, pid, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
 	var moves []kardexMovement
-
-	// ---------- ENTRADAS ----------
-
-	// Compras.
-	rows, err := db.Query(`
-		SELECT pp.purchase_date, ppd.quantity, ppd.rate, ppd.total_amount, pp.chalan_no
-		FROM product_purchase_details ppd
-		JOIN product_purchase pp ON pp.purchase_id = ppd.purchase_id
-		WHERE ppd.product_id = ? AND pp.purchase_date BETWEEN ? AND ?
-		ORDER BY pp.purchase_date ASC, pp.id ASC`, pid, from, to)
-	if err != nil {
-		return nil, err
-	}
 	for rows.Next() {
-		var d, doc sql.NullString
-		var qty, rate, total float64
-		_ = rows.Scan(&d, &qty, &rate, &total, &doc)
-		moves = append(moves, kardexMovement{
-			Date: d.String, Concept: "Compra", DocType: "FACTURA_COMPRA",
-			DocNumber: doc.String, QtyIn: qty, CostIn: rate, TotalIn: total,
-		})
-	}
-	rows.Close()
-
-	// Devoluciones de venta: el cliente devuelve mercancía, vuelve al almacén.
-	// `product_return` guarda la devolución de venta con invoice_id y la de
-	// compra con purchase_id; es lo único que las distingue.
-	rows, err = db.Query(`
-		SELECT pr.date_return, pr.ret_qty, pr.product_rate, pr.total_ret_amount, pr.return_id
-		FROM product_return pr
-		WHERE pr.product_id = ? AND pr.date_return BETWEEN ? AND ?
-		  AND pr.invoice_id IS NOT NULL AND pr.invoice_id <> ''
-		ORDER BY pr.date_return ASC`, pid, from, to)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var d, doc sql.NullString
-		var qty, rate, total float64
-		_ = rows.Scan(&d, &qty, &rate, &total, &doc)
-		moves = append(moves, kardexMovement{
-			Date: d.String, Concept: "Devolución venta", DocType: "DEVOLUCION_VENTA",
-			DocNumber: doc.String, QtyIn: qty, CostIn: rate, TotalIn: total,
-		})
-	}
-	rows.Close()
-
-	// Ajustes que suman (sobrantes, correcciones al alza).
-	rows, err = db.Query(`
-		SELECT a.date, d.quantity, a.adjustment_no, IFNULL(a.reference,'')
-		FROM store_adjustment_details d
-		JOIN store_adjustment a ON a.adjustment_no = d.adjustment_no
-		WHERE d.product_id = ? AND d.type = 'add' AND a.date BETWEEN ? AND ?
-		ORDER BY a.date ASC, d.id ASC`, pid, from, to)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var d sql.NullTime
-		var doc, ref sql.NullString
-		var qty float64
-		_ = rows.Scan(&d, &qty, &doc, &ref)
-		moves = append(moves, kardexMovement{
-			Date: d.Time.Format("2006-01-02"), Concept: "Ajuste (+)", DocType: "AJUSTE_SOBRANTE",
-			DocNumber: doc.String, QtyIn: qty, valorarAlCPP: true,
-		})
-	}
-	rows.Close()
-
-	// ---------- SALIDAS ----------
-
-	// Ventas. Se excluyen borradores y anuladas: una factura anulada no sacó
-	// mercancía del almacén y no puede figurar en el libro. Con la nueva
-	// arquitectura de inventario, las salidas se leen de stock_movement.
-	rows, err = db.Query(`
-		SELECT sm.date, sm.quantity, sm.unit_cost, sm.quantity * sm.unit_cost, sm.reference_no
-		FROM stock_movement sm
-		WHERE sm.product_id = ? AND sm.movement_type = 'sale' AND sm.date BETWEEN ? AND ?
-		ORDER BY sm.date ASC, sm.id ASC`, pid, from, to)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var d, doc sql.NullString
-		var qty, rate, total float64
-		_ = rows.Scan(&d, &qty, &rate, &total, &doc)
-		moves = append(moves, kardexMovement{
-			Date: d.String, Concept: "Venta", DocType: "FACTURA_VENTA",
-			DocNumber: doc.String, QtyOut: qty, TotalOut: total,
-		})
-	}
-	rows.Close()
-
-	// Servicios: No mueven stock, pero generan ingreso contable.
-	// Se muestran en el kardex como "Venta Servicio" para reflejar
-	// balances contables armónicos (ingreso sin salida de inventario).
-	rows, err = db.Query(`
-		SELECT i.date, i.total_amount, i.invoice
-		FROM invoice i
-		JOIN invoice_details id ON id.invoice_id = i.invoice_id
-		JOIN product_information pi ON pi.product_id = id.product_id
-		LEFT JOIN product_inventory_config pic ON pic.product_id = pi.product_id
-		WHERE i.date BETWEEN ? AND ?
-		  AND (pic.product_type = 'service' OR pic.product_id IS NULL AND pi.product_type = 'service')
-		GROUP BY i.id
-		ORDER BY i.date ASC, i.id ASC`, from, to)
-	if err == nil {
-		for rows.Next() {
-			var d sql.NullString
-			var total float64
-			var invNo sql.NullString
-			_ = rows.Scan(&d, &total, &invNo)
-			moves = append(moves, kardexMovement{
-				Date: d.String, Concept: "Venta Servicio", DocType: "FACTURA_SERVICIO",
-				DocNumber: invNo.String, QtyIn: 0, TotalIn: total,
-			})
+		var fecha, tipo, doc, almacen sql.NullString
+		var qty, costo float64
+		if err := rows.Scan(&fecha, &tipo, &doc, &qty, &costo, &almacen); err != nil {
+			continue
 		}
-		rows.Close()
+		m := kardexMovement{Date: fecha.String, DocNumber: doc.String, Almacen: almacen.String}
+		switch tipo.String {
+		case "purchase":
+			m.Concept, m.DocType = "Compra", "FACTURA_COMPRA"
+			m.QtyIn, m.CostIn = qty, costo
+			m.TotalIn = round2(qty * costo)
+		case "return_customer":
+			m.Concept, m.DocType = "Devolución venta", "DEVOLUCION_VENTA"
+			m.QtyIn, m.CostIn = qty, costo
+			m.TotalIn = round2(qty * costo)
+		case "adjustment_add", "transfer_in":
+			if tipo.String == "transfer_in" {
+				m.Concept, m.DocType = "Transferencia entrada", "TRANSFERENCIA"
+			} else {
+				m.Concept, m.DocType = "Ajuste (+)", "AJUSTE_SOBRANTE"
+			}
+			m.QtyIn = qty
+			// Un ajuste que suma no trae costo propio: entra al promedio vigente.
+			m.valorarAlCPP = true
+		case "sale":
+			m.Concept, m.DocType = "Venta", "FACTURA_VENTA"
+			m.QtyOut = qty
+		case "delivery":
+			m.Concept, m.DocType = "Despacho", "DESPACHO"
+			m.QtyOut = qty
+		case "adjustment_remove":
+			m.Concept, m.DocType = "Ajuste (-)", "AJUSTE_FALTANTE"
+			m.QtyOut = qty
+		case "return_supplier":
+			m.Concept, m.DocType = "Devolución compra", "DEVOLUCION_COMPRA"
+			m.QtyOut = qty
+		case "consumo":
+			m.Concept, m.DocType = "Consumo interno", "CONSUMO_INTERNO"
+			m.QtyOut = qty
+		case "transfer_out":
+			m.Concept, m.DocType = "Transferencia salida", "TRANSFERENCIA"
+			m.QtyOut = qty
+		default:
+			continue
+		}
+		moves = append(moves, m)
 	}
 
-	// Devoluciones de compra: se devuelve mercancía al proveedor.
-	rows, err = db.Query(`
-		SELECT pr.date_return, pr.ret_qty, pr.product_rate, pr.total_ret_amount, pr.return_id
-		FROM product_return pr
-		WHERE pr.product_id = ? AND pr.date_return BETWEEN ? AND ?
-		  AND (pr.invoice_id IS NULL OR pr.invoice_id = '')
-		  AND pr.purchase_id IS NOT NULL AND pr.purchase_id <> ''
-		ORDER BY pr.date_return ASC`, pid, from, to)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var d, doc sql.NullString
-		var qty, rate, total float64
-		_ = rows.Scan(&d, &qty, &rate, &total, &doc)
-		moves = append(moves, kardexMovement{
-			Date: d.String, Concept: "Devolución compra", DocType: "DEVOLUCION_COMPRA",
-			DocNumber: doc.String, QtyOut: qty, TotalOut: total,
-		})
-	}
-	rows.Close()
-
-	// Ajustes que restan (faltantes, mermas, daños).
-	rows, err = db.Query(`
-		SELECT a.date, d.quantity, a.adjustment_no, IFNULL(a.reference,'')
-		FROM store_adjustment_details d
-		JOIN store_adjustment a ON a.adjustment_no = d.adjustment_no
-		WHERE d.product_id = ? AND d.type = 'remove' AND a.date BETWEEN ? AND ?
-		ORDER BY a.date ASC, d.id ASC`, pid, from, to)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var d sql.NullTime
-		var doc, ref sql.NullString
-		var qty float64
-		_ = rows.Scan(&d, &qty, &doc, &ref)
-		moves = append(moves, kardexMovement{
-			Date: d.Time.Format("2006-01-02"), Concept: "Ajuste (-)", DocType: "AJUSTE_FALTANTE",
-			DocNumber: doc.String, QtyOut: qty,
-		})
-	}
-	rows.Close()
-
-	// ---------- Orden cronológico ----------
-	//
-	// Las consultas vienen ordenadas cada una por su cuenta, pero el libro es
-	// la mezcla de todas. Sin ordenar, las compras quedaban todas antes que las
-	// ventas y el saldo corrido salía mal (llegaba a negativo sin motivo).
-	//
 	// A igual fecha, las entradas van primero: es el orden en que la mercancía
 	// se movió de verdad y evita que una salida consuma stock que aún no había
 	// entrado ese mismo día.
@@ -270,9 +171,7 @@ func (s *Server) kardexMovements(r *http.Request, pid, from, to string) ([]karde
 	var qty, total float64
 	for i := range moves {
 		m := &moves[i]
-
 		if m.QtyIn > 0 {
-			// Ajuste sin costo propio: entra valorizado al promedio vigente.
 			if m.valorarAlCPP {
 				if qty > 0 {
 					m.CostIn = total / qty
@@ -284,8 +183,6 @@ func (s *Server) kardexMovements(r *http.Request, pid, from, to string) ([]karde
 			qty += m.QtyIn
 			total += m.TotalIn
 		} else if m.QtyOut > 0 {
-			// La salida se valoriza al CPP vigente (no al precio de venta): el
-			// libro es de costo, no de ingreso.
 			if qty > 0 {
 				m.CostOut = total / qty
 			} else {
@@ -295,20 +192,14 @@ func (s *Server) kardexMovements(r *http.Request, pid, from, to string) ([]karde
 			qty -= m.QtyOut
 			total -= m.TotalOut
 		}
-
 		m.QtyBalance = qty
 		m.TotalBalance = total
-		// El "Costo Prom." de la columna SALDO es el CPP vigente después del
-		// movimiento. Antes se asignaba la CANTIDAD a este campo en la rama de
-		// salida (m.AvgCost = qtyBalance), así que el libro mostraba como costo
-		// promedio el número de unidades.
 		if qty > 0 {
 			m.AvgCost = total / qty
 		} else {
 			m.AvgCost = 0
 		}
 	}
-
 	return moves, nil
 }
 
@@ -343,14 +234,21 @@ func (s *Server) kardex(w http.ResponseWriter, r *http.Request) {
 
 // kardexShow renderiza el libro completo de un producto.
 func (s *Server) kardexShow(w http.ResponseWriter, r *http.Request, pid, from, to string) {
-	var pname, pmodel, punit sql.NullString
-	_ = s.dbFor(r).QueryRow(`SELECT product_name, IFNULL(product_model,''), IFNULL(unit,'') FROM product_information WHERE product_id = ?`, pid).
-		Scan(&pname, &pmodel, &punit)
+	var pname, pmodel, punit, itemType sql.NullString
+	_ = s.dbFor(r).QueryRow(`SELECT product_name, IFNULL(product_model,''), IFNULL(unit,''), IFNULL(item_type,'venta') FROM product_information WHERE product_id = ?`, pid).
+		Scan(&pname, &pmodel, &punit, &itemType)
 
 	moves, err := s.kardexMovements(r, pid, from, to)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
+	}
+
+	// Un servicio no tiene kárdex. Se dice, en vez de mostrar un libro vacío
+	// que parecería un error de carga.
+	aviso := ""
+	if normalizarTipoItem(itemType.String) == ItemServicio {
+		aviso = "Este artículo es un servicio o gasto: no tiene existencias ni movimientos de kárdex. Su costo se registra en la cuenta de gasto que se elige al comprarlo."
 	}
 
 	qtyEntradas, totalEntradas, qtySalidas, totalSalidas := kardexTotales(moves)
@@ -367,6 +265,7 @@ func (s *Server) kardexShow(w http.ResponseWriter, r *http.Request, pid, from, t
 		"ProductName":   pname.String,
 		"ProductModel":  pmodel.String,
 		"ProductUnit":   punit.String,
+		"Aviso":         aviso,
 		"From":          from,
 		"To":            to,
 		"Rows":          moves,

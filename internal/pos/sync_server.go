@@ -198,15 +198,16 @@ func (s *SyncServer) SyncSale(req *SyncSaleRequest) (*SyncSaleResponse, error) {
 			return &SyncSaleResponse{Status: "error", Error: fmt.Sprintf("detalle de factura POS: %v", err)}, err
 		}
 
-		// Stock movement: POS siempre descuenta al facturar (modo invoice)
-		// Servicios no mueven stock
+		// Stock movement: POS siempre descuenta al facturar (modo invoice).
+		// El tipo se lee de `product_information.item_type`, que es la columna
+		// real. Antes se consultaba `product_inventory_config.product_type`, una
+		// tabla que ninguna migración crea: la consulta fallaba, el tipo quedaba
+		// vacío y TODOS los servicios descontaban stock en el POS.
 		var productType string
-		_ = s.db.QueryRow(`SELECT COALESCE(pic.product_type, 'physical')
-			FROM product_information pi
-			LEFT JOIN product_inventory_config pic ON pic.product_id = pi.product_id
-			WHERE pi.product_id = ?`, productID).Scan(&productType)
+		_ = s.db.QueryRow(`SELECT COALESCE(NULLIF(pi.item_type,''), 'venta')
+			FROM product_information pi WHERE pi.product_id = ?`, productID).Scan(&productType)
 
-		if productType != "service" {
+		if productType != "servicio" && productType != "consumo" {
 			if _, err := s.db.Exec(`
 				INSERT INTO stock_movement (movement_type, product_id, warehouse_id, quantity, unit_cost,
 					reference_type, reference_id, reference_no, date, is_posted, posted_at, created_at)

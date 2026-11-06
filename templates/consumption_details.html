@@ -1,0 +1,66 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Consumo Interno {{.No}}
+                <span class="btn-group pull-right">
+                    <a href="/consumption/list" class="btn btn-default btn-sm"><i class="fa fa-arrow-left"></i> Volver</a>
+                    <button type="button" class="btn btn-danger btn-sm" id="btnEliminarConsumo" data-id="{{.ID}}"><i class="fa fa-trash"></i> Eliminar</button>
+                </span>
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <div class="row" style="margin-bottom:15px">
+            <div class="col-sm-3"><strong>Fecha:</strong> {{.Date}}</div>
+            <div class="col-sm-3"><strong>Almacén:</strong> {{.Warehouse}}</div>
+            <div class="col-sm-3"><strong>Cuenta de gasto:</strong> {{.Cuenta}}</div>
+            <div class="col-sm-3"><strong>Registrado por:</strong> {{.CreatedBy}}</div>
+        </div>
+        <p><strong>Concepto:</strong> {{.Concept}}</p>
+        <table class="table table-bordered">
+            <thead>
+                <tr>
+                    <th>Producto</th>
+                    <th>Unidad</th>
+                    <th class="text-right">Cantidad</th>
+                    <th class="text-right">Costo unitario</th>
+                    <th class="text-right">Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Rows}}
+                <tr>
+                    <td>{{.Nombre}}</td>
+                    <td>{{.Unidad}}</td>
+                    <td class="text-right">{{printf "%.2f" .Qty}}</td>
+                    <td class="text-right">{{printf "%.4f" .Costo}}</td>
+                    <td class="text-right">{{printf "%.2f" .Total}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+            <tfoot>
+                <tr class="success">
+                    <th colspan="4" class="text-right">Total</th>
+                    <th class="text-right">{{printf "%.2f" .Total}}</th>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#btnEliminarConsumo').on('click', function () {
+        var id = $(this).data('id');
+        if (!confirm('¿Eliminar este consumo? Se devuelve el stock al almacén y se quita el gasto.')) { return; }
+        $.post('/consumption/delete/' + id, function (r) {
+            if (r && r.status == 1) { location.href = '/consumption/list'; }
+            else { toastr.error((r && r.error) || 'No se pudo eliminar'); }
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'No se pudo eliminar'); });
+    });
+});
+</script>
+{{end}}

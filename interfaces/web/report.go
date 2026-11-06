@@ -118,65 +118,84 @@ func (s *Server) reportPurchasesData(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// reportStock muestra el inventario separado: mercancía para la venta y
+// suministros de consumo interno. Los servicios no aparecen porque no tienen
+// existencias.
+//
+// Filtros: tipo (venta/consumo) y almacén. El stock de cada renglón se lee de
+// stock_movement, con lo que el total de la empresa y el de una sucursal son
+// dos lecturas del mismo libro.
 func (s *Server) reportStock(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.dbFor(r).Query(`
+	tipo := normalizarTipoFiltroStock(r.FormValue("tipo"))
+	almacen := strings.TrimSpace(r.FormValue("warehouse"))
+	items := s.stockReportItems(r, tipo, almacen)
+	data := map[string]interface{}{
+		"Title":     "Reporte de Inventario",
+		"Items":     items,
+		"Tipo":      tipo,
+		"Almacen":   almacen,
+		"Almacenes": s.almacenesDe(r),
+	}
+	s.render(w, r, "report_stock.html", data)
+}
+
+func normalizarTipoFiltroStock(v string) string {
+	switch normalizarTipoItem(v) {
+	case ItemConsumo:
+		return ItemConsumo
+	case ItemServicio:
+		return "" // los servicios nunca entran a un reporte de existencias
+	default:
+		if strings.TrimSpace(v) == "" {
+			return ""
+		}
+		return ItemVenta
+	}
+}
+
+// stockReportItems arma las filas del reporte. Una sola consulta al catálogo y
+// una lectura de movimientos por producto.
+func (s *Server) stockReportItems(r *http.Request, tipo, almacen string) []map[string]interface{} {
+	consulta := `
 		SELECT a.product_id, a.product_name, IFNULL(a.product_model,''), IFNULL(c.category_name,''),
-			IFNULL(a.unit,''), a.price
+			IFNULL(a.unit,''), a.price, IFNULL(a.item_type,'venta')
 		FROM product_information a
 		LEFT JOIN product_category c ON c.category_id = a.category_id
-		WHERE a.status = 1
-		ORDER BY a.product_name`)
+		WHERE a.status = 1 AND IFNULL(a.item_type,'venta') <> 'servicio'`
+	args := []interface{}{}
+	if tipo != "" {
+		consulta += ` AND IFNULL(a.item_type,'venta') = ?`
+		args = append(args, tipo)
+	}
+	consulta += ` ORDER BY IFNULL(a.item_type,'venta'), a.product_name`
+	rows, err := s.dbFor(r).Query(consulta, args...)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
+		return nil
 	}
 	defer rows.Close()
 
-	type StockItem struct {
-		ID, Name, Model, Category, Unit, Price string
-		Stock                                  float64
-	}
-	items := []StockItem{}
+	lista := []map[string]interface{}{}
 	for rows.Next() {
-		var it StockItem
-		_ = rows.Scan(&it.ID, &it.Name, &it.Model, &it.Category, &it.Unit, &it.Price)
-		pidInt, _ := strconv.Atoi(it.ID)
-		it.Stock = s.stockForProduct(r, pidInt)
-		items = append(items, it)
+		var pid, name, model, cat, unit, price, itemType sql.NullString
+		if err := rows.Scan(&pid, &name, &model, &cat, &unit, &price, &itemType); err != nil {
+			continue
+		}
+		pidInt, _ := strconv.Atoi(pid.String)
+		t := normalizarTipoItem(itemType.String)
+		stock := stockPorMovimientos(s.dbFor(r), pidInt, almacen)
+		lista = append(lista, map[string]interface{}{
+			"id": pid.String, "name": name.String, "model": model.String,
+			"category": cat.String, "unit": unit.String, "price": price.String,
+			"stock": round2(stock), "item_type": t, "type_label": etiquetaTipoItem(t),
+		})
 	}
-
-	s.render(w, r, "report_stock.html", map[string]interface{}{
-		"Title": "Reporte de Inventario",
-		"Items": items,
-	})
+	return lista
 }
 
 func (s *Server) reportStockData(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.dbFor(r).Query(`
-		SELECT a.product_id, a.product_name, IFNULL(a.product_model,''), IFNULL(c.category_name,''),
-			IFNULL(a.unit,''), a.price
-		FROM product_information a
-		LEFT JOIN product_category c ON c.category_id = a.category_id
-		WHERE a.status = 1
-		ORDER BY a.product_name`)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer rows.Close()
-
-	list := []map[string]interface{}{}
-	for rows.Next() {
-		var pid, name, model, cat, unit, price sql.NullString
-		_ = rows.Scan(&pid, &name, &model, &cat, &unit, &price)
-		pidInt, _ := strconv.Atoi(pid.String)
-		stock := s.stockForProduct(r, pidInt)
-		list = append(list, map[string]interface{}{
-			"id": pid.String, "name": name.String, "model": model.String,
-			"category": cat.String, "unit": unit.String, "price": price.String, "stock": stock,
-		})
-	}
-	writeJSON(w, list)
+	tipo := normalizarTipoFiltroStock(r.FormValue("tipo"))
+	almacen := strings.TrimSpace(r.FormValue("warehouse"))
+	writeJSON(w, s.stockReportItems(r, tipo, almacen))
 }
 
 // reportDailyClosing replicates daily_closing: cash in/out snapshot.

@@ -413,6 +413,8 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	s.registerBankRoutes()
 	// Adjustment
 	s.registerAdjustmentRoutes()
+	s.registerAlmacenRoutes()
+	s.registerConsumoInternoRoutes()
 	// Voucher multi-line (extra)
 	s.registerVoucherExtraRoutes()
 	// Legal Books (Venezuelan statutory books)

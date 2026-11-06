@@ -71,14 +71,22 @@
                         <input type="text" class="form-control" id="purchase_details" name="purchase_details" placeholder="Observaciones" value="{{.PDetails}}">
                     </div>
                 </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label for="default_warehouse">Almacén por defecto</label>
+                        <select class="form-control" id="default_warehouse" name="warehouse_id"></select>
+                        <small class="help-block">Se aplica a los renglones nuevos. Cada renglón puede ir a otro almacén.</small>
+                    </div>
+                </div>
             </div>
 
             <div class="table-responsive">
                 <table class="table table-striped table-bordered" id="itemsTable">
                     <thead>
                         <tr>
-                            <th style="min-width:300px">Producto</th>
-                            <th style="width:80px">Stock</th>
+                            <th style="min-width:240px">Producto / concepto</th>
+                            <th style="width:140px">Tipo</th>
+                            <th style="width:160px">Almacén / cuenta</th>
                             <th style="width:80px">Cant.</th>
                             <th style="width:90px">Precio</th>
                             <th style="width:80px">Lote</th>
@@ -96,8 +104,12 @@
             </div>
             <button type="button" class="btn btn-success" id="addRow"><i class="fa fa-plus"></i> Añadir Producto</button>
             <p class="help-block">
-                Escriba para buscar por nombre, modelo o código de barras. La lupa abre el catálogo con fotos
-                y el botón verde permite dar de alta un producto nuevo sin salir de la compra.
+                Elija el <strong>tipo</strong> de cada renglón y el sistema lo registra donde corresponde:
+                <strong>producto de venta</strong> entra al inventario de mercancía,
+                <strong>consumo interno</strong> (papelería, limpieza) entra a su propio inventario y almacén,
+                y <strong>servicio / gasto</strong> (luz, agua, internet, asesoría) no entra a inventario: va a la
+                cuenta de gasto que elija. Escriba para buscar por nombre, modelo o código de barras; la lupa abre el
+                catálogo con fotos y el botón verde da de alta un producto nuevo sin salir de la compra.
             </p>
 
             <div class="row" style="margin-top:15px">
@@ -246,6 +258,15 @@
                         </div>
                     </div>
                 </div>
+                <div class="form-group">
+                    <label for="np_tipo">Tipo de ítem</label>
+                    <select class="form-control" id="np_tipo">
+                        <option value="venta">Producto de venta</option>
+                        <option value="consumo">Consumo interno</option>
+                        <option value="servicio">Servicio / gasto</option>
+                    </select>
+                    <small class="help-block">Si es un servicio (luz, agua, asesoría) no se crea inventario: se asienta como gasto.</small>
+                </div>
                 <p class="help-block">
                     El costo de esta compra queda registrado en el renglón; el precio de venta se define aquí
                     porque el sistema no lo puede deducir de una compra.
@@ -308,6 +329,20 @@
 {{define "pagejs"}}
 <script>
 var methods = [];
+// Almacenes y cuentas que el servidor ya leyó: el formulario no adivina
+// códigos ni cuentas. Los de venta y los de consumo van separados porque cada
+// tipo de renglón solo puede ir a los suyos.
+var almacenesVenta = [
+    {{range .AlmacenesVenta}}{ code: '{{.code}}', name: '{{.name}}', isDefault: {{if .is_default}}true{{else}}false{{end}} },{{end}}
+];
+var almacenesConsumo = [
+    {{range .AlmacenesConsumo}}{ code: '{{.code}}', name: '{{.name}}', isDefault: {{if .is_default}}true{{else}}false{{end}} },{{end}}
+];
+var cuentasGasto = [
+    {{range .CuentasGasto}}{ code: '{{.code}}', name: '{{.name}}' },{{end}}
+];
+var almacenVentaDef = '{{.AlmacenVentaDef}}';
+var almacenConsumoDef = '{{.AlmacenConsumoDef}}';
 var rowSeq = 0;
 var paySeq = 0;
 // Fila destino del catálogo y de las altas rápidas.
@@ -346,6 +381,68 @@ function cargarPropuestaInbox() {
 }
 
 // ---------- product rows ----------
+function opcionesTipo(sel) {
+    var opts = [
+        ['venta', 'Producto de venta'],
+        ['consumo', 'Consumo interno'],
+        ['servicio', 'Servicio / gasto']
+    ];
+    return opts.map(function (o) {
+        return '<option value="' + o[0] + '"' + (o[0] === sel ? ' selected' : '') + '>' + o[1] + '</option>';
+    }).join('');
+}
+
+// poblarAlmacenes llena el selector del renglón con los almacenes del tipo.
+// Si la empresa todavía no creó los suyos, quedan los códigos de respaldo para
+// que la compra no se bloquee por configuración.
+function poblarAlmacenes($row, tipo) {
+    var lista = (tipo === 'consumo') ? almacenesConsumo : almacenesVenta;
+    var def = (tipo === 'consumo') ? almacenConsumoDef : almacenVentaDef;
+    var $w = $row.find('.pwarehouse');
+    var actual = $w.val();
+    $w.empty();
+    if (!lista.length) {
+        lista = [{ code: def, name: 'Almacén principal', isDefault: true }];
+    }
+    lista.forEach(function (a) {
+        $w.append($('<option>').val(a.code).text(a.code + ' — ' + a.name));
+    });
+    var mantener = null;
+    lista.forEach(function (a) { if (a.code === actual) { mantener = a.code; } });
+    $w.val(mantener || def);
+}
+
+function poblarCuentas($row) {
+    var $c = $row.find('.pcoa');
+    if ($c.data('lleno')) { return; }
+    $c.append($('<option>').val('').text('-- Cuenta de gasto --'));
+    cuentasGasto.forEach(function (c) {
+        $c.append($('<option>').val(c.code).text(c.code + ' — ' + c.name));
+    });
+    $c.data('lleno', true);
+}
+
+// aplicarTipoRenglon muestra los campos que corresponden al tipo: un servicio
+// no tiene producto ni almacén, tiene concepto y cuenta de gasto.
+function aplicarTipoRenglon($row, tipo, conservarProducto) {
+    tipo = tipo || 'venta';
+    $row.find('.ptype').val(tipo);
+    var servicio = (tipo === 'servicio');
+    $row.find('.pname').closest('.input-group').toggle(!servicio);
+    $row.find('.pconcepto').toggle(servicio);
+    $row.find('.pcoa').toggle(servicio);
+    $row.find('.pwarehouse').toggle(!servicio);
+    if (servicio) {
+        if (!conservarProducto) {
+            $row.find('.pname').val('');
+            $row.find('input[name="product_id"]').val('');
+        }
+        poblarCuentas($row);
+    } else {
+        poblarAlmacenes($row, tipo);
+    }
+}
+
 function itemRow(preset) {
     preset = preset || {};
     var i = ++rowSeq;
@@ -358,9 +455,12 @@ function itemRow(preset) {
                 '<button type="button" class="btn btn-success btn-nuevo-prod" title="Crear producto nuevo"><i class="fa fa-plus"></i></button>' +
             '</span>' +
         '</div>' +
+        '<input type="text" class="form-control pconcepto" name="line_concept" placeholder="Concepto: luz, agua, internet, asesoría..." value="' + (preset.concepto || '') + '" style="margin-top:4px;display:none">' +
         '<input type="hidden" name="product_id" value="' + (preset.pid || '') + '">' +
         '<small class="aviso-precio" style="display:none"></small></td>' +
-        '<td><input type="text" class="form-control text-right pstock" value="' + (preset.stock != null ? preset.stock : '') + '" readonly></td>' +
+        '<td><select class="form-control ptype" name="line_item_type">' + opcionesTipo(preset.tipo || 'venta') + '</select></td>' +
+        '<td><select class="form-control pwarehouse" name="line_warehouse"></select>' +
+            '<select class="form-control pcoa" name="line_coa" style="margin-top:4px;display:none"></select></td>' +
         '<td><input type="text" class="form-control text-right pqty" name="product_quantity" value="' + (preset.qty || 1) + '"></td>' +
         '<td><input type="text" class="form-control text-right prate" name="product_rate" value="' + (preset.rate || '0.00') + '"></td>' +
         '<td><input type="text" class="form-control pbatch" name="batch_no" value="' + (preset.batch || '') + '"></td>' +
@@ -376,6 +476,8 @@ function itemRow(preset) {
     $('#itemRows').append($row);
     bindAutocomplete($row.find('.pname'));
     $row.find('.datepicker').datepicker({ dateFormat: 'yy-mm-dd' });
+    aplicarTipoRenglon($row, preset.tipo || 'venta', true);
+    if (preset.coa) { $row.find('.pcoa').val(preset.coa); }
     return $row;
 }
 
@@ -411,6 +513,11 @@ function aplicarProducto($row, p) {
     $row.data('ultimo', ultimo).removeData('avisado');
     var precio = num(p.supplier_price) || ultimo || num(p.price);
     $row.find('.prate').val(precio.toFixed(2));
+    // El tipo lo manda el catálogo: si el producto es de consumo interno o
+    // servicio, el renglón cambia de forma solo y no hay manera de meterlo al
+    // inventario de venta por descuido.
+    aplicarTipoRenglon($row, p.item_type || 'venta', true);
+    if (p.default_warehouse) { $row.find('.pwarehouse').val(p.default_warehouse); }
     calcRow($row);
     avisoVariacion($row);
 }
@@ -683,16 +790,24 @@ function enviar(submittedAction) {
     // con product_id vacío hace que el servidor reciba un renglón sin producto.
     $('#itemRows .item-row').each(function () {
         var $r = $(this);
-        if (!$.trim($r.find('.pname').val()) && !$r.find('input[name="product_id"]').val()) { $r.remove(); }
+        if (!$.trim($r.find('.pname').val()) && !$r.find('input[name="product_id"]').val()
+            && !$.trim($r.find('.pconcepto').val())) { $r.remove(); }
     });
     var $filas = $('#itemRows .item-row');
     if (!$filas.length) { toastr.warning('Agregue al menos un producto'); return; }
     var allSet = true;
     $filas.each(function () {
-        if (!$(this).find('input[name="product_id"]').val()) { allSet = false; }
-        if (!num($(this).find('.pqty').val())) { allSet = false; }
+        var $r = $(this), tipo = $r.find('.ptype').val() || 'venta';
+        if (!num($r.find('.pqty').val())) { allSet = false; }
+        if (tipo === 'servicio') {
+            // Un servicio no necesita producto, pero sí concepto: es lo que
+            // queda escrito en el libro y lo que se lee en la factura.
+            if (!$.trim($r.find('.pconcepto').val())) { allSet = false; }
+        } else if (!$r.find('input[name="product_id"]').val()) {
+            allSet = false;
+        }
     });
-    if (!allSet) { toastr.warning('Complete producto y cantidad en todas las filas'); return; }
+    if (!allSet) { toastr.warning('Complete producto (o concepto) y cantidad en todas las filas'); return; }
 
     // EL CANDADO, ANTES DE ENVIAR. Se pregunta al servidor si esa compra ya está
     // cargada —mismo proveedor, mismos renglones, mismos números de factura y de
@@ -760,10 +875,20 @@ $(function () {
     // datepicker
     $('.datepicker').datepicker({ dateFormat: 'yy-mm-dd' });
 
+    // Almacén por defecto del documento: se puede cambiar por renglón.
+    var $dw = $('#default_warehouse');
+    almacenesVenta.forEach(function (a) {
+        $dw.append($('<option>').val(a.code).attr('data-kind', 'venta').text('Venta · ' + a.code + ' — ' + a.name));
+    });
+    almacenesConsumo.forEach(function (a) {
+        $dw.append($('<option>').val(a.code).attr('data-kind', 'consumo').text('Consumo · ' + a.code + ' — ' + a.name));
+    });
+    if (!$dw.val()) { $dw.val(almacenVentaDef); }
+
     // initial rows
     {{if .Details}}
     {{range .Details}}
-    itemRow({ pid: '{{.ProductID}}', qty: '{{.Qty}}', rate: '{{.Rate}}', batch: '{{.Batch}}', expiry: '{{.Expiry}}' })
+    itemRow({ pid: '{{.ProductID}}', qty: '{{.Qty}}', rate: '{{.Rate}}', batch: '{{.Batch}}', expiry: '{{.Expiry}}', tipo: '{{.Tipo}}', concepto: '{{.Concepto}}' })
         .find('.pname').val('{{.ProductName}} ({{.Model}})');
     {{end}}
     {{else}}
@@ -776,7 +901,15 @@ $(function () {
     if (inboxLineas.length) { cargarPropuestaInbox(); }
 
     // events
-    $('#addRow').on('click', function () { itemRow(); });
+    $('#addRow').on('click', function () {
+        var $r = itemRow();
+        var $sel = $('#default_warehouse option:selected');
+        if ($sel.length && $sel.attr('data-kind') === 'venta') { $r.find('.pwarehouse').val($sel.val()); }
+    });
+    // Cambiar el tipo reacomoda el renglón: producto/almacén o concepto/cuenta.
+    $('#itemRows').on('change', '.ptype', function () {
+        aplicarTipoRenglon($(this).closest('tr'), $(this).val(), false);
+    });
     $('#itemRows').on('click', '.del-row', function () { $(this).closest('tr').remove(); calcTotals(); });
     $('#itemRows').on('input change', '.pqty, .pdisc, .pvat', function () { calcRow($(this).closest('tr')); });
     $('#itemRows').on('input change', '.prate', function () {
@@ -822,14 +955,16 @@ $(function () {
             product_model: $('#np_modelo').val(),
             barcode: $('#np_codigo').val(),
             unit: $('#np_unidad').val(),
-            price: $('#np_precio').val()
+            price: $('#np_precio').val(),
+            item_type: $('#np_tipo').val()
         }, function (r) {
             $btn.prop('disabled', false);
             if (!r || r.status != 1) { toastr.error((r && r.error) || 'No se pudo crear el producto'); return; }
             aplicarProducto(pickerRow || ultimaFilaCompra(), {
                 id: r.product_id, name: r.name || nombre, model: r.model || $('#np_modelo').val(),
                 barcode: r.barcode || $('#np_codigo').val(), price: r.price,
-                last_cost: r.last_cost || 0, stock: r.stock || 0
+                last_cost: r.last_cost || 0, stock: r.stock || 0,
+                item_type: r.item_type || $('#np_tipo').val(), default_warehouse: r.default_warehouse || ''
             });
             $('#nuevoProducto').modal('hide');
             toastr.success(r.existente ? 'Ese producto ya existía: se cargó en la fila' : 'Producto creado y cargado en la fila');

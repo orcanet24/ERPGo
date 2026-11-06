@@ -18,6 +18,9 @@
                 <p><strong>Moneda:</strong> {{.Currency}}</p>
             </div>
         </div>
+        {{if .Aviso}}
+        <div class="alert alert-info"><i class="fa fa-info-circle"></i> {{.Aviso}}</div>
+        {{end}}
         <div class="table-responsive">
         <table class="table table-bordered table-striped" id="kardexTable">
             <thead>
@@ -25,6 +28,7 @@
                     <th rowspan="2" class="text-center" style="vertical-align:middle">Fecha</th>
                     <th rowspan="2" class="text-center" style="vertical-align:middle">Concepto</th>
                     <th rowspan="2" class="text-center" style="vertical-align:middle">Nro. Doc</th>
+                    <th rowspan="2" class="text-center" style="vertical-align:middle">Almacén</th>
                     <th colspan="3" class="text-center">ENTRADAS</th>
                     <th colspan="3" class="text-center">SALIDAS</th>
                     <th colspan="3" class="text-center">SALDO</th>
@@ -47,6 +51,7 @@
                     <td>{{.Date}}</td>
                     <td>{{.Concept}}</td>
                     <td>{{.DocNumber}}</td>
+                    <td>{{.Almacen}}</td>
                     <td class="text-right">{{if gt .QtyIn 0.0}}{{printf "%.2f" .QtyIn}}{{end}}</td>
                     <td class="text-right">{{if gt .CostIn 0.0}}{{printf "%.2f" .CostIn}}{{end}}</td>
                     <td class="text-right">{{if gt .TotalIn 0.0}}{{printf "%.2f" .TotalIn}}{{end}}</td>
@@ -61,7 +66,7 @@
             </tbody>
             <tfoot>
                 <tr class="bg-warning">
-                    <td colspan="3"><strong>TOTALES DEL PERÍODO</strong></td>
+                    <td colspan="4"><strong>TOTALES DEL PERÍODO</strong></td>
                     <td class="text-right"><strong>{{printf "%.2f" .QtyEntradas}}</strong></td>
                     <td></td>
                     <td class="text-right"><strong>{{printf "%.2f" .TotalEntradas}}</strong></td>

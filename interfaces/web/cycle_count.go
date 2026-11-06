@@ -1,4 +1,4 @@
-﻿package web
+package web
 
 // cycle_count.go — Toma de inventario cíclica.
 //
@@ -648,29 +648,38 @@ func (s *Server) CerrarConteoCiclico(r *http.Request, cycleID int64, usuario, mo
 			}
 		}
 
-		// El movimiento se escribe TAMBIÉN en el histórico, aunque haya lote.
-		//
-		// El ERP calcula el stock como compras menos ventas, y `product_lot` es
-		// la vista de caducidades. Si el ajuste tocara solo el lote, las dos
-		// vistas dirían cosas distintas justo después de un inventario, que es
-		// cuando más confianza tienen en que cuadran. Mover las dos es lo que
-		// hace que el descuadre que queda sea de verdad un descuadre.
-		//
-		// `purchase_id` es BIGINT y el servidor va con STRICT_TRANS_TABLES: ahí
-		// va el identificador numérico del conteo. El texto "CC-000001" vive
-		// en `batch_id`, que sí es de texto.
-		lote := interface{}(nil)
+		// El movimiento se escribe en `stock_movement`, que es el libro real del
+		// inventario (el stock se calcula de ahí). Antes iba a
+		// `product_purchase_details`, que es el detalle de COMPRAS: un conteo
+		// físico no es una compra y contaminaba el costo promedio.
 		etiquetaLote := l.LotCode
 		if etiquetaLote == "" {
 			etiquetaLote = fmt.Sprintf("CC-%06d", cycleID)
 		}
-		lote = etiquetaLote
-		if _, err := tx.Exec(`
-			INSERT INTO product_purchase_details
-				(purchase_id, product_id, quantity, rate, total_amount, batch_id)
-			VALUES (?,?,?,?,?,?)`,
-			cycleID, l.ProductID, l.Variance, l.UnitCost,
-			l.Variance*l.UnitCost, lote); err != nil {
+		pidInt := int(l.ProductID)
+		var tipoProducto string
+		_ = tx.QueryRow(`SELECT IFNULL(item_type,'venta') FROM product_information WHERE product_id = ?`, l.ProductID).Scan(&tipoProducto)
+		if !itemMueveStock(tipoProducto) {
+			continue
+		}
+		almacenConteo := s.almacenPorDefecto(r, tipoAlmacenDeItem(tipoProducto))
+		var almacenID sql.NullInt64
+		_ = tx.QueryRow(`SELECT IFNULL(warehouse_id,0) FROM cycle_count WHERE id = ?`, cycleID).Scan(&almacenID)
+		if almacenID.Int64 > 0 {
+			var code sql.NullString
+			_ = tx.QueryRow(`SELECT code FROM warehouse WHERE id = ?`, almacenID.Int64).Scan(&code)
+			if code.Valid && code.String != "" {
+				almacenConteo = code.String
+			}
+		}
+		mov := "adjustment_add"
+		cantidad := l.Variance
+		if l.Variance < 0 {
+			mov = "adjustment_remove"
+			cantidad = -l.Variance
+		}
+		if err := insertStockMovement(tx, mov, pidInt, almacenConteo, cantidad, l.UnitCost,
+			"adjustment", int(cycleID), fmt.Sprintf("CC-%06d", cycleID), today()); err != nil {
 			return "", 0, 0, fmt.Errorf("no se pudo ajustar el stock de %s: %w", l.ProductName, err)
 		}
 

@@ -14,6 +14,7 @@
                     <th>ID</th>
                     <th>Producto</th>
                     <th>Modelo</th>
+                    <th>Tipo</th>
                     <th>Categoría</th>
                     <th>Unidad</th>
                     <th class="text-right">Precio</th>
@@ -39,6 +40,11 @@ $(function () {
             { data: 'id' },
             { data: 'name' },
             { data: 'model' },
+            { data: 'type_label', render: function (d, t, row) {
+                if (row.item_type === 'servicio') return '<span class="label label-info">' + d + '</span>';
+                if (row.item_type === 'consumo') return '<span class="label label-warning">' + d + '</span>';
+                return d;
+            } },
             { data: 'category' },
             { data: 'unit' },
             { data: 'price', className: 'text-right', render: function (d) {

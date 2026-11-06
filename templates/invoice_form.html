@@ -34,6 +34,16 @@
                         <input type="text" class="form-control text-right" id="previous" name="previous" value="0.00" readonly>
                     </div>
                 </div>
+                <div class="col-md-3">
+                    <div class="form-group">
+                        <label for="warehouse_id">Almacén de salida</label>
+                        <select class="form-control" id="warehouse_id" name="warehouse_id">
+                            {{range .AlmacenesVenta}}<option value="{{.code}}" {{if .is_default}}selected{{end}}>{{.code}} — {{.name}}</option>{{end}}
+                            {{if not .AlmacenesVenta}}<option value="WH-MAIN">WH-MAIN — Almacén principal</option>{{end}}
+                        </select>
+                        <small class="help-block">De dónde sale la mercancía.</small>
+                    </div>
+                </div>
                 <div class="col-md-4">
                     <div class="form-group">
                         <label for="inva_details">Detalles</label>

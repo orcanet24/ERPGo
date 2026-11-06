@@ -1,0 +1,86 @@
+{{define "content"}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>{{.Title}}
+                <a href="/warehouse/list" class="btn btn-default btn-sm pull-right"><i class="fa fa-arrow-left"></i> Volver</a>
+            </h4>
+        </div>
+    </div>
+    <div class="panel-body">
+        <form id="warehouseForm">
+            <input type="hidden" name="id" value="{{if .A}}{{.A.ID}}{{end}}">
+            <div class="row">
+                <div class="col-sm-3">
+                    <div class="form-group">
+                        <label>Código <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" name="code" value="{{if .A}}{{.A.Code}}{{end}}" placeholder="WH-LARA" style="text-transform:uppercase">
+                        <small class="help-block">Sin espacios. Es el código que queda en cada movimiento de stock.</small>
+                    </div>
+                </div>
+                <div class="col-sm-5">
+                    <div class="form-group">
+                        <label>Nombre <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" name="name" value="{{if .A}}{{.A.Name}}{{end}}" placeholder="Almacén Lara">
+                    </div>
+                </div>
+                <div class="col-sm-4">
+                    <div class="form-group">
+                        <label>Tipo</label>
+                        <select class="form-control" name="kind">
+                            <option value="venta" {{if eq .Kind "venta"}}selected{{end}}>Venta — mercancía para vender</option>
+                            <option value="consumo" {{if eq .Kind "consumo"}}selected{{end}}>Consumo interno — papelería, limpieza</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Dirección</label>
+                <input type="text" class="form-control" name="address" value="{{if .A}}{{.A.Address}}{{end}}">
+            </div>
+            <div class="row">
+                <div class="col-sm-6">
+                    <div class="checkbox">
+                        <label><input type="checkbox" name="is_default" value="1" {{if .A}}{{if .A.IsDefault}}checked{{end}}{{end}}> Almacén por defecto de su tipo</label>
+                    </div>
+                </div>
+                <div class="col-sm-6">
+                    <div class="checkbox">
+                        <label><input type="checkbox" name="is_active" value="1" {{if .A}}{{if .A.IsActive}}checked{{end}}{{else}}checked{{end}}> Activo</label>
+                    </div>
+                </div>
+            </div>
+            <p class="help-block">
+                Solo puede haber un almacén por defecto de cada tipo: es el que se propone al comprar o facturar.
+                Los almacenes con movimientos no se eliminan, se desactivan.
+            </p>
+            <div class="text-right">
+                <a href="/warehouse/list" class="btn btn-default">Cancelar</a>
+                <button type="submit" class="btn btn-primary"><i class="fa fa-save"></i> Guardar</button>
+            </div>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#warehouseForm').on('submit', function (e) {
+        e.preventDefault();
+        var datos = $(this).serialize();
+        // Un checkbox desmarcado no viaja: se manda su valor explícito.
+        datos += '&is_default=' + ($('input[name=is_default]').is(':checked') ? '1' : '0');
+        datos += '&is_active=' + ($('input[name=is_active]').is(':checked') ? '1' : '0');
+        $.post('/warehouse/save', datos, function (r) {
+            if (r.status == 1) {
+                toastr.success(r.msg);
+                setTimeout(function () { location.href = '/warehouse/list'; }, 600);
+            } else {
+                toastr.error(r.error || 'Error');
+            }
+        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+    });
+});
+</script>
+{{end}}

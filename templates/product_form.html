@@ -56,6 +56,40 @@
                             </div>
                         </div>
                     </div>
+                    <!-- QUÉ ES ESTE ÍTEM. Es la decisión que separa el inventario de
+                         venta del de consumo propio y saca los servicios del
+                         inventario para siempre. -->
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="form-group">
+                                <label for="item_type">Tipo de ítem</label>
+                                <select class="form-control" id="item_type" name="item_type">
+                                    <option value="venta" {{if or (not .P) (eq .P.ItemType.String "venta")}}selected{{end}}>Producto de venta</option>
+                                    <option value="consumo" {{if and .P (eq .P.ItemType.String "consumo")}}selected{{end}}>Consumo interno (papelería, limpieza)</option>
+                                    <option value="servicio" {{if and .P (eq .P.ItemType.String "servicio")}}selected{{end}}>Servicio / gasto (no lleva inventario)</option>
+                                </select>
+                                <small class="help-block">Un servicio no entra a inventario ni a kárdex. El consumo interno sí lleva existencias, pero en su propio almacén y su propia cuenta.</small>
+                            </div>
+                        </div>
+                        <div class="col-md-6" id="almacenDefectoGroup">
+                            <div class="form-group">
+                                <label for="default_warehouse_id">Almacén por defecto</label>
+                                <select class="form-control" id="default_warehouse_id" name="default_warehouse_id">
+                                    {{if .AlmacenesVenta}}
+                                    <optgroup label="Venta">
+                                        {{range .AlmacenesVenta}}<option value="{{.code}}" data-kind="venta" {{if and $.P (eq $.P.DefaultWarehouse.String .code)}}selected{{end}}>{{.code}} — {{.name}}</option>{{end}}
+                                    </optgroup>
+                                    {{end}}
+                                    {{if .AlmacenesConsumo}}
+                                    <optgroup label="Consumo interno">
+                                        {{range .AlmacenesConsumo}}<option value="{{.code}}" data-kind="consumo" {{if and $.P (eq $.P.DefaultWarehouse.String .code)}}selected{{end}}>{{.code}} — {{.name}}</option>{{end}}
+                                    </optgroup>
+                                    {{end}}
+                                </select>
+                                <small class="help-block">Donde entra por defecto al comprarlo. Se puede cambiar en cada compra.</small>
+                            </div>
+                        </div>
+                    </div>
                     <div class="row">
                         <div class="col-md-6">
                             <div class="form-group">
@@ -121,6 +155,20 @@ $(function () {
     var submittedAction = 'save';
 
     $('button[type=submit]', '#productForm').on('click', function () { submittedAction = $(this).val(); });
+
+    // Un servicio no tiene almacén: se oculta el selector en vez de guardar un
+    // almacén que nunca se usará.
+    function ajustarAlmacen() {
+        var servicio = $('#item_type').val() === 'servicio';
+        $('#almacenDefectoGroup').toggle(!servicio);
+        if (servicio) { $('#default_warehouse_id').val(''); }
+        else if (!$('#default_warehouse_id').val()) {
+            var kind = $('#item_type').val() === 'consumo' ? 'consumo' : 'venta';
+            $('#default_warehouse_id option[data-kind="' + kind + '"]').first().prop('selected', true);
+        }
+    }
+    $('#item_type').on('change', ajustarAlmacen);
+    ajustarAlmacen();
 
     $('#productForm').on('submit', function (e) {
         e.preventDefault();

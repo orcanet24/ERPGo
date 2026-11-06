@@ -189,6 +189,7 @@ func (s *Server) productQuickCreate(w http.ResponseWriter, r *http.Request) {
 	campos.Set("product_vat", r.FormValue("product_vat"))
 	campos.Set("tax", r.FormValue("tax"))
 	campos.Set("product_details", r.FormValue("product_details"))
+	campos.Set("item_type", r.FormValue("item_type"))
 
 	codigo, datos, cuerpo := s.respuestaDeHandler(sess, campos, s.productSave)
 	if codigo >= 400 {
@@ -223,18 +224,19 @@ func (s *Server) productQuickCreate(w http.ResponseWriter, r *http.Request) {
 // datosProducto devuelve un producto con la forma que usan el catálogo y las
 // filas de la compra.
 func (s *Server) datosProducto(r *http.Request, pid string) (map[string]interface{}, error) {
-	var id, name, model, barcode, unit, image, cat sql.NullString
+	var id, name, model, barcode, unit, image, cat, itemType, wh sql.NullString
 	var price, lastCost float64
 	err := s.dbFor(r).QueryRow(`
 		SELECT a.product_id, a.product_name, IFNULL(a.product_model,''), IFNULL(a.barcode,''),
 			IFNULL(a.unit,''), IFNULL(a.image,''), IFNULL(c.category_name,''), IFNULL(a.price,0),
+			IFNULL(a.item_type,'venta'), IFNULL(a.default_warehouse_id,''),
 			IFNULL((SELECT d.rate FROM product_purchase_details d
 				JOIN product_purchase p ON p.purchase_id = d.purchase_id
 				WHERE d.product_id = a.product_id ORDER BY p.id DESC LIMIT 1), 0)
 		FROM product_information a
 		LEFT JOIN product_category c ON c.category_id = a.category_id
 		WHERE a.product_id = ?`, pid).
-		Scan(&id, &name, &model, &barcode, &unit, &image, &cat, &price, &lastCost)
+		Scan(&id, &name, &model, &barcode, &unit, &image, &cat, &price, &itemType, &wh, &lastCost)
 	if err != nil {
 		return nil, err
 	}
@@ -243,8 +245,9 @@ func (s *Server) datosProducto(r *http.Request, pid string) (map[string]interfac
 		"status": 1, "product_id": id.String, "id": id.String, "name": name.String,
 		"model": model.String, "barcode": barcode.String, "unit": unit.String,
 		"image": image.String, "category": cat.String, "price": price, "last_cost": lastCost,
-		"stock": s.stockForProduct(r, pidInt),
-		"msg":   "Producto creado",
+		"stock": s.stockForProduct(r, pidInt), "item_type": normalizarTipoItem(itemType.String),
+		"default_warehouse": wh.String,
+		"msg":               "Producto creado",
 	}, nil
 }
 
