@@ -47,6 +47,8 @@ func main() {
 	usuario := flag.String("u", "", "usuario (vacío = tomar DB_USER del .env)")
 	clave := flag.String("p", "", "clave (vacía = tomar DB_PASSWORD del .env)")
 	base := flag.String("db", "", "base a medir (vacío = tomar DB_NAME del .env)")
+	soloBases := flag.Bool("solo-bases", false, "solo listar las bases del servidor y salir")
+	soloTablas := flag.Bool("solo-tablas", false, "solo listar las tablas de la base y salir")
 	flag.Parse()
 
 	// godotenv.Load NO sobreescribe variables ya definidas: el -p explícito
@@ -82,6 +84,40 @@ func main() {
 	}
 
 	fmt.Printf("Base medida: %s@%s:%d\n\n", cfg.base, cfg.host, cfg.puerto)
+
+	if *soloBases {
+		filas, err := db.Query("SHOW DATABASES")
+		if err != nil {
+			salir(err)
+		}
+		defer filas.Close()
+		fmt.Println("Bases del servidor:")
+		for filas.Next() {
+			var nombre string
+			if err := filas.Scan(&nombre); err != nil {
+				salir(err)
+			}
+			fmt.Printf("  %s\n", nombre)
+		}
+		return
+	}
+
+	if *soloTablas {
+		filas, err := db.Query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME", cfg.base)
+		if err != nil {
+			salir(err)
+		}
+		defer filas.Close()
+		fmt.Printf("Tablas de %s:\n", cfg.base)
+		for filas.Next() {
+			var nombre string
+			if err := filas.Scan(&nombre); err != nil {
+				salir(err)
+			}
+			fmt.Printf("  %s\n", nombre)
+		}
+		return
+	}
 
 	tablas, _, _ := medirBase(db, cfg.base)
 	collation(db, cfg.base)

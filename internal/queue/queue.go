@@ -199,6 +199,15 @@ var schema = []string{
 	`CREATE INDEX idx_queue_poll ON queue_tasks(status, not_before)`,
 }
 
+// AplicarEsquema crea la tabla de la cola fuera de New, para quien necesite
+// solo el esquema (el generador del esquema canónico, las pruebas).
+//
+// POR QUÉ EXPORTADA. La cola es de la BD de control, no de cada empresa; el
+// generador del canónico necesita crearla sin levantar el motor de workers.
+func AplicarEsquema(store *sql.DB) error {
+	return persistence.AplicarEsquema(store, schema)
+}
+
 // Handle registra el handler de un tipo de tarea.
 func (q *Queue) Handle(kind string, h Handler) {
 	q.mu.Lock()
@@ -512,4 +521,3 @@ func (q *Queue) run(t Task) {
 func nowStr() string { return time.Now().Format(nowLayout) }
 
 const nowLayout = "2006-01-02 15:04:05"
-

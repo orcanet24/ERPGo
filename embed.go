@@ -26,6 +26,9 @@ var staticFS embed.FS
 //go:embed migrations
 var migrationsFS embed.FS
 
+//go:embed schema
+var schemaFS embed.FS
+
 // Templates returns the templates/ tree.
 //
 // Busca en este orden: las raíces del núcleo, después las de cada módulo
@@ -80,6 +83,12 @@ func (s staticOverlay) Open(name string) (fs.File, error) {
 // núcleo con su propio ledger, no se leen de un directorio: si se leyeran de
 // aquí, cualquier .sql soltado en web/<code> se ejecutaría en cada empresa.
 func Migrations() fs.FS { return coreFS{embedded: migrationsFS} }
+
+// Schema returns the schema/ tree: el DDL canónico que el reconciliador
+// compara contra la base real. Vive aparte de migrations/ a propósito: el
+// runner aplica todos los .sql de migrations/, y el canónico dentro de esa
+// carpeta se aplicaría a sí mismo.
+func Schema() fs.FS { return coreFS{embedded: schemaFS} }
 
 // GlobalTemplate lee una plantilla SOLO del núcleo, ignorando los directorios de
 // los módulos.
@@ -241,4 +250,3 @@ func scanModuleRoots() []string {
 	sort.Strings(salida)
 	return salida
 }
-

@@ -109,9 +109,12 @@ Objetivo: 62 archivos → 1 DDL canónico por motor.
      `schema_z_correlativos.sql` y la guía).
 2. Revisar el resultado A MANO tabla por tabla contra el volcado de la
    Fase 0: 220 tablas es auditable en una sesión.
-3. Entregables: `migrations/esquema_canonico_mysql.sql` y
-   `migrations/esquema_canonico_sqlite.sql` (o uno solo + traducción en
+3. Entregables: `schema/esquema_canonico_mysql.sql` y
+   `schema/esquema_canonico_sqlite.sql` (o uno solo + traducción en
    Go, decidir según lo que pida el traductor al simplificarlo).
+   El canónico NO vive en `migrations/`: el runner aplica todos los `.sql` de
+   esa carpeta y un canónico dentro se aplicaría a sí mismo (verificado en la
+   ejecución: 19 avisos por archivo auto-aplicado).
 
 Criterio de aceptación: una base limpia creada SOLO con el DDL canónico pasa
 la batería completa de `go test ./...` (que hoy arranca sobre la plantilla
@@ -123,7 +126,8 @@ Objetivo: sustituir "aplicar 62 archivos en orden alfabético" por
 "deseado vs real, aplicar el diff".
 
 1. `infrastructure/persistence/reconciliador.go`:
-   - Lee el DDL canónico (embebido, `embed.go` ya embebe `migrations/`).
+   - Lee el DDL canónico (en `schema/`, embebido; `embed.go` hoy embebe
+     `migrations/` y hay que extenderlo a `schema/`).
    - Introspección: `information_schema.TABLES/COLUMNS/KEYS` en MySQL;
      en SQLite, `sqlite_master` + `PRAGMA table_info` tras la traducción.
    - Aplica: `CREATE TABLE` si falta; `ADD COLUMN` si falta columna; índices

@@ -95,6 +95,26 @@ func RunMigrationsForMySQL(db *sql.DB, cfg ConfigMySQL) error {
 		fmt.Printf("  AVISO: no se pudo activar la proteccion de borrado en la base: %v\n", err)
 		fmt.Println("  La aplicacion arranca igual, pero la base NO esta impidiendo los borrados con movimiento.")
 	}
+
+	// Reconciliación con el esquema canónico (Fase 2 del plan de esquema
+	// canónico): converged la base al DDL declarativo. En una base ya migrada
+	// el diff es cero y no toca nada; en una base a medias, la deja completa.
+	// Se hace DESPUÉS de la cadena y de los triggers: el canónico ya incluye
+	// las tablas que el código crea, y los triggers los crea el mismo
+	// AplicarProteccionUnaVez que acaba de correr.
+	resultado, err := ReconciliarConCanonico(db, "mysql")
+	if err != nil {
+		fmt.Printf("  AVISO: no se pudo reconciliar con el esquema canónico: %v\n", err)
+		return nil
+	}
+	cambios := len(resultado.TablasCreadas) + len(resultado.ColumnasAgregadas) + len(resultado.IndicesCreados)
+	if cambios > 0 {
+		fmt.Printf("  Esquema canónico: %d tablas creadas, %d columnas agregadas, %d índices creados\n",
+			len(resultado.TablasCreadas), len(resultado.ColumnasAgregadas), len(resultado.IndicesCreados))
+	}
+	for _, aviso := range resultado.Avisos {
+		fmt.Printf("  AVISO esquema canónico: %s\n", aviso)
+	}
 	return nil
 }
 
