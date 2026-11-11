@@ -128,8 +128,7 @@ var skipDirs = map[string]bool{
 	"uploads":      true,
 	"node_modules": true,
 	".freebuff":    true,
-	"static":       true, // legacy PHP-era assets, served verbatim
-	"php_original": true, // reference copy of the old PHP tree
+	"static":       true, // assets de la era PHP (AdminLTE y sus plugins), servidos verbatim: se conservan a propósito, ver docs/HERENCIA-PHP.md
 	"data":         true, // runtime database directory
 	"developer":    true, // this manual's own output directory
 	// Copia heredada del árbol de ejecución: repite templates/, static/ e

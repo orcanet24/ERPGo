@@ -238,6 +238,40 @@ func TestArranqueSelladoIdempotente(t *testing.T) {
 	}
 }
 
+// TestReconciliadorRecuperaTablasDeCodigo prueba la Fase 4: las tablas que el
+// código crea fuera de migrations/ (addon_hook_out, queue_tasks) viven en el
+// canónico, y el reconciliador las trae de vuelta si alguien las borra.
+func TestReconciliadorRecuperaTablasDeCodigo(t *testing.T) {
+	db, limpiar, err := NuevaBaseVaciaDePrueba("recontablas")
+	if err != nil {
+		t.Skipf("no hay MySQL para esta prueba: %v", err)
+	}
+	defer limpiar()
+
+	if _, err := ReconciliarConCanonico(db, "mysql"); err != nil {
+		t.Fatalf("reconciliación inicial: %v", err)
+	}
+	for _, tabla := range []string{"addon_hook_out", "queue_tasks"} {
+		if _, err := db.Exec("DROP TABLE " + tabla); err != nil {
+			t.Fatalf("no se pudo borrar %s: %v", tabla, err)
+		}
+	}
+
+	res, err := ReconciliarConCanonico(db, "mysql")
+	if err != nil {
+		t.Fatalf("reconciliación: %v", err)
+	}
+	creadas := map[string]bool{}
+	for _, t := range res.TablasCreadas {
+		creadas[t] = true
+	}
+	for _, tabla := range []string{"addon_hook_out", "queue_tasks"} {
+		if !creadas[tabla] {
+			t.Errorf("%s no la trajo el reconciliador (creadas: %v)", tabla, res.TablasCreadas)
+		}
+	}
+}
+
 // TestEsquemaEmbebido verifica que el embed de schema/ existe y trae el DDL:
 // si el archivo sale del repositorio, el reconciliador se queda mudo y esta
 // prueba es la que lo delata.

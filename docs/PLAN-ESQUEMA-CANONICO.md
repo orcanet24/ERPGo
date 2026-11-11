@@ -239,6 +239,19 @@ Objetivo: una sola fuente de verdad, también para el código.
 - **Pendiente de Fase 3:** la validación con la simulación fiscal completa
   (12 meses) sobre una base reconciliada. Requiere el ERP corriendo y la carga
   del año; no se ejecutó en esta sesión.
+- **Fase 4 (hecha).** `web.AplicarEsquemasDeCodigo` y `queue.AplicarEsquema`
+  son el único punto que crea esquema fuera de `migrations/`; el canónico las
+  incluye y el reconciliador las trae de vuelta si se borran
+  (`TestReconciliadorRecuperaTablasDeCodigo`). Las tablas condicionales
+  (`guia_*`, `spidi_pago`, `yummy_webhook_evento`) siguen creándolas su módulo
+  cuando se activan: no van al canónico incondicional.
+- **Fase 5 (hecha en comportamiento).** La cadena sigue en `migrations/` como
+  red de seguridad, pero las bases selladas ya no la ejecutan: el arranque se
+  salta los 62 archivos y va directo al reconciliador. El movimiento físico a
+  `legacy/` queda para después de un ciclo sin incidentes, como decía el plan.
+- **Fase 6 (hecha).** `cmd/docgen/scan.go` ya no marca la ruta PHP muerta;
+  `docs/HERENCIA-PHP.md` documenta qué quedó del PHP, qué se retiró y la regla
+  de que nada nuevo hereda sus nombres.
 
 ## 4. Riesgos y mitigaciones
 
