@@ -68,11 +68,47 @@ func main() {
 	sinVerificar := flag.Bool("sin-verificar", false, "no comparar contra la base de referencia")
 	mantener := flag.Bool("mantener", false, "no borrar la base scratch al terminar")
 	probar := flag.Bool("probar", false, "aplicar el canónico a una base fresca y verificarla contra la referencia")
+	reconciliar := flag.String("reconciliar", "", "reconcilia (y sella) una base existente contra el canónico, sin construir nada")
 	flag.Parse()
 
+	// Las credenciales se cargan antes de cualquier rama: el -reconciliar va
+	// antes de construir el scratch y necesita el .env igual que el resto.
 	if err := godotenv.Load(*rutaEnv); err != nil {
 		fmt.Printf("AVISO: no se pudo leer %s (%v); se usan variables de entorno o banderas\n", *rutaEnv, err)
 	}
+
+	// Transición de una base instalada (Fase 3): reconciliar y sellar. Es la
+	// operación que se hace sobre la base real del cliente, no sobre el
+	// scratch de desarrollo.
+	if *reconciliar != "" {
+		cfgRec := configuracion(*reconciliar)
+		dbRec, err := persistence.OpenMySQL(persistence.ConfigMySQL{
+			Host: cfgRec.Host, Port: cfgRec.Port, Usuario: cfgRec.Usuario, Clave: cfgRec.Clave, Nombre: cfgRec.Nombre,
+		})
+		if err != nil {
+			salir(err)
+		}
+		defer dbRec.Close()
+		if err := dbRec.Ping(); err != nil {
+			salir(fmt.Errorf("no hay conexión con %s: %w", cfgRec.Nombre, err))
+		}
+		res, err := persistence.ReconciliarConCanonico(dbRec, "mysql")
+		if err != nil {
+			salir(fmt.Errorf("reconciliación de %s: %w", cfgRec.Nombre, err))
+		}
+		fmt.Printf("Reconciliación de %s: %d tablas creadas, %d columnas agregadas, %d índices creados, %d avisos\n",
+			cfgRec.Nombre, len(res.TablasCreadas), len(res.ColumnasAgregadas), len(res.IndicesCreados), len(res.Avisos))
+		for _, aviso := range res.Avisos {
+			fmt.Printf("  AVISO: %s\n", aviso)
+		}
+		if err := persistence.SellarCanonico(dbRec); err != nil {
+			salir(fmt.Errorf("no se pudo sellar %s: %w", cfgRec.Nombre, err))
+		}
+		suma, _ := persistence.SelloCanonico(dbRec)
+		fmt.Printf("Sellada con esquema_canonico_v1 (%s…)\n", suma[:12])
+		return
+	}
+
 	cfg := configuracion(*referencia)
 	if cfg.Nombre == "" {
 		salir(fmt.Errorf("no hay base de referencia: define DB_NAME en el .env o usa -referencia"))

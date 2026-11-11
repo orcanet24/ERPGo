@@ -47,36 +47,62 @@ import (
 // la lentitud de antes. Perder 9 segundos en la instalación es aceptable; no
 // instalar el ERP, no.
 func RunMigrationsForMySQL(db *sql.DB, cfg ConfigMySQL) error {
-	migs, err := readMigrations()
-	if err != nil {
-		return err
+	// ¿La base ya está en el modelo nuevo con el DDL vigente? Entonces la
+	// cadena de migraciones sobra: el reconciliador es la única verdad.
+	//
+	// POR QUÉ. La cadena ordena parches por nombre de archivo y re-aplica lo
+	// que cambió; el reconciliador declara el estado final y converge a él.
+	// Una base sellada con el DDL vigente no necesita la cadena, y saltarla
+	// evita el riesgo de re-aplicar un archivo editado. La cadena queda como
+	// red de seguridad de las bases sin sello (instalaciones viejas).
+	sello, _ := SelloCanonico(db)
+	sumaActual, sumaErr := ChecksumCanonico()
+	switch {
+	case sello == "":
+		// Base sin sello (instalación vieja o nueva): la cadena es la red de
+		// seguridad que deja el esquema en su estado; el reconciliador lo
+		// converge al canónico y el sello lo registra.
+		fmt.Println("Migrations (MySQL): base sin sellar; se aplica la cadena de migraciones.")
+	case sumaErr == nil && sello == sumaActual:
+		fmt.Println("Migrations (MySQL): base sellada con el DDL canónico vigente; se omite la cadena y se reconcilia.")
+	default:
+		// Sellada con un DDL anterior: la cadena no sabe nada de versiones
+		// del canónico, así que no corre; el reconciliador converge al vigente.
+		fmt.Println("Migrations (MySQL): base sellada con un DDL canónico anterior; se reconcilia al vigente sin re-aplicar la cadena.")
 	}
 
-	rapido, err := OpenMySQL(ConfigMySQL{
-		Host: cfg.Host, Port: cfg.Port, Usuario: cfg.Usuario,
-		Clave: cfg.Clave, Nombre: cfg.Nombre,
-		MultiStatements: true, MaxConns: 2,
-	})
-	if err != nil {
-		fmt.Printf("  esquema: se aplica sentencia a sentencia (multiStatements no disponible: %v)\n", err)
-		rapido = nil
-	} else {
-		defer rapido.Close()
-	}
+	if sello == "" {
+		migs, err := readMigrations()
+		if err != nil {
+			return err
+		}
 
-	aplicados, reutilizados, sentencias, avisos := aplicarMigracionesMySQL(db, rapido, migs, true)
-	fmt.Printf("Migrations (MySQL): %d archivos aplicados, %d ya aplicados, %d sentencias, %d avisos\n",
-		aplicados, reutilizados, sentencias, avisos)
-	if avisos > 0 {
-		fmt.Println("  ATENCION: hubo sentencias que no se aplicaron. La aplicacion arranca,")
-		fmt.Println("  pero revise este log antes de confiar en los datos.")
-	}
+		rapido, err := OpenMySQL(ConfigMySQL{
+			Host: cfg.Host, Port: cfg.Port, Usuario: cfg.Usuario,
+			Clave: cfg.Clave, Nombre: cfg.Nombre,
+			MultiStatements: true, MaxConns: 2,
+		})
+		if err != nil {
+			fmt.Printf("  esquema: se aplica sentencia a sentencia (multiStatements no disponible: %v)\n", err)
+			rapido = nil
+		} else {
+			defer rapido.Close()
+		}
 
-	// La collation se normaliza DESPUÉS de aplicar el esquema, y no antes: si se
-	// hiciera antes, los CREATE TABLE del propio esquema volverían a dejar
-	// tablas con la collation que declaran (utf8mb3) y no se arreglaría nada.
-	if err := normalizarCollationMySQL(db, aplicados > 0); err != nil {
-		return err
+		aplicados, reutilizados, sentencias, avisos := aplicarMigracionesMySQL(db, rapido, migs, true)
+		fmt.Printf("Migrations (MySQL): %d archivos aplicados, %d ya aplicados, %d sentencias, %d avisos\n",
+			aplicados, reutilizados, sentencias, avisos)
+		if avisos > 0 {
+			fmt.Println("  ATENCION: hubo sentencias que no se aplicaron. La aplicacion arranca,")
+			fmt.Println("  pero revise este log antes de confiar en los datos.")
+		}
+		// La collation se normaliza DESPUÉS de aplicar el esquema, y no antes:
+		// si se hiciera antes, los CREATE TABLE del propio esquema volverían a
+		// dejar tablas con la collation que declaran (utf8mb3) y no se
+		// arreglaría nada.
+		if err := normalizarCollationMySQL(db, aplicados > 0); err != nil {
+			return err
+		}
 	}
 
 	// LA PROTECCIÓN DE BORRADO SE CREA AQUÍ, al final y en cada arranque.
@@ -114,6 +140,12 @@ func RunMigrationsForMySQL(db *sql.DB, cfg ConfigMySQL) error {
 	}
 	for _, aviso := range resultado.Avisos {
 		fmt.Printf("  AVISO esquema canónico: %s\n", aviso)
+	}
+	// Sello de la transición (Fase 3): deja constancia de que esta base ya
+	// pasó por el reconciliador con el DDL canónico vigente. Sin esto no hay
+	// forma de saberlo en campo sin volcar el esquema.
+	if err := SellarCanonico(db); err != nil {
+		fmt.Printf("  AVISO: no se pudo sellar el esquema canónico en el ledger: %v\n", err)
 	}
 	return nil
 }

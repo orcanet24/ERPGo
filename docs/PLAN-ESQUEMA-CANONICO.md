@@ -212,6 +212,34 @@ Objetivo: una sola fuente de verdad, también para el código.
 3. El archivo `migrations/schema.sql` (el dump del PHP) queda archivado en
    `legacy/` con su lugar histórico anotado.
 
+## Bitácora de ejecución (lo que ya está hecho de verdad)
+
+- **Fase 0 (hecha).** `tools/mediresquema` midió la base real: 220 tablas en
+  `erpgow_001`, 221 en `erpgo_demo`, collation uniforme, ledger de 63 entradas.
+  Cifras en `docs/DIAGNOSTICO-ESQUEMA-2026-11.md`.
+- **Fase 1 (hecha).** `tools/esquemacanonico` genera
+  `schema/esquema_canonico_mysql.sql` reproduciendo la cadena con el runner
+  oficial y sumándole los esquemas de código. El modo `-probar` aplica el
+  archivo a una base fresca y lo verifica contra la real: columnas idénticas.
+  El canónico vive en `schema/`, NO en `migrations/` (medido: el runner se lo
+  aplicaba a sí mismo, 19 avisos).
+- **Fase 2 (hecha).** `infrastructure/persistence/canonical.go` parsea el DDL
+  y reconcilia deseado vs real. Conectado al final de `RunMigrationsForMySQL`:
+  en una base ya migrada el diff es cero. Pruebas con MySQL real y SQLite.
+- **Fase 3 (hecha, con una decisión).** Sellado `esquema_canonico_v1` en el
+  ledger (`SellarCanonico`). Transición aplicada a las bases instaladas con
+  `go run ./tools/esquemacanonico -reconciliar <base>`:
+  - `erpgow_001` (control): **0 cambios** — la transición es un no-op.
+  - `erpgo_demo` (empresa): **2 tablas + 2 columnas + 3 índices creados**.
+    Son las tablas de control (`addon_hook_out`, `queue_tasks`) y las columnas
+    `tenants.is_demo`/`db_name` que el canónico incluye y la base de empresa
+    no tenía. **Decisión: se aceptan.** Una sola verdad para todas las bases
+    vale más que dos canónicos; esas tablas viven vacías en la empresa y el
+    código que las usa (cola, hooks) opera sobre la base de control.
+- **Pendiente de Fase 3:** la validación con la simulación fiscal completa
+  (12 meses) sobre una base reconciliada. Requiere el ERP corriendo y la carga
+  del año; no se ejecutó en esta sesión.
+
 ## 4. Riesgos y mitigaciones
 
 | Riesgo | Mitigación |

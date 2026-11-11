@@ -1,6 +1,8 @@
 package persistence
 
 import (
+	"fmt"
+	"os"
 	"testing"
 )
 
@@ -154,6 +156,85 @@ func TestReconciliarSQLite(t *testing.T) {
 	}
 	if len(res2.IndicesCreados) != 1 || res2.IndicesCreados[0] != "prueba.idx_prueba_nombre" {
 		t.Errorf("índices creados: %v (avisos: %v)", res2.IndicesCreados, res2.Avisos)
+	}
+}
+
+// TestSellarCanonico verifica que el sello queda registrado una sola vez y es
+// idempotente: en campo es la forma de saber qué bases pasaron por el
+// reconciliador.
+func TestSellarCanonico(t *testing.T) {
+	db, limpiar, err := NuevaBaseVaciaDePrueba("reconsello")
+	if err != nil {
+		t.Skipf("no hay MySQL para esta prueba: %v", err)
+	}
+	defer limpiar()
+
+	if _, err := ReconciliarConCanonico(db, "mysql"); err != nil {
+		t.Fatalf("reconciliación inicial: %v", err)
+	}
+	if err := SellarCanonico(db); err != nil {
+		t.Fatalf("SellarCanonico: %v", err)
+	}
+	suma, err := SelloCanonico(db)
+	if err != nil {
+		t.Fatalf("SelloCanonico: %v", err)
+	}
+	if suma == "" {
+		t.Fatal("el sello no quedó registrado")
+	}
+
+	if err := SellarCanonico(db); err != nil {
+		t.Fatalf("segundo sello: %v", err)
+	}
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE filename = 'esquema_canonico_v1'").Scan(&n); err != nil {
+		t.Fatalf("contando sellos: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("el sello se duplicó: %d filas", n)
+	}
+}
+
+// TestArranqueSelladoIdempotente prueba el flujo nuevo: una base sin sello
+// recorre la cadena y queda sellada; un segundo arranque sobre la base sellada
+// no toca el esquema y mantiene el sello vigente.
+func TestArranqueSelladoIdempotente(t *testing.T) {
+	db, limpiar, err := NuevaBaseVaciaDePrueba("reconarr")
+	if err != nil {
+		t.Skipf("no hay MySQL para esta prueba: %v", err)
+	}
+	defer limpiar()
+
+	var nombre string
+	if err := db.QueryRow("SELECT DATABASE()").Scan(&nombre); err != nil {
+		t.Fatalf("no se pudo saber la base de prueba: %v", err)
+	}
+	cfg := ConfigMySQL{Host: os.Getenv("TEST_DB_HOST"), Port: 3306, Usuario: os.Getenv("TEST_DB_USER"), Clave: os.Getenv("TEST_DB_PASSWORD"), Nombre: nombre}
+	if puerto := os.Getenv("TEST_DB_PORT"); puerto != "" {
+		fmt.Sscanf(puerto, "%d", &cfg.Port)
+	}
+
+	if err := RunMigrationsForMySQL(db, cfg); err != nil {
+		t.Fatalf("primer arranque: %v", err)
+	}
+	suma, err := SelloCanonico(db)
+	if err != nil || suma == "" {
+		t.Fatalf("el primer arranque no selló: %q %v", suma, err)
+	}
+	vigente, err := ChecksumCanonico()
+	if err != nil {
+		t.Fatalf("checksum del canónico: %v", err)
+	}
+	if suma != vigente {
+		t.Errorf("sello %s != canónico vigente %s", suma, vigente)
+	}
+
+	if err := RunMigrationsForMySQL(db, cfg); err != nil {
+		t.Fatalf("segundo arranque: %v", err)
+	}
+	suma2, _ := SelloCanonico(db)
+	if suma2 != vigente {
+		t.Errorf("el segundo arranque cambió el sello: %s != %s", suma2, vigente)
 	}
 }
 

@@ -36,6 +36,7 @@ import (
 	"io/fs"
 	"sort"
 	"strings"
+	"time"
 
 	"erpgo"
 )
@@ -532,6 +533,57 @@ func leerCanonica() (string, error) {
 		return "", fmt.Errorf("no se pudo leer el DDL canónico: %w", err)
 	}
 	return string(contenido), nil
+}
+
+// ChecksumCanonico devuelve la huella del DDL canónico vigente. Se compara con
+// el sello del ledger para saber si la base ya está en el modelo nuevo.
+func ChecksumCanonico() (string, error) {
+	contenido, err := leerCanonica()
+	if err != nil {
+		return "", err
+	}
+	return migrationChecksum(contenido), nil
+}
+
+// SellarCanonico anota en el ledger que la base quedó reconciliada con el
+// esquema canónico (Fase 3 del plan).
+//
+// POR QUÉ UN SELLO Y NO UNA MIGRACIÓN. El sello no cambia el esquema: dice
+// "esta base ya pasó por el reconciliador con este DDL". En campo, es la forma
+// de saber qué bases están en el modelo nuevo sin volcar el esquema para
+// compararlas. Es idempotente (ON DUPLICATE KEY UPDATE), como las migraciones.
+func SellarCanonico(db *sql.DB) error {
+	contenido, err := leerCanonica()
+	if err != nil {
+		return err
+	}
+	// El ledger puede no existir en una instalación hecha solo con el canónico;
+	// asegurarlo aquí hace el sello autosuficiente.
+	if err := asegurarRegistroMySQL(db); err != nil {
+		return err
+	}
+	_, err = db.Exec(`INSERT INTO schema_migrations (filename, checksum, statements, applied_at)
+		VALUES (?,?,?,?)
+		ON DUPLICATE KEY UPDATE
+			checksum = VALUES(checksum),
+			statements = VALUES(statements),
+			applied_at = VALUES(applied_at)`,
+		"esquema_canonico_v1", migrationChecksum(contenido), 0, time.Now().Format("2006-01-02 15:04:05"))
+	return err
+}
+
+// SelloCanonico devuelve el checksum registrado del canónico, o "" si la base
+// no ha pasado por la reconciliación.
+func SelloCanonico(db *sql.DB) (string, error) {
+	var suma string
+	err := db.QueryRow("SELECT checksum FROM schema_migrations WHERE filename = 'esquema_canonico_v1'").Scan(&suma)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return suma, nil
 }
 
 // Ordenadas devuelve una copia ordenada de una lista, para reportes estables.
