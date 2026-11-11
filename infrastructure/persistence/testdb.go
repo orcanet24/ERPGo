@@ -71,8 +71,10 @@ func NuevaBaseDePrueba(prefijo string) (*sql.DB, func(), error) {
 // NuevaBaseVaciaDePrueba crea una base MySQL nueva SIN ESQUEMA.
 //
 // Por qué existe aparte de NuevaBaseDePrueba. NuevaBaseDePrueba clona la
-// plantilla migrada (139 tablas) porque es lo que quiere casi todo el mundo: los
-// tests miden comportamiento sobre el esquema real. Pero hay tests que
+// plantilla migrada (220 tablas, cifra medida por tools/mediresquema contra
+// la base real erpgow_001 el 2026-11-11; el "139" anterior era un comentario
+// anterior a la serie reconstruido) porque es lo que quiere casi todo el mundo:
+// los tests miden comportamiento sobre el esquema real. Pero hay tests que
 // definen su propio DDL mínimo y ejecutan `CREATE TABLE ...` en él. Con la
 // plantilla clonada, ese CREATE falla con Error 1050 "Table 'invoice' already
 // exists" y el test muere antes de probar nada, con un mensaje que no señala el
