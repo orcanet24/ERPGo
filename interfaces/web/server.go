@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -139,6 +140,33 @@ type WebSetting struct {
 	IsQr          int
 	IsAutoapprove int
 	DiscountType  int
+}
+
+// esPeticionXHR reconoce la llamada de librería (jQuery pone
+// X-Requested-With en toda petición misma-origen) o un Accept de JSON. Con
+// eso, la respuesta de «sesión vencida» puede ser 401 en vez del 302 que el
+// fetch sigue hasta el HTML del login.
+func esPeticionXHR(r *http.Request) bool {
+	if r.Header.Get("X-Requested-With") == "XMLHttpRequest" {
+		return true
+	}
+	accept := r.Header.Get("Accept")
+	return strings.Contains(accept, "application/json")
+}
+
+// safeReturnTo filtra el parámetro de retorno del login: solo rutas
+// relativas del propio sitio (nada de «//evil.com» ni URLs absolutas), y nada
+// de páginas que pierden el sentido al reentrar (el propio login, el logout).
+func safeReturnTo(p string) string {
+	if p == "" || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") {
+		return ""
+	}
+	for _, veto := range []string{"/login", "/logout", "/setup/", "/static/", "/uploads", "/favicon"} {
+		if strings.HasPrefix(p, veto) {
+			return ""
+		}
+	}
+	return p
 }
 
 // mimeTypesByExt forces canonical web MIME types. On Windows the registry
@@ -660,36 +688,44 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// /__addon/: el canal de negocio de los addons. Un addon no tiene cookie
-		// de navegador ni va a tener, y este middleware corre POR FUERA del de
-		// permisos —donde /__addon/ ya estaba declarado público—: sin esta
-		// entrada, todo verbo de todo addon moría en un 302 a /login que el
-		// addon no puede seguir (ni nota.crear ni ningún otro llegaba al
-		// orquestador en un ERP real). No es abrir la puerta: addonCanal decide
-		// después, fail-closed, con loopback, grant efímero, sesión viva,
-		// empresa y permiso — que es para lo que existe esa ruta.
-		// /webhooks/yummy: el receptor de webhooks de la pasarela YummyProxy2.
-		// Es máquina a máquina: la pasarela no tiene cookie del ERP y nunca la
-		// tendrá, así que la cookie no es su llave. Su autenticación es la
-		// firma HMAC-SHA256 del evento (X-Gateway-Signature), verificada dentro
-		// del handler con fail-closed: sin YUMMY_ENABLED=1 o sin secreto
-		// configurado responde 403 sin leer nada de la base. Igual que el
-		// canal de addons, la puerta pública NO es la del candado: el candado
-		// vive en el handler que decide después.
-		public := []string{"/login", "/api/login", "/api/pos/", "/__addon/", "/webhooks/", "/health", "/setup/company", "/static/", "/uploads", "/favicon"}
-		for _, p := range public {
-			if strings.HasPrefix(r.URL.Path, p) {
-				next.ServeHTTP(w, r)
-				return
-			}
+		// Lista única de rutas públicas: publicRoutes (permissions.go). ANTES
+		// authMiddleware y permissionMiddleware mantenían cada una su lista, y
+		// divergieron («/uploads» sin barra en una, «/uploads/» en la otra):
+		// dos puertas con distinto candado para la misma casa.
+		if esRutaPublica(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
 		}
 		sess := s.sessionFromRequest(r)
 		if sess == nil {
-			if strings.HasPrefix(r.URL.Path, "/uploads/") {
+			// XHR y APIs de datos reciben 401 JSON, no un 302 al HTML del
+			// login (U-2, auditoría 2026-11-22): el fetch seguía la
+			// redirección, le llegaba la página de acceso como si fuera
+			// la respuesta, y el usuario veía «Error» pelado mientras
+			// perdía lo escrito. Ahora el front detecta el 401, avisa
+			// «su sesión venció» y deja el formulario intacto.
+			if esPeticionXHR(r) || strings.HasPrefix(r.URL.Path, "/api/") {
+				jsonError(w, "Su sesión venció. Vuelva a iniciar sesión; su trabajo sigue en pantalla.", http.StatusUnauthorized)
+				return
+			}
+			if r.URL.Path == "/uploads/" || strings.HasPrefix(r.URL.Path, "/uploads/") {
 				http.Error(w, "No autorizado", http.StatusUnauthorized)
 				return
 			}
-			http.Redirect(w, r, "/login", http.StatusFound)
+			// Navegación normal: se recuerda el destino para volver ahí tras
+			// el login (returnTo), en vez de dejar al usuario en el panel con
+			// la pantalla a medio llenar perdida.
+			target := "/login"
+			if r.Method == http.MethodGet && r.URL.Path != "/" && !strings.HasPrefix(r.URL.Path, "/home") {
+				destino := r.URL.Path
+				if r.URL.RawQuery != "" {
+					destino += "?" + r.URL.RawQuery
+				}
+				if next := safeReturnTo(destino); next != "" {
+					target = "/login?next=" + url.QueryEscape(next)
+				}
+			}
+			http.Redirect(w, r, target, http.StatusFound)
 			return
 		}
 		// El token se renueva en cada visita para que el JavaScript de la

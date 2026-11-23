@@ -12,6 +12,8 @@ package web
 import (
 	"database/sql"
 	"fmt"
+	"html"
+	"html/template"
 	"net/http"
 	"strconv"
 	"strings"
@@ -112,9 +114,12 @@ type invOpt struct {
 func (s *Server) creditNoteForm(w http.ResponseWriter, r *http.Request) {
 	invoiceIDStr := r.URL.Query().Get("invoice_id")
 	var opts []invOpt
-	// Renglones precargados: uno por línea ya compegada como HTML para el
-	// front; la plantilla los serializa con jsonify.
-	var linesJSON []string = nil
+	// Renglones precargados de la factura seleccionada, construidos como HTML
+	// seguro (los valores de producto se escapan uno a uno) y entregados como
+	// template.HTML: ANTES vivían en un data- attribute que nadie leía y la
+	// tabla se pintaba vacía —el usuario tecleaba todo a mano o emitía la NC
+	// en cero (U-1/defecto hermano, auditoría 2026-11-22)—.
+	var lineas strings.Builder
 	var custName, custRIF, invTotal string
 
 	if invoiceIDStr != "" {
@@ -135,8 +140,17 @@ func (s *Server) creditNoteForm(w http.ResponseWriter, r *http.Request) {
 					if err := rows.Scan(&pid, &desc, &price, &taxRate); err != nil {
 						continue
 					}
-					linea := fmt.Sprintf(`<tr data-id="%s" data-desc="%s" data-price="%f" data-tax="%f"><td>%s</td><td><input type="text" class="form-control cn-qty" value="1"></td><td><input type="text" class="form-control text-right cn-rate" value="%f"></td><td><input type="text" class="form-control text-right cn-vat" value="%f"></td><td class="text-right cn-total" style="font-size:12px">0.00</td></tr>`, pid, desc, price, taxRate, pid, price, taxRate)
-					linesJSON = append(linesJSON, linea)
+					// El renglón viaja con sus nombres de formulario
+					// (item_id/item_desc/item_qty/item_rate/item_vat): el
+					// handler los lee por nombre y el navegador podría
+					// enviarlos incluso sin JavaScript.
+					fmt.Fprintf(&lineas,
+						`<tr><td><input type="hidden" name="item_id" value="%s"><input type="text" class="form-control item-desc" name="item_desc" value="%s"></td>`+
+							`<td><input type="text" class="form-control text-right cn-qty" name="item_qty" value="1"></td>`+
+							`<td><input type="text" class="form-control text-right cn-rate" name="item_rate" value="%.2f"></td>`+
+							`<td><input type="text" class="form-control text-right cn-vat" name="item_vat" value="%.2f"></td>`+
+							`<td class="text-right cn-total" style="font-size:12px">0.00</td></tr>`,
+						html.EscapeString(pid), html.EscapeString(desc), price, taxRate)
 				}
 				rows.Close()
 			}
@@ -176,14 +190,15 @@ func (s *Server) creditNoteForm(w http.ResponseWriter, r *http.Request) {
 	datos := map[string]interface{}{
 		"Title":     "Nueva Nota de Crédito",
 		"Invoices":  opts,
-		"LinesJSON": linesJSON,
+		"Lines":     template.HTML(lineas.String()),
 		"CustName":  custName,
 		"CustRIF":   custRIF,
 		"InvTotal":  invTotal,
 	}
 	// Con factura ya elegida (el front la pide por AJAX) se responde solo el
-	// formulario, sin layout: el desglose lo pinta la plantilla leyendo
-	// LinesJSON, así que no hace falta manipulaciones adicionales del HTML.
+	// formulario, sin layout: el desglose va RENDERIDO en #cnRows, así que la
+	// copia del tbody en el front muestra renglones reales (antes llegaba
+	// vacío por diseño: los renglones vivían en un data-attribute huérfano).
 	if invoiceIDStr != "" {
 		s.renderPartial(w, "creditnote_form.html", datos)
 		return
@@ -276,6 +291,12 @@ func (s *Server) creditNoteSave(w http.ResponseWriter, r *http.Request) {
 		qty, rate, vatPct, total float64
 	}
 	lines := []line{}
+	// item_desc viaja con el renglón: la nota se emite tal como el usuario la
+	// ve (el producto origen ya está en la factura; la NC documenta el
+	// concepto). ANTES el handler descartaba las descripciones (desc: "") y
+	// credit_note_details quedaba vacía: la impresión fiscal salía sin renglón
+	// que mostrar, y en una revisión no había forma de saber qué se acreditó.
+	descs := r.Form["item_desc"]
 	for i, idv := range ids {
 		qty := parseMoney(qtys[i])
 		rate := parseMoney(rates[i])
@@ -287,8 +308,15 @@ func (s *Server) creditNoteSave(w http.ResponseWriter, r *http.Request) {
 		vat := round2(base * vatPct / 100.0)
 		total += base
 		vatTotal += vat
-		lines = append(lines, line{desc: "", qty: qty, rate: rate, vatPct: vatPct, total: base})
-		_ = idv
+		desc := ""
+		if i < len(descs) {
+			desc = strings.TrimSpace(descs[i])
+		}
+		ln := line{desc: desc, qty: qty, rate: rate, vatPct: vatPct, total: base}
+		if pid, perr := strconv.ParseInt(strings.TrimSpace(idv), 10, 64); perr == nil && pid > 0 {
+			ln.productID = sql.NullString{String: idv, Valid: true}
+		}
+		lines = append(lines, ln)
 	}
 	grand := round2(total + vatTotal)
 
@@ -345,15 +373,24 @@ func (s *Server) creditNoteSave(w http.ResponseWriter, r *http.Request) {
 	}
 	ref := fmt.Sprintf("NC-%08d", doc.Number)
 	var vno2 string
-	// 1) Reversión de ingreso: Debit Sales, Credit Customer por el total
+	// 1) Reversión de ingreso: Debit Ventas por la BASE, Credit Cliente por la
+	// base. ANTES se debitaba «grand» (base+IVA) contra Ventas y acreditaba al
+	// cliente por ese mismo grand, y la fila 2 sumaba otro crédito al cliente
+	// por el IVA: una NC de 100+16 dejaba al cliente acreditado 132 —CxC
+	// descuadrada, ingresos rebajados de más (F-7, auditoría 2026-11-22). La
+	// fila 2 hace de espejo exacto de la venta: cada pata se revierte por su
+	// propio importe y el crédito total al cliente es base+IVA = grand, ni un
+	// céntimo más.
 	vno := nextVoucherNoTx(tx, "JV")
 	_ = s.insertVoucherRowTx(r, tx, VoucherRow{
 		VNo: vno, Vtype: "JV", ReferenceNo: ref,
 		COAID: pre.SalesCode, RevCodde: pre.CustomerCode,
 		Narration: "Nota de crédito " + ref, Comment: reason,
-		Debit: grand, SubType: 3, SubCode: s.subcodeID(r, customerID, 3),
+		Debit: total, SubType: 3, SubCode: s.subcodeID(r, customerID, 3),
 	}, createBy)
-	// 2) Reversión de IVA: Debit Tax (provisión), Credit Customer
+	// 2) Reversión de IVA: Debit la cuenta de impuesto (la misma pata que la
+	// venta acredita; con la cuenta IVA-por-pagar del plan fiscal, esta fila
+	// reduce el pasivo sin tocar código), Credit Cliente por el IVA.
 	if vatTotal > 0 {
 		vno2 = nextVoucherNoTx(tx, "JV")
 		_ = s.insertVoucherRowTx(r, tx, VoucherRow{

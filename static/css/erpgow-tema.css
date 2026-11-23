@@ -96,7 +96,9 @@
     --erp-ok: #2e7d5b;
     --erp-ok-soft: #e7f2ed;
     --erp-ok-ink: #1f5c41;   /* texto fuerte sobre fondo suave */
-    --erp-warn: #b3801f;
+    /* #b3801f daba 3,49:1 sobre blanco y fallaba AA justamente donde avisa
+       de cosas fiscales («sin RIF», IGTF). #8a6117: mismo matiz, 5,5:1. */
+    --erp-warn: #8a6117;
     --erp-warn-soft: #f8f1de;
     --erp-warn-ink: #7e5913;
     --erp-danger: #b0413e;

@@ -430,12 +430,33 @@ $(function () {
         if (!hasItems) { toastr.warning('Agregue al menos un producto'); return; }
         if (!allSet) { toastr.warning('Complete producto y cantidad en todas las filas'); return; }
 
+        // CANDADO DE DOBLE ENVÍO (F-6, auditoría 2026-11-22): cada POST
+        // consume número fiscal; sin esto, un doble clic emitía dos facturas.
+        // El candado vive aquí (no en guardado.js) porque este formulario
+        // intercepta su propio submit y guardado.js lo salta por diseño.
+        var $btns = $('#invoiceForm button[type=submit]').prop('disabled', true);
         $.post('/invoice/save', $('#invoiceForm').serialize(), function (r) {
             if (r.status == 1) {
                 toastr.success(r.msg + ' #' + r.invoice_id);
-                if (submittedAction === 'save_exit') setTimeout(function () { location.href = '/invoice/details/' + r.invoice_id; }, 800);
-            } else toastr.error(r.error || 'Error');
-        }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });
+                // Tras emitir, la pantalla se limpia con la recarga BLANDA
+                // del proyecto (ERPGo.refrescar): el formulario seguía
+                // mostrando la factura ya guardada y un segundo clic sobre
+                // ella era la segunda factura. refrescar() re-pide la página
+                // y deja el formulario limpio y armado para el siguiente
+                // cliente, sin el «Espere...» de la recarga entera.
+                if (submittedAction === 'save_exit') {
+                    setTimeout(function () { location.href = '/invoice/details/' + r.invoice_id; }, 800);
+                } else {
+                    setTimeout(function () { ERPGo.refrescar(); }, 700);
+                }
+            } else {
+                toastr.error(r.error || 'Error');
+                $btns.prop('disabled', false);
+            }
+        }).fail(function (x) {
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'Error');
+            $btns.prop('disabled', false);
+        });
     });
 });
 </script>

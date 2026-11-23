@@ -1,5 +1,8 @@
-@import url(https://fonts.googleapis.com/css?family=Open+Sans:300,300i,400,400i,600,600i,700,700i,800,800i);
-@import url(https://fonts.googleapis.com/css?family=Alegreya+Sans:100,100i,300,300i,400,400i,500,500i,700,700i,800,800i,900,900i);
+/* Fuentes locales: los @import a fonts.googleapis.com se retiraron
+   (U-11/rendimiento, auditoría 2026-11-22): bloqueaban la primera pintura
+   hasta resolver DNS —invisible con red, lento y engañoso sin ella— y eran
+   la única salida a internet del ERP. La pila de familias cae a Arial,
+   idéntico resultado final que antes cuando la carga de Google fallaba. */
 .layout-boxed .wrapper,
 .wrapper {
   position: relative;

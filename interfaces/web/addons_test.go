@@ -415,8 +415,11 @@ func TestLaRutaDelAddonPideSesion(t *testing.T) {
 	if rr.Code != http.StatusFound {
 		t.Fatalf("sin sesión la ruta del addon debía mandar al login (302), dio %d", rr.Code)
 	}
-	if loc := rr.Header().Get("Location"); loc != "/login" {
-		t.Fatalf("el redirect fue a %q, debía ser /login", loc)
+	// Desde U-2 (auditoría 2026-11-22) el 302 lleva el destino: tras el login
+	// el usuario vuelve a la pantalla que pidió, no al panel. La frontera del
+	// addon sigue siendo la misma; lo único que cambió es el retorno.
+	if loc := rr.Header().Get("Location"); loc != "/login?next=%2Fhola" {
+		t.Fatalf("el redirect fue a %q, debía ser /login con el destino /hola", loc)
 	}
 }
 

@@ -6,14 +6,19 @@
     <div class="panel-body">
         <div class="alert alert-info">
             <i class="fa fa-info-circle"></i> La nota de crédito <strong>anula o ajusta</strong> una factura sin borrarla:
-            revierte el ingreso, el IVA y devuelve el stock. Se asigna número de control fiscal automáticamente.
+            revierte el ingreso y el IVA contra el cliente, y referencia la factura afectada. Se asigna número de
+            control fiscal automáticamente. La devolución física de mercancía se registra en Devoluciones.
         </div>
-        <form id="cnForm" style="max-width:900px">
+        <!-- method/action declarados: sin JavaScript el navegador también envía
+             la nota a la ruta real (POST /creditnote/save). El botón «Emitir»
+             NO emitía nada porque el form no tenía método (U-1, auditoría
+             2026-11-22). -->
+        <form id="cnForm" method="post" action="/creditnote/save" style="max-width:900px">
             <div class="row">
                 <div class="col-md-6">
                     <div class="form-group">
-                        <label>Factura a afectar *</label>
-                        <select class="form-control" id="invoice_id" required>
+                        <label for="invoice_id">Factura a afectar *</label>
+                        <select class="form-control" id="invoice_id" name="invoice_id" required>
                             <option value="">— Seleccione factura —</option>
                             {{range .Invoices}}
                             <option value="{{.ID}}" data-total="{{.Total}}" data-rif="{{.RIF}}" data-cust="{{.Customer}}">
@@ -21,12 +26,14 @@
                             </option>
                             {{end}}
                         </select>
+                        <small class="text-muted">Si la factura no está en la lista (solo se muestran las 200 más
+                            recientes), escríbala en el buscador de Facturas y use «Nota de crédito» desde allí.</small>
                     </div>
                 </div>
                 <div class="col-md-6">
                     <div class="form-group">
-                        <label>Motivo *</label>
-                        <select class="form-control" id="reason" required>
+                        <label for="reason">Motivo *</label>
+                        <select class="form-control" id="reason" name="reason" required>
                             <option value="Devolución de mercancía">Devolución de mercancía</option>
                             <option value="Descuento posterior a la venta">Descuento posterior a la venta</option>
                             <option value="Anulación de factura por error">Anulación de factura por error</option>
@@ -41,18 +48,19 @@
                 <thead>
                     <tr><th>Descripción</th><th style="width:90px">Cantidad</th><th style="width:110px">Precio</th><th style="width:90px">IVA %</th><th style="width:110px" class="text-right">Total</th></tr>
                 </thead>
-                <tbody id="cnRows"></tbody>
+                <!-- Renglones precargados de la factura origen, RENDERIDOS por
+                     el servidor con sus nombres de formulario. -->
+                <tbody id="cnRows">{{.Lines}}</tbody>
             </table>
             <button type="button" class="btn btn-default btn-sm" id="cnAdd"><i class="fa fa-plus"></i> Añadir renglón</button>
 
             <table class="table" style="margin-top:12px;max-width:320px;margin-left:auto">
                 <tr><th class="text-right">Base</th><td class="text-right" id="cnBase">0.00</td></tr>
                 <tr><th class="text-right">IVA</th><td class="text-right" id="cnVat">0.00</td></tr>
-                <tr><th class="text-right">Descuento %</th><td class="text-right"><input type="number" step="0.01" min="0" max="100" value="0" class="form-control input-sm" id="cnDiscount"></td></tr>
                 <tr class="success"><th class="text-right"><h4 style="margin:0">TOTAL</h4></th><td class="text-right"><h4 style="margin:0"><strong id="cnGrand">0.00</strong></h4></td></tr>
             </table>
 
-            <button type="submit" class="btn btn-primary btn-lg"><i class="fa fa-save"></i> Emitir Nota de Crédito</button>
+            <button type="submit" id="cnSubmit" class="btn btn-primary btn-lg"><i class="fa fa-save"></i> Emitir Nota de Crédito</button>
         </form>
     </div>
 </div>
@@ -80,19 +88,19 @@
 <script>
 function num(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
-function cnRow(desc) {
+function cnRow() {
     $('#cnRows').append(
         '<tr>' +
-        '<td><input type="text" class="form-control cn-desc" value="' + (desc || '') + '" placeholder="Producto o concepto"></td>' +
-        '<td><input type="text" class="form-control text-right cn-qty" value="1"></td>' +
-        '<td><input type="text" class="form-control text-right cn-rate" value="0.00"></td>' +
-        '<td><input type="text" class="form-control text-right cn-vat" value="16.00"></td>' +
+        '<td><input type="hidden" name="item_id" value="">' +
+        '<input type="text" class="form-control item-desc" name="item_desc" value="" placeholder="Producto o concepto"></td>' +
+        '<td><input type="text" class="form-control text-right cn-qty" name="item_qty" value="1"></td>' +
+        '<td><input type="text" class="form-control text-right cn-rate" name="item_rate" value="0.00"></td>' +
+        '<td><input type="text" class="form-control text-right cn-vat" name="item_vat" value="16.00"></td>' +
         '<td class="text-right cn-total" style="font-size:12px">0.00</td>' +
         '</tr>');
 }
 function calcCN() {
-    var base = 0, vat = 0, discount = 0;
-    var discountPct = parseFloat($('#cnDiscount').val()) || 0;
+    var base = 0, vat = 0;
     $('#cnRows tr').each(function () {
         var q = num($(this).find('.cn-qty').val());
         var r = num($(this).find('.cn-rate').val());
@@ -102,27 +110,23 @@ function calcCN() {
         $(this).find('.cn-total').text(b.toFixed(2));
         base += b; vat += t;
     });
-    // Apply global discount
-    discount = Math.round(base * discountPct / 100 * 100) / 100;
-    base -= discount;
     $('#cnBase').text(base.toFixed(2));
     $('#cnVat').text(vat.toFixed(2));
     $('#cnGrand').text((base + vat).toFixed(2));
 }
 $(function () {
-    // El desglose precargado vive en el dato linesjson del formulario:
-    // la plantilla lo serializa con jsonify directamente desde Go.
-    $('#cnForm').data('linesjson', {{ .LinesJSON | jsonify }});
-    cnRow(); calcCN();
-    $('#cnAdd').on('click', function () { cnRow(); });
+    // Los renglones precargados ya vienen RENDERIZADOS del servidor
+    // ({{.Lines}}): aquí solo se recalculan los totales visibles.
+    calcCN();
+    $('#cnAdd').on('click', function () { cnRow(); calcCN(); });
     $('#cnRows').on('input change', 'input', calcCN);
 
     $('#invoice_id').on('change', function () {
         var $o = $(this).find(':selected');
         $('#custInfo').text($o.val() ? ('Cliente: ' + $o.data('cust') + ' — RIF: ' + ($o.data('rif') || 'sin RIF') + ' — Total original: ' + $o.data('total')) : '');
 
-        // Al elegir factura se cargan sus renglones por AJAX y se puebla
-        // la tabla del desglose con la respuesta del parcial.
+        // Al elegir factura se cargan sus renglones: la respuesta trae la
+        // tabla ya renderizada por el servidor (antes copiaba un tbody vacío).
         var invId = $(this).val();
         if (invId) {
             $.get('/creditnote/new?invoice_id=' + invId, function (data) {
@@ -131,6 +135,33 @@ $(function () {
             })
             .fail(function () { toastr.error('Error cargando líneas de la factura'); });
         }
+    });
+
+    // submit con candado de doble envío: cada nota consume serie fiscal, y
+    // dos clics sobre «Emitir» eran dos notas (F-6 de la auditoría; el
+    // candado es el mismo patrón de guardado.js, aplicado porque este form
+    // intercepta su propio submit y guardado.js lo salta por diseño).
+    $('#cnForm').on('submit', function (e) {
+        e.preventDefault();
+        var $btn = $('#cnSubmit');
+        if ($btn.prop('disabled')) { return; }
+        if (!$('#invoice_id').val()) { toastr.warning('Seleccione la factura que se corrige'); return; }
+        if (!$('#cnRows tr').length) { toastr.warning('Agregue al menos un renglón a la nota'); return; }
+        $btn.prop('disabled', true);
+        $.post('/creditnote/save', $('#cnForm').serialize(), function (r) {
+            if (r.status == 1) {
+                $('#okNo').text(r.note_no);
+                $('#okCtrl').text(r.control_no);
+                $('#okPrint').attr('href', '/creditnote/print/' + r.id);
+                $('#okModal').modal('show');
+            } else {
+                toastr.error(r.error || 'No se pudo emitir la nota');
+                $btn.prop('disabled', false);
+            }
+        }).fail(function (x) {
+            toastr.error(x.responseJSON ? x.responseJSON.error : 'Error guardando la nota de crédito');
+            $btn.prop('disabled', false);
+        });
     });
 });
 </script>

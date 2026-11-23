@@ -19,7 +19,10 @@ func (s *Server) registerPriceListRoutes() {
 	// que sí cargan: customer, invoice, product, purchase, return).
 	s.mux.HandleFunc("/price_list/data", s.priceListData)
 	s.mux.HandleFunc("POST /price_list/save", s.priceListSave)
-	s.mux.HandleFunc("GET /price_list/activate/{id}", s.priceListActivate)
+	// POST (no GET): activa una lista con dos UPDATE (S-10 de la auditoría) —
+	// una navegación GET de nivel superior con SameSite=Lax enviaba la cookie
+	// y un enlace preparado cambiaba la lista de precios de la empresa.
+	s.mux.HandleFunc("POST /price_list/activate/{id}", s.priceListActivate)
 	s.mux.HandleFunc("POST /price_list/delete/{id}", s.priceListDelete)
 	s.mux.HandleFunc("GET /product_price/list", s.productPriceList)
 	s.mux.HandleFunc("/product_price/data", s.productPriceData)

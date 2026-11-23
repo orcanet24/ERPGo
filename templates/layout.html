@@ -145,7 +145,7 @@
 				<ul class="dropdown-menu">
 					<li><a href="/user/profile"><i class="pe-7s-users"></i> Editar Perfil</a></li>
 					<li><a href="/switch-tenant"><i class="pe-7s-switch"></i> Cambiar de empresa</a></li>
-					<li><a href="/user/profile"><i class="pe-7s-settings"></i> Cambiar Contraseña</a></li>
+					<li><a href="/user/profile#password"><i class="pe-7s-key"></i> Cambiar Contraseña</a></li>
 					<!-- Apariencia: el tema y la densidad son personales, asi que
 					     viven en el desplegable de quien esta usando el sistema y no
 					     en la configuracion de la empresa. -->
@@ -294,8 +294,8 @@
             <div class="content">
 
                 <ol class="breadcrumb">
-                    <li><a href="#"><i class="pe-7s-home"></i> Inicio</a></li>
-                    <li><a href="#">{{.Module}}</a></li>
+                    <li><a href="/home"><i class="pe-7s-home"></i> Inicio</a></li>
+                    <li>{{.Module}}</li>
                     <li class="active">{{.Title}}</li>
                 </ol>
 
@@ -315,10 +315,11 @@
             <strong>
                 {{.Setting.FooterText}}
             </strong>
-            <a href="{{.CurrentURL}}">
-                {{.CompanyName}}</a>
+            {{/* La empresa en el pie es texto, no enlace: el enlace apuntaba a
+                 {{.CurrentURL}} —la propia página—, un botón que no lleva a
+                 ninguna parte (chrome, auditoría U-3). */}}
+            <span>{{.CompanyName}}</span>
             <span class="erp-footnote">&middot; ERPGo &copy; Orcanet1724 C.A</span>
-            <input type="hidden" id="base_url" value="/" name="">
             <input type="hidden" name="dis_type" id="discount_type" value="{{.Setting.DiscountType}}">
             <input type="hidden" name="csrf_test_name" id="CSRF_TOKEN" value="">
             <input type="hidden" id="currency" value="{{.Currency}}" name="">
@@ -333,9 +334,57 @@
          contenedor una recarga blanda dejaría la vista sin manejadores. */}}
     <div id="pagejs-host">{{template "pagejs" .}}</div>
     <script>
-    // Atajos de teclado globales (como el PHP original)
-    Mousetrap.bind(['ctrl+c'], function() { $('#calculator').modal('show'); return false; });
+    // Atajos de teclado globales.
+    //
+    // Ctrl+C quedó LIBERADO (U-4, auditoría 2026-11-22): estaba secuestrado
+    // para abrir la calculadora, de modo que copiar un RIF o un número en
+    // CUALQUIER campo del ERP abría un modal encima del formulario. La
+    // calculadora vive ahora en Alt+C —misma mano, sin robar el portapapeles—.
+    Mousetrap.bind(['alt+c'], function() { $('#calculator').modal('show'); return false; });
     Mousetrap.bind('esc', function() { $('.modal').modal('hide'); });
+    </script>
+    <script>
+    // Buscador de menú (U-3, auditoría 2026-11-22): el input existía en todas
+    // las páginas sin un solo manejador en el repo —escribir «fac» no hacía
+    // nada, y un control que promete y miente cuesta más confianza del que
+    // nunca se puso—. Filtra los enlaces por texto, abre los treeview con
+    // coincidencias y oculta los grupos vacíos; al vaciar, restaura.
+    $(function () {
+        var $filter = $('#menuFilter');
+        if (!$filter.length) { return; }
+        var $menu = $('.sidebar-menu');
+        $menu.find(' > li.treeview > a').attr('aria-expanded', function () {
+            return $(this).parent('li').hasClass('active') ? 'true' : 'false';
+        });
+        $menu.on('click', ' > li.treeview > a', function () {
+            var $li = $(this).closest('li');
+            $(this).attr('aria-expanded', $li.hasClass('menu-open') ? 'false' : 'true');
+        });
+        function normalizar(s) {
+            return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        }
+        $filter.on('input', function () {
+            var q = normalizar($filter.val().trim());
+            if (!q) {
+                $menu.find('li').show();
+                return;
+            }
+            $menu.children('li').each(function () {
+                var $li = $(this);
+                var propio = normalizar($li.children('a').text());
+                var $hijos = $li.find('ul li');
+                var hijosVisibles = 0;
+                $hijos.each(function () {
+                    var hit = normalizar($(this).children('a').text()).indexOf(q) >= 0;
+                    $(this).toggle(hit);
+                    if (hit) { hijosVisibles++; }
+                });
+                var visible = propio.indexOf(q) >= 0 || hijosVisibles > 0;
+                $li.toggle(visible);
+                if (visible && $hijos.length) { $li.addClass('menu-open active'); }
+            });
+        });
+    });
     </script>
 
     <!-- calculator modal -->

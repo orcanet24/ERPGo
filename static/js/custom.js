@@ -1,3 +1,50 @@
+// ============================================================================
+// Defaults de tabla y de errores de sesión — globales, antes de cualquier
+// $(function) para que rijan también en los scripts de cada página (pagejs
+// se registra después de este archivo en el <body>).
+//
+// Por qué global y no pantalla a pantalla: 63 de las 64 tablas no definían
+// language ni errMode (U-10/usabilidad, auditoría 2026-11-22); ante un 500
+// de la BD el usuario veía el alert gris EN INGLÉS de DataTables, sin
+// reintento y sin saber qué pasó. Aquí se fija la política una sola vez.
+// ============================================================================
+(function ($) {
+  "use strict";
+  if (!$.fn || !$.fn.dataTable) { return; }
+
+  var es = {
+    decimal: ",", thousands: ".", emptyTable: "Sin datos",
+    info: "Mostrando _START_ a _END_ de _TOTAL_ registros",
+    infoEmpty: "Mostrando 0 a 0 de 0 registros",
+    infoFiltered: "(filtrado de _MAX_ registros)",
+    lengthMenu: "Mostrar _MENU_ registros",
+    loadingRecords: "Cargando...", processing: "Procesando...",
+    search: "Buscar:", zeroRecords: "No se encontraron resultados",
+    paginate: { first: "Primero", last: "Último", next: "Siguiente", previous: "Anterior" }
+  };
+  if ($.extend) { $.extend(true, $.fn.dataTable.defaults, { language: es }); }
+  $.fn.dataTable.ext.errMode = "none";
+  $(document).on("error.dt", function (e, settings, techNote, message) {
+    if (window.toastr) { toastr.error("La tabla no pudo cargarse. Verifique la conexión y recargue."); }
+    if (window.console) { console.error("DataTables:", message, techNote); }
+  });
+
+  // 401 global (U-2): cuando la sesión venció en medio de una operación, el
+  // aviso dice lo que pasó y qué hacer SIN borrar lo escrito — los handlers
+  // propios de cada formulario verán su toast genérico; este se muestra una
+  // sola vez por oleada de fallos para no ametrallar al usuario.
+  var sesionAvisada = false;
+  $(document).ajaxError(function (e, xhr) {
+    if (xhr && xhr.status === 401 && !sesionAvisada) {
+      sesionAvisada = true;
+      setTimeout(function () { sesionAvisada = false; }, 15000);
+      if (window.toastr) {
+        toastr.warning("Su sesión venció. Vuelva a iniciar sesión en otra pestaña y regrese: su trabajo sigue aquí.", "Sesión vencida", { timeOut: 0, extendedTimeOut: 0 });
+      }
+    }
+  });
+})(jQuery);
+
 $(function ($) {
   "use strict";
   //tooltips
@@ -305,10 +352,63 @@ function InputSymbol(num) {
 }
 
 ("use strict");
+// evalExprSeguro: aritmética de la calculadora SIN eval().
+//
+// eval() sobre la cadena que el usuario teclea en un modal es ejecutar
+// JavaScript con la sesión del ERP en la cookie (U-4, auditoría): no había
+// ataque famoso esperando, pero la frontera correcta es «esta caja solo
+// evalúa números, no código». Parser de descenso recursivo sobre
+// + - * / ( ) y decimales; cualquier otro carácter es error de entrada.
+function evalExprSeguro(expresion) {
+  var i = 0, s = String(expresion || "");
+  function saltar() { while (i < s.length && s[i] === " ") { i++; } }
+  function numero() {
+    saltar();
+    var ini = i;
+    while (i < s.length && (s[i] >= "0" && s[i] <= "9" || s[i] === ".")) { i++; }
+    if (ini === i) { throw new Error("numero"); }
+    var v = parseFloat(s.slice(ini, i));
+    if (isNaN(v)) { throw new Error("numero"); }
+    return v;
+  }
+  function factor() {
+    saltar();
+    if (s[i] === "(") { i++; var v = suma(); saltar(); if (s[i] !== ")") { throw new Error("paren"); } i++; return v; }
+    if (s[i] === "-") { i++; return -factor(); }
+    if (s[i] === "+") { i++; return factor(); }
+    return numero();
+  }
+  function producto() {
+    var v = factor();
+    for (;;) {
+      saltar();
+      if (s[i] === "*") { i++; v *= factor(); }
+      else if (s[i] === "/") { i++; var d = factor(); if (d === 0) { throw new Error("cero"); } v /= d; }
+      else { return v; }
+    }
+  }
+  function suma() {
+    var v = producto();
+    for (;;) {
+      saltar();
+      if (s[i] === "+") { i++; v += producto(); }
+      else if (s[i] === "-") { i++; v -= producto(); }
+      else { return v; }
+    }
+  }
+  var r = suma();
+  saltar();
+  if (i !== s.length) { throw new Error("resto"); }
+  return r;
+}
 function CalculateTotal() {
-  // Time for some EVAL magic
-  total = Math.round(eval(number) * 100) / 100;
-  mainScreen.innerHTML = total;
+  try {
+    total = Math.round(evalExprSeguro(number) * 100) / 100;
+    mainScreen.innerHTML = total;
+  } catch (err) {
+    mainScreen.innerHTML = "Error";
+    number = "";
+  }
 }
 
 ("use strict");

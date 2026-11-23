@@ -145,7 +145,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			SameSite: http.SameSiteLaxMode,
 			MaxAge:   86400,
 		})
-		http.Redirect(w, r, "/", http.StatusFound)
+		// returnTo (U-2 de la auditoría): quien llegó aquí por una sesión
+		// vencida vuelve a la pantalla donde estaba, en vez del panel con el
+		// formulario perdido. safeReturnTo solo admite rutas relativas propias.
+		destino := "/"
+		if n := safeReturnTo(r.FormValue("next")); n != "" {
+			destino = n
+		}
+		http.Redirect(w, r, destino, http.StatusFound)
 		return
 	}
 
@@ -157,7 +164,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/setup/company", http.StatusFound)
 		return
 	}
-	s.renderStandalone(r, w, "login.html", nil)
+	s.renderStandalone(r, w, "login.html", map[string]interface{}{
+		"Next": safeReturnTo(r.URL.Query().Get("next")),
+	})
 }
 
 // handleLogout destroys the session.

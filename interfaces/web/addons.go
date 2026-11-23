@@ -760,6 +760,27 @@ func (s *Server) registrarRutasAddon() {
 	s.mux.HandleFunc("/__addon/{id}/{verb}", s.addonCanal)
 }
 
+// esRutaAddon dice si un path pertenece a una página declarada por el
+// manifiesto de algún addon. El mapa de clasificación de permisos no puede
+// conocerlas —se registran en tiempo de ejecución desde los manifiestos—, y
+// esta es la pregunta que hace el fail-closed antes de negar una pantalla de
+// un addon instalado hoy. La frontera real sigue siendo addonRouter: sesión
+// viva, empresa y el permiso que el manifiesto declaró. nil-safe: sin carpeta
+// de addons no hay rutas de addon (igual que el resto de métodos del host).
+func (s *Server) esRutaAddon(path string) bool {
+	if s == nil || s.addons == nil {
+		return false
+	}
+	s.addons.mu.Lock()
+	defer s.addons.mu.Unlock()
+	for r := range s.addons.rutasDelMux {
+		if path == r || strings.HasPrefix(path, r+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // ---------- Registro en la DB: modules y menu ----------
 
 // dbDeAddon devuelve la base donde se registran los módulos: la de la empresa

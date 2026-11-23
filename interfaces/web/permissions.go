@@ -20,6 +20,7 @@ package web
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -42,7 +43,7 @@ import (
 var routeDepartment = map[string]int{
 	"/account": 9, "/adjustment": 6, "/ai": 18, "/ai_agents": 18,
 	"/ai_department": 18, "/ai_reports": 18, "/ai_tasks": 18, "/ai_catalog": 18,
-	"/appearance": 14, "/audit": 14, "/bank": 10, "/coa": 9,
+	"/audit": 14, "/bank": 10, "/coa": 9,
 	"/coa_catalog": 9, "/conasev": 8, "/cost": 1, "/creditnote": 1,
 	// CRM cuelga del módulo de personal (mid=12) en la tabla sub_module, no
 	// de clientes (2): el permiso «crm» que se marca en Roles pertenece a 12,
@@ -72,7 +73,35 @@ var routeDepartment = map[string]int{
 	//   /data      → copias de seguridad (14, configuración).
 	//   /module    → administración de addons (14, configuración).
 	"/reports": 8, "/debitnote": 1, "/accounting": 9,
-	"/data": 14, "/module": 14,
+	"/module": 14,
+
+	// Segunda tanda del mismo error (auditoría 2026-11-22): rutas de ESCRITURA
+	// que no estaban en ningún mapa y quedaban abiertas a cualquier sesión.
+	// /product_price/save solo comprobaba sesión: un cajero podía reescribirse
+	// los precios de venta. Cada prefijo va al módulo dueño de la decisión:
+	//   precios (listas y por producto) → 3 producto
+	//   almacenes, consumo interno      → 6 stock
+	//   pedidos y notas de entrega      → 15 ventas/cotización
+	//   alertas CxC/CxP y SPIDI cobros  → 9 contabilidad
+	//   pasarela Yummy (mensajería)     → 14 configuración
+	//   OCR de facturas de proveedor    → 5 compras
+	//   datos de moneda para la UI      → 8 reportes
+	// /data ANTES era módulo 14; son volcados SQL de TODAS las empresas en una
+	// carpeta común: sube a masterOnly (ver /data/backup más abajo) y se deja
+	// aquí sólo como módulo para el resto de lecturas de configuración.
+	"/data": 14,
+	"/price_list": 3, "/product_price": 3,
+	"/warehouse": 6, "/consumption": 6,
+	"/order": 15, "/delivery_order": 15,
+	"/finance": 9, "/spidi": 9,
+	"/yummy": 14, "/ocr": 5, "/api/reports": 8,
+	// /settings (plural) son las pantallas de ajuste DE LA PROPIA EMPRESA
+	// (fiscal, moneda, empresa, cambiarias): el administrador de una PyME
+	// monocompañía debe poder configurar su empresa sin ser super admin; la
+	// puerta fina la pone el módulo 14 y la matriz CRUD. Lo verdaderamente
+	// global (usuarios, roles, permisos, menús, empresas, IA, addons,
+	// respaldos SQL crudos) sigue en masterOnly más abajo.
+	"/settings": 14,
 }
 
 // routeDirectory exige, ADEMÁS del módulo, el permiso concreto de la entrada de
@@ -91,25 +120,133 @@ var routeDirectory = map[string]string{
 	"/crm":  "crm",
 }
 
-// Rutas que requieren master (gestión global del sistema)
+// Rutas que requieren master (gestión GLOBAL del sistema: identidades, roles,
+// empresas, IA, addons, menús y volcados SQL crudos de la máquina).
+//
+// La auditoría 2026-11-22 dejó fuera de esta lista «/setting» y «/settings»:
+// en una PyME de una sola empresa el dueño ES el administrador de esa empresa,
+// y dejar las pantallas de su propia compañía (datos fiscales, moneda,
+// cambiarias) solo-master obligaba a correr el binario con --setup para poder
+// configurar el RIF. Esas pantallas cuelgan ahora del módulo 14 (la matriz
+// CRUD decide), y lo que sigue siendo global de máquina —los volcados SQL que
+// se escriben en una carpeta común para TODAS las empresas— sube aquí con
+// nombre propio.
 var masterOnlyRoutes = map[string]bool{
-	"/user": true, "/permission": true, "/setting": true, "/tenant": true,
+	"/user": true, "/permission": true, "/tenant": true,
 	"/ai": true, "/ai_agents": true, "/database_settings": true,
 	"/setup/company": true, "/admin/pos": true, "/pos/api": true, "/config/menu": true,
 	// /role: la matriz de permisos decide qué puede hacer cada nivel; dejarla
 	// abierta permitía que cualquier usuario con sesión reescribiera su propio
 	// rol (escalamiento de privilegios). Antes solo estaba bajo /permission.
 	"/role": true,
-	// /settings: las pantallas reales de configuración viven en /settings/*
-	// (no en /setting, que es el prefijo viejo). Sin esta entrada cualquier
-	// usuario con sesión podía abrir /settings/fiscal y reconfigurar el RIF.
-	"/settings": true,
 	// /module: activar o desactivar un módulo cambia lo que ve TODA la empresa y
 	// enciende o apaga funciones completas (mensajería, addons). Estaba solo en
 	// routeDepartment, así que un gerente con el módulo de configuración
 	// concedido podía pulsar «Activar» en /module/list. Encender mensajería es
-	// una decisión del super administrador, igual que /setting y /tenant.
+	// una decisión del super administrador, igual que /tenant.
 	"/module": true,
+	// Volcados SQL crudos de la máquina entera (rutas legadas): el listado y la
+	// descarga leían data/backup SIN filtrar por empresa, y cualquier admin de
+	// A podía descargar el volcado completo de B. Mientras la carpeta sea
+	// común, solo master. (La ruta moderna por empresa está en S-6 del plan.)
+	"/settings/backup": true, "/data/backup": true,
+}
+
+// publicRoutes es la ÚNICA lista de lo que se sirve sin sesión. La usan los
+// dos mediadores (authMiddleware y permissionMiddleware): antes cada uno tenía
+// su propia lista y divergieron («/uploads» sin barra en una, «/uploads/» en la
+// otra), que es exactamente el tipo de error que la auditoría convirtió en
+// fail-open. Ningún verbo ni empresa vive aquí: quien no lleva cookie trae su
+// propia autenticación dentro del handler (firma HMAC del webhook, grant del
+// addon, API key del POS) y sin ella responde 401/403, nunca escribe a ciegas.
+var publicRoutes = []string{
+	"/login", "/api/login", "/api/pos/", "/__addon", "/webhooks/",
+	"/health", "/setup/company", "/static/", "/uploads", "/favicon",
+}
+
+// esRutaPublica dice si el path cae bajo alguna entrada de publicRoutes.
+func esRutaPublica(path string) bool {
+	for _, p := range publicRoutes {
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// sessionOnlyRoutes son rutas que CUALQUIER usuario autenticado debe poder
+// usar sin tener módulo asignado, porque operan sobre su propia identidad o
+// sobre la sesión. Cada una está justificada por lo que comprueba su handler,
+// no por lo que parece:
+//
+//   - "/", "/home", "/dashboard/chart-data": panel del usuario (ya se validaba
+//     por sesión; clasificarlas las saca del limbo «sin mapa = abierto»).
+//   - "/logout": cerrar la propia sesión siempre debe funcionar.
+//   - "/user/profile", "/user/change-password": usan sess.UserID/sess.Username
+//     como única identidad (user.go:548-588, verificado en la auditoría); el
+//     cambio de clave exige la contraseña actual.
+//   - "/user/photo", "/user/view-pref": escritura propia con guarda de
+//     propiedad EN el handler (userPhotoSave compara contra sess.UserID salvo
+//     que el pida sea otro — see user.go —; lo que no sea el propio exige el
+//     módulo de usuarios).
+//   - "/switch-tenant": el propio handler valida pertenencia (CanAccessTenant)
+//     y ROTA el id de sesión (tenants.go:1141-1161).
+//   - "/appearance": el tema es preferencia personal; bajo módulo 14 ningún
+//     cajero podía cambiar de tema desde el login.
+//   - "/guia": el instructor GOti; sus handlers comprueban que la empresa
+//     activa es la DEMO antes de tocar nada (guia_goti.go:8-10).
+var sessionOnlyRoutes = map[string]bool{
+	"/": true, "/home": true, "/logout": true, "/dashboard/chart-data": true,
+	"/user/profile": true, "/user/change-password": true, "/user/photo": true,
+	"/user/view-pref": true, "/switch-tenant": true, "/appearance": true,
+	"/guia": true,
+}
+
+func esRutaDeSesion(path string) bool {
+	if sessionOnlyRoutes[path] {
+		return true
+	}
+	// Las sub-rutas de los ajustes de vista por usuario (/user/view-pref/...),
+	// del instructor (/guia/...) y del tema personal (/appearance/...) siguen
+	// la misma regla que su raíz: la guarda vive en el handler. El tema NO es
+	// módulo 14: un cajero que pulsa «tema oscuro» en el login no puede
+	// necesitar permiso de configuración para una preferencia suya.
+	for _, p := range []string{"/user/view-pref/", "/guia/", "/appearance/"} {
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// clasificarRuta responde con la FRONTERA que protege un path, o
+// «sin-clasificar» si no hay nadie que la proteja. Es la única fuente: el
+// middleware deniega «sin-clasificar» (fail-closed) y el test
+// rutas_clasificadas_test.go barre el código fuente y revienta si alguien
+// registra una ruta nueva sin decir qué la protege. Así «olvidarse de
+// clasificar» deja de ser un 200 silencioso para cualquier sesión.
+func clasificarRuta(path string) (clase string, modulo int) {
+	if esRutaPublica(path) {
+		return "publico", 0
+	}
+	if esRutaDeSesion(path) {
+		return "sesion", 0
+	}
+	if isMasterRoute(path) || isCrossTenantRoute(path) {
+		return "master", 0
+	}
+	if path == "/mod/" || strings.HasPrefix(path, "/mod/") {
+		return "addon", 0
+	}
+	if dept, ok := moduleForRoute(path); ok {
+		return "modulo", dept
+	}
+	for prefix := range routeDirectory {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return "modulo", 0 // el directorio de menú manda (routeDirectory)
+		}
+	}
+	return "sin-clasificar", 0
 }
 
 // Rutas que requieren admin o master (gestión de empresa)
@@ -150,6 +287,59 @@ func actionFromMethod(method string) string {
 		return "delete"
 	}
 	return "read"
+}
+
+// nivelDeSesion resuelve el nivel de rol de un usuario con la MISMA cadena de
+// fuentes que usa el middleware, y es la única forma legítima de preguntarlo
+// desde un handler: la alternativa era que cada guarda de propiedad inventara
+// su segundo criterio y alguno se quedara viejo (exactly the pattern the
+// audit found in user/photo).
+//
+// Orden (cada paso existe por un caso real):
+//  1. sec_userrole de la empresa: el rol POR EMPRESA manda si existe.
+//  2. sec_userrole de la BD de control: en una empresa recién creada la tabla
+//     local está vacía y el rol global vive en control —sin este fallback toda
+//     la UI daba 403 (texto del fix original, conservado aquí).
+//  3. user_type=1 sin fila de rol en ninguna parte: es el administrador de la
+//     empresa creado por el alta, que a propósito no tiene fila en
+//     sec_userrole (ver identity.go).
+//  4. Nada de lo anterior: employee, el nivel más chico.
+func (s *Server) nivelDeSesion(r *http.Request, db *sql.DB, sess *SessionData) string {
+	level, err := loadUserRole(db, sess.UserID)
+	if err != nil || level == "" {
+		if ctl, cerr := s.controlStore(); cerr == nil {
+			level, _ = loadUserRole(ctl, sess.UserID)
+		}
+	}
+	if level == "" {
+		level = levelDeTipoDeUsuario(db, sess.UserID)
+		if level == "" {
+			if ctl, cerr := s.controlStore(); cerr == nil {
+				level = levelDeTipoDeUsuario(ctl, sess.UserID)
+			}
+		}
+	}
+	if level == "" {
+		level = "employee"
+	}
+	return level
+}
+
+// hasModulePermission decide FUERA del middleware si el usuario puede una
+// acción concreta en un módulo (departmentID = module.id), con la misma fuente
+// que el middleware: nivelDeSesion + roleDBs + canAccessModule. La usan las
+// guardas de propiedad de las rutas de sesión (p. ej. cambiar la foto de otro
+// usuario) para no reinventar la regla.
+func (s *Server) hasModulePermission(r *http.Request, sess *SessionData, departmentID int, action string) bool {
+	if sess == nil {
+		return false
+	}
+	db := s.dbFor(r)
+	if db == nil {
+		return false
+	}
+	level := s.nivelDeSesion(r, db, sess)
+	return canAccessModule(s.roleDBs(r), sess.UserID, level, departmentID, action)
 }
 
 // Carga el nivel de rol desde la BD (única fuente de verdad)
@@ -397,24 +587,14 @@ func isCrossTenantRoute(path string) bool {
 
 func (s *Server) permissionMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Rutas públicas
-		// /api/pos/ entero: registrado como público en registerPOSSyncRoutes
-		// ("Las rutas bajo /api/pos/ son públicas"). Cada una lleva su propia
-		// autenticación (API key o token X-POS-Token); sin esta entrada, el
-		// terminal POS recibía 403 y quedaba en modo offline permanente.
-		// /__addon/: canal de negocio de los addons. No lleva cookie porque un
-		// addon no tiene sesión de usuario; se autentica con un grant efímero
-		// emitido por el núcleo y solo acepta peticiones desde loopback.
-		public := []string{"/login", "/api/login", "/api/pos/", "/__addon/", "/setup/company", "/static/", "/uploads/", "/favicon",
-			// Los webhooks entrantes no llevan cookie: el que llama es un
-			// sistema externo, no un navegador. Cada endpoint bajo /webhooks/
-			// firmará y validará lo suyo; sin esa validación no se escribe nada.
-			"/webhooks/"}
-		for _, p := range public {
-			if strings.HasPrefix(r.URL.Path, p) {
-				next.ServeHTTP(w, r)
-				return
-			}
+		// Rutas públicas: la lista única publicRoutes (compartida con
+		// authMiddleware —ver comentario—). Cada ruta pública lleva su propia
+		// autenticación dentro del handler: API key del POS, grant de loopback
+		// del addon, firma HMAC del webhook. Sin ella, 401/403, nunca escritura
+		// a ciegas.
+		if esRutaPublica(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
 		}
 
 		sess := s.sessionFromRequest(r)
@@ -428,6 +608,14 @@ func (s *Server) permissionMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// Rutas de sesión (propia identidad o la sesión misma): pasan sin
+		// consulta de módulo porque la guarda de propiedad vive en el handler
+		// (ver comentario de sessionOnlyRoutes, línea a línea verificada).
+		if esRutaDeSesion(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		db := s.dbFor(r)
 		if db == nil {
 			jsonError(w, "service unavailable", http.StatusServiceUnavailable)
@@ -435,38 +623,7 @@ func (s *Server) permissionMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Cargar nivel de rol desde BD (única fuente de verdad)
-		level, err := loadUserRole(db, sess.UserID)
-		if err != nil || level == "" {
-			// Fallback a la BD de control: en una empresa recién creada
-			// (p. ej. erpgo_textil) sec_userrole está vacía y TODA la
-			// UI quedaba en 403 para cualquier usuario. El rol global
-			// vive en la BD de control —es la misma que usan el login y
-			// el POS— y el rol por empresa, si existe, sigue teniendo
-			// prioridad porque se consultó primero.
-			if ctl, cerr := s.controlStore(); cerr == nil {
-				level, _ = loadUserRole(ctl, sess.UserID)
-			}
-		}
-		if level == "" {
-			// Sin fila de rol en NINGUNA de las dos bases. Eso no es un empleado:
-			// es el administrador de la empresa, cuya identidad se creó con
-			// user_type=1 y a la que —a propósito— no se le pone fila en
-			// sec_userrole (ver identity.go). El menú y el dashboard ya resolvían
-			// esa identidad por user_type (handlers.go, "si level == \"\" …
-			// userType == 1 → admin"); el middleware no lo hacía, así que el
-			// administrador de una empresa recién creada entraba como "employee"
-			// y recibía 403 "No tiene permisos para este módulo" en casi todas
-			// las pantallas —incluidas las suyas propias—.
-			level = levelDeTipoDeUsuario(db, sess.UserID)
-			if level == "" {
-				if ctl, cerr := s.controlStore(); cerr == nil {
-					level = levelDeTipoDeUsuario(ctl, sess.UserID)
-				}
-			}
-		}
-		if level == "" {
-			level = "employee"
-		}
+		level := s.nivelDeSesion(r, db, sess)
 
 		// Master tiene acceso total
 		if level == "master" {
@@ -573,10 +730,12 @@ func (s *Server) permissionMiddleware(next http.Handler) http.Handler {
 		// Módulos que comparten module.id con otro: el módulo no alcanza para
 		// distinguirlos, así que manda el permiso de la entrada de menú.
 		action := actionFromMethod(r.Method)
+		dirHit := false
 		for prefix, dirs := range routeDirectory {
 			if r.URL.Path != prefix && !strings.HasPrefix(r.URL.Path, prefix+"/") {
 				continue
 			}
+			dirHit = true
 			concedido := false
 			for _, d := range strings.Split(dirs, "|") {
 				if d != "" && s.hasPermission(r, d, action) {
@@ -589,6 +748,30 @@ func (s *Server) permissionMiddleware(next http.Handler) http.Handler {
 				return
 			}
 			break
+		}
+
+		// FAIL-CLOSED (auditoría 2026-11-22, S-1): si la ruta no está en
+		// routeDepartment NI en routeDirectory, no hay NADIE que la proteja, y
+		// «nadie la protege» no puede significar «abierta a cualquier sesión».
+		// El candado real es rutas_clasificadas_test.go —barre el fuente y
+		// revienta si se registra una ruta sin clasificar—; esta rama es la
+		// defensa en profundidad para cualquier despliegue donde el test no
+		// corra. master y admin ya salieron arriba con bypass propio.
+		if !hasDept && !dirHit {
+			// Las páginas de los addons se registran en tiempo de ejecución
+			// (manifiesto → rutasDelMux) y este mapa no puede conocerlas: el
+			// candado es el propio addonRouter, fail-closed con sesión,
+			// empresa y el permiso que el manifiesto declaró. Sin esta rama,
+			// el fail-closed habría convertido cada addon instalado en un 403
+			// para TODOS los niveles —el mismo error histórico que authMiddleware
+			// ya documenta para el canal—.
+			if s.esRutaAddon(r.URL.Path) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			log.Printf("AVISO permisos: ruta sin clasificar denegada: %s %s (usuario %s)", r.Method, r.URL.Path, sess.Username)
+			jsonError(w, "Esta pantalla no tiene regla de permisos asignada. Avise al administrador del sistema.", http.StatusForbidden)
+			return
 		}
 
 		next.ServeHTTP(w, r)

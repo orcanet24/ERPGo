@@ -138,7 +138,9 @@ $(function () {
 
     $('#priceListTable').on('click', '.btn-activate', function () {
         var id = $(this).data('id');
-        $.get('/price_list/activate/' + id, function (r) {
+        // POST: la activación cambia el estado (dos UPDATE); como GET era
+        // un enlace de nivel superior con cookie adjunta (S-10, auditoría).
+        $.post('/price_list/activate/' + id, function (r) {
             if (r.status == 1) { toastr.success(r.msg); table.ajax.reload(); }
             else toastr.error(r.error || 'Error');
         }).fail(function (x) {

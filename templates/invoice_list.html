@@ -16,12 +16,11 @@
         <table class="table table-striped table-bordered" id="invoiceTable" width="100%">
             <thead>
                 <tr>
-                    <th>Factura</th>
-                    <th>Nº</th>
+                    <th>Nº Factura</th>
                     <th>Cliente</th>
                     <th class="text-right">Total</th>
                     <th class="text-right">Pagado</th>
-                    <th class="text-right">Due</th>
+                    <th class="text-right">Saldo</th>
                     <th>Fecha</th>
                     <th>Estado</th>
                     <th>Acciones</th>
@@ -39,10 +38,12 @@ $(function () {
         processing: true,
         serverSide: true,
         pageLength: 25,
-        order: [[1, 'desc']],
+        order: [[0, 'desc']],
         ajax: { url: '/invoice/list/data', type: 'POST' },
         columns: [
-            { data: 'id', render: function (d) { return '#' + d; } },
+            // Una sola columna de número: el FISCAL. El id interno de la base
+            // ('#12') se mostraba como si fuera «la factura» y la gente
+            // anotaba el número equivocado en el papel (U-12, auditoría).
             { data: 'invoice_no' },
             { data: 'customer' },
             { data: 'total', className: 'text-right' },
@@ -69,17 +70,27 @@ $(function () {
                     }
                 }
                 return fisco +
-                    '<a class="btn btn-info btn-xs" href="/invoice/details/' + d.id + '" title="Ver"><i class="fa fa-eye"></i></a> ' +
-                    '<a class="btn btn-warning btn-xs" href="/invoice/edit/' + d.id + '" title="Editar"><i class="fa fa-pencil"></i></a> ' +
-                    '<button class="btn btn-danger btn-xs do-del" data-id="' + d.id + '" title="Eliminar"><i class="fa fa-trash"></i></button>';
+                    // Jerarquía real (U-12): «Ver» como enlace de texto y
+                    // «Editar» como botón neutro. btn-info y btn-warning los
+                    // pintaba el tema IGUALES que btn-default (a propósito,
+                    // para que tres colores no dijeran lo mismo); dos botones
+                    // idénticos con iconos distintos hacían adivinanza.
+                    '<a class="btn btn-link btn-xs" href="/invoice/details/' + d.id + '" title="Ver detalle de la factura"><i class="fa fa-eye"></i> Ver</a> ' +
+                    // Editar solo en BORRADOR: una factura emitida no se
+                    // corrige, se le emite nota de crédito (F-5/F-6). La
+                    // guarda de servidor en /invoice/save llega en el mismo
+                    // plan; ocultar el botón cierra hoy la puerta más obvia.
+                    (d.draft === 'yes' ? '<a class="btn btn-default btn-xs" href="/invoice/edit/' + d.id + '" title="Editar borrador"><i class="fa fa-pencil"></i></a> ' : '') +
+                    '<button class="btn btn-danger btn-xs do-del" data-id="' + d.id + '" data-fact="' + (d.invoice_no || d.id) + '" title="Eliminar"><i class="fa fa-trash"></i></button>';
             }}
         ]
     });
 
     $('#invoiceTable').on('click', '.do-del', function () {
         var id = $(this).data('id');
+        var fact = $(this).data('fact') || id;
         swal({
-            title: "¿Eliminar factura #" + id + "?",
+            title: "¿Eliminar la factura " + fact + "?",
             text: "Se eliminarán también sus comprobantes contables.",
             type: "warning",
             showCancelButton: true,

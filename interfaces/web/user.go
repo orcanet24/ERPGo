@@ -602,6 +602,23 @@ func (s *Server) userPhotoSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Guarda de propiedad: /user/photo es ruta de sesión (la foto del propio
+	// perfil), así que escribir la foto de OTRO usuario exige el permiso del
+	// módulo de usuarios (o nivel admin/master, que canAccessModule ya
+	// reconoce). Sin esto, cualquier cajero podía cambiar la foto de cualquier
+	// empleado del sistema (auditoría 2026-11-22, rutas de sesión).
+	sess := s.sessionFromRequest(r)
+	if sess == nil {
+		jsonError(w, "No autorizado. Inicie sesión.", http.StatusUnauthorized)
+		return
+	}
+	if userID != sess.UserID {
+		if !s.hasModulePermission(r, sess, 14, "update") {
+			jsonError(w, "Solo el administrador puede cambiar la foto de otro usuario", http.StatusForbidden)
+			return
+		}
+	}
+
 	file, hdr, err := r.FormFile("photo")
 	if err != nil {
 		if err == http.ErrMissingFile {
