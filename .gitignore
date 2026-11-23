@@ -33,3 +33,13 @@ screenshots/
 data/escrituras/
 *.rar
 *.zip
+
+# Runtime del asistente de desarrollo (Freebuff): 28k archivos de caché de
+# módulos Go, cookies de sesión local y logs. NO son del producto: jamás al
+# repositorio (la auditoría 2026-11-22 encontró cookies.txt y el caché
+# completo rastreados).
+.freebuff/
+
+# Artefactos de pruebas y auditorías locales
+_audit_*
+*.bak
