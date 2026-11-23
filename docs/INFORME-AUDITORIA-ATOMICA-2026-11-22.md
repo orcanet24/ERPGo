@@ -173,4 +173,50 @@ Arranque/migración: checksum real con reintento (`database.go:183-300`), orden 
 9. MCP: decidir — o renombrar la documentación a «herramientas internas», o construir el puente (transporte, token de máquina, tenant). Hoy es lo segundo lo que el dueño cree que tiene.
 
 ---
-*Auditoría ejecutada 2026-11-22. Los artefactos temporales (base `erpgo_smoke_audit`, `erpgo_demo`, binario y scratch) fueron creados solo para esta verificación y eliminados al terminar; no se modificó ningún archivo de código ni datos de clientes.*
+*Auditoría ejecutada 2026-11-22. Los artefactos temporales de la auditoría fueron eliminados al terminar; no se modificó ningún archivo de código ni datos de clientes.*
+---
+
+# ADDENDUM — Reparación ejecutada (madrugada del 2026-11-22 al 23)
+
+El dueño autorizó reparar TODO en su ausencia («usa lo más recomendado / lo más
+lógico y funcional»). Este addendum dice, hallazgo por hallazgo, QUÉ se hizo,
+dÓNDE está la prueba y QUÉ NO se verificó. Nada aquí afirma lo que no corrió.
+
+## Estado de los 9 frentes del plan
+
+| # | Frente | Estado | Commits (ERPGo salvo nota) | Prueba |
+|---|--------|--------|---------------------------|--------|
+| 1 | Un camino de venta terminal | **HECHO** | `1b9ff38c`, `17ada74d`, `7cb3fe2a` | venta_terminal_test.go (3) sobre la cadena real; EN VIVO en MySQL: sync → factura 1000/1001/1002 con libro 116=116, IVA 16 y 22.40 en 5020701, IGTF 1.68/4.80 en 5020702, pagos desglosados, stock con el id interno, reintento `already_exists` sin duplicar, control impreso (00-00004242/9999) coincidente con el ticket, fecha del cobro (created_at) y no de la sincronización |
+| 2 | Asiento doble y cierre | **HECHO** | `27e93883` | period_close_test.go (4); EN VIVO: /accounting/periods/check 202611 → 8 validaciones limpias, can_close:true, cierre escrito (antes de la reparación este mes era INCERRABLE por F-1/F-2) |
+| 3 | Fail-closed de permisos | **HECHO** | `81d38d9f`, `e089bf9f`, `40f0954e` | rutas_clasificadas_test.go + candados_s3_s10_test.go (revocación, XFF, Secure/HSTS, fail-closed de empresa, cadena mixta h2+clásica con alteración detectada) |
+| 4 | POSGo2 imprimible y offline | **HECHO, sin hardware** | POSGo2 `90a6178` | 80 funciones de prueba verdes (build/vet/test propios verificados por el integrador). NO VERIFICADO: impresora física (sin máquina aquí), y la extracción del correlativo Bixolon/Hasar es inferida del protocolo documentado — si el firmware lo trae en otro campo, la caja responde «no emitido» (fail-closed, no falso positivo) |
+| 5 | Las tres pantallas | **HECHO** | `81d38d9f`, `27e93883` + recálculo servidor en `1b9ff38c` | webcheck 167 plantillas 0 errores; recarga_blanda_test.go; candado doble clic en factura/producto/NC/POSGo2; 401 JSON con returnTo en expirada |
+| 6 | Semillas canónicas y cadena | **HECHO** | `27e93883`, `1b9ff38c`, `519ef578` | arranques reales: base nueva 64 archivos 0 avisos → sellada; con 1 archivo nuevo, el ledger repasó y aplicó SOLO ese (D-1 demostrado); ledger ya no es TEXT-ilegal-en-MySQL (Error 1101 corregido) |
+| 7 | Frontera de informes IA | **HECHO, con límite declarado** | `e089bf9f` (parte IA: ai_sql_scope/validarSQLInformes), `40f0954e` (motor clásico) | ai_frontera_informes_test.go (6: tablas sensibles, STRAIGHT_JOIN, /*!*/, run_preview, crítica pendiente sin efecto, corrida registrada); EN VIVO por MCP: user_login → blocked. LÍMITE: IT/master no exige catálogo blanco (rompía informes clásicos legítimos); la raíz del todo es vistas de reporting con usuario restringido — tarea de esquema pendiente |
+| 8 | Higiene | **HECHA, purga pendiente de aviso** | ERPGo `21f52172` (13 944 archivos .freebuff fuera del índice); POSGo2 `d726c0f` (400: bases con PII, *.key, configs con API key, MySQL de pruebas) | git ls-files 15 022→1 078 y 448→55; discos intactos. **LA PURGA DE HISTORIAL NO SE EJECUTÓ** — el dueño pidió aviso previo; procedimiento y rotación de la clave `erpgo-pos-main-key-2026` listos en POSGo2 `docs/PURGA-HISTORIAL.md`. La rotación debe ir PRIMERO: la clave ya está filtrada en la historia |
+| 9 | MCP | **HECHO (v1)** | `519ef578` | mcp_bridge_test.go (5 grupos sobre MySQL real, con skip honesto sin servidor); EN VIVO: initialize/tools/list (10 herramientas, filtradas por operador)/tools/call (3 facturas reales)/401/blocked/405. V1 = transporte streamable simple: sin SSE, sin lotes, sin Resources/Prompts; pantalla de tokens aún por endpoint (documentado en README) |
+
+## Hallazgos nuevos destapados DURANTE la reparación (no estaban en la auditoría)
+
+Y corregidos con su prueba, porque la política era causa-raíz:
+
+- **`strconv.Atoi(código-producto)` en panel y ajustes**: con catálogo alfanumérico el kardex se escribía en el producto 0 y el tipo (venta/servicio) se leía mal. Resuelto con `idInternoProducto` + coincidencia por código O id (`7cb3fe2a`).
+- **El sync del terminal insertaba el CÓDIGO en `stock_movement.product_id` (entero)**: funcionaba solo con códigos numéricos. Id interno ahora (`17ada74d`).
+- **Huellas HMAC no cabían en varchar(64)**: con MasterKey (auto-generada), todo registro de auditoría moría en Error 1406 y —con la tx nueva— se deshacía silenciosamente. Ancho a 128 por migración + canónico (`17ada74d`); el INSERT de auditoría ya no es mudo.
+- **`getSettings()` devolvía nil** contra veinte llamadores `st.Web.X`.
+- **Traductor SQLite mentía en silencio** (causa de que «todo verde en pruebas» no probara la vida real): statements con cabecera de comentario se ejecutaban CRUDOS (pos_sale_sync nunca nacía), no traducía ENUM (stock_movement tampoco), dejaba pasar COLLATE suelto, y desconocía la clave heredada `ALTER…MODIFY col AUTO_INCREMENT`. Warnings de la cadena: 325 → 42, archivos aplicados: 30 → 54 (`1b9ff38c`, `7cb3fe2a`).
+- **`INSERT IGNORE` en rutas compartidas** (ensureFiscalSeries, reservarConsecutivoTx): exclusiva de MySQL que tiraba en pruebas; reescrita portable (`1b9ff38c`, `7cb3fe2a`).
+- **Ledger de migraciones con TEXT DEFAULT ''** (ilegal en MySQL → 0 archivos aplicados en silencio sobre bases nuevas por esa ruta) (`519ef578`).
+
+## Lo que NO se tocó (decisión documentada, no olvido)
+
+- N+1 de stock en listados y dashboard con escaneo completo (rendimiento; no corrompe datos; requiere diseño de índices por-tenant medido en producción).
+- `checkVouchers` sin índice tenant_id, CSRF exenta en /api/, HMAC de bloques de sellado, `Touch` de sesión, endpoint estático por documento de upload, preaprobación UX de RiskCritical (la UI de revisión existe vía endpoint; falta pantalla), pantalla de gestión de tokens MCP.
+- El puente MCP v1 no implementa Resources/Prompts ni streaming SSE.
+- La historia de ambos remotos conserva los archivos sensibles hasta que el dueño apruebe la purga (ver §8).
+
+## Baterías finales (las mismas que cada commit)
+
+`go build ./...` + `go vet ./...` + `go test ./... -count=1` con y sin `TEST_DB_*` (con ellos: 12/12 paquetes ok; web 89.7 s con MySQL; persistence 73.4 s) + `go run ./internal/webcheck -dir templates` (167 plantillas, 0 errores). POSGo2: build/vet/test propios verdes (80 funciones). Y la prueba de fuego: **instalación desde cero contra MySQL 8.0.30 real** dejando arriba, con auditoría `h2:` encadenada, cierre mensual cuajado y puente MCP respondiendo a una IA externa.
+
+*Addendum escrito 2026-11-23 04:20 (Caracas) por el equipo de reparación. Artefactos de verificación (bases `erpgo_final`, `erpgo_demo`, `erpgo_test_*`, carpeta `_final`) eliminados al cerrar; las bases de prueba MySQL se crearon con prefijo `erpgo_test_` descartable.*
