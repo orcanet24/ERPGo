@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -47,31 +48,31 @@ import (
 // la lentitud de antes. Perder 9 segundos en la instalación es aceptable; no
 // instalar el ERP, no.
 func RunMigrationsForMySQL(db *sql.DB, cfg ConfigMySQL) error {
-	// ¿La base ya está en el modelo nuevo con el DDL vigente? Entonces la
-	// cadena de migraciones sobra: el reconciliador es la única verdad.
-	//
-	// POR QUÉ. La cadena ordena parches por nombre de archivo y re-aplica lo
-	// que cambió; el reconciliador declara el estado final y converge a él.
-	// Una base sellada con el DDL vigente no necesita la cadena, y saltarla
-	// evita el riesgo de re-aplicar un archivo editado. La cadena queda como
-	// red de seguridad de las bases sin sello (instalaciones viejas).
+	// ¿La base ya está en el modelo nuevo? El sello lo dice en campo sin
+	// volcar el esquema, pero LA CADENA SIEMPRE CORRE: el ledger de
+	// schema_migrations salta los archivos ya aplicados por su huella, así
+	// que para una base al día el trabajo es una consulta rápida por archivo
+	// (los 62 viejos quedan «ya aplicados») y SOLO se ejecutan los archivos
+	// nuevos. Saltar la cadena cuando la base estaba sellada (decisión de la
+	// Fase 3) cumplía el optimismo y rompía la promesa del README —«las
+	// migraciones corren solas»—: una instalación existente nunca recibía
+	// los menús, permisos ni catálogos nuevos, que es exactamente la deriva
+	// que el plan de esquema canónico creía haber cerrado (hallazgo D-1,
+	// auditoría 2026-11-22). El canónico aporta el DDL y las siembras
+	// aditivas; la cadena aporta los cambios de VALORES sobre filas que ya
+	// existen (un UPDATE de config no puede declararse como INSERT).
 	sello, _ := SelloCanonico(db)
 	sumaActual, sumaErr := ChecksumCanonico()
 	switch {
 	case sello == "":
-		// Base sin sello (instalación vieja o nueva): la cadena es la red de
-		// seguridad que deja el esquema en su estado; el reconciliador lo
-		// converge al canónico y el sello lo registra.
 		fmt.Println("Migrations (MySQL): base sin sellar; se aplica la cadena de migraciones.")
 	case sumaErr == nil && sello == sumaActual:
-		fmt.Println("Migrations (MySQL): base sellada con el DDL canónico vigente; se omite la cadena y se reconcilia.")
+		fmt.Println("Migrations (MySQL): base sellada con el DDL canónico vigente; la cadena repasa el ledger y se reconcilia.")
 	default:
-		// Sellada con un DDL anterior: la cadena no sabe nada de versiones
-		// del canónico, así que no corre; el reconciliador converge al vigente.
-		fmt.Println("Migrations (MySQL): base sellada con un DDL canónico anterior; se reconcilia al vigente sin re-aplicar la cadena.")
+		fmt.Println("Migrations (MySQL): base sellada con un DDL canónico anterior; la cadena repasa el ledger y se reconcilia al vigente.")
 	}
 
-	if sello == "" {
+	{
 		migs, err := readMigrations()
 		if err != nil {
 			return err
@@ -138,13 +139,24 @@ func RunMigrationsForMySQL(db *sql.DB, cfg ConfigMySQL) error {
 		fmt.Printf("  Esquema canónico: %d tablas creadas, %d columnas agregadas, %d índices creados\n",
 			len(resultado.TablasCreadas), len(resultado.ColumnasAgregadas), len(resultado.IndicesCreados))
 	}
+	if len(resultado.SiembrasAplicadas) > 0 || resultado.SiembrasToleradas > 0 {
+		fmt.Printf("  Siembras canónicas: %d filas nuevas, %d ya existían\n",
+			len(resultado.SiembrasAplicadas), resultado.SiembrasToleradas)
+	}
 	for _, aviso := range resultado.Avisos {
 		fmt.Printf("  AVISO esquema canónico: %s\n", aviso)
 	}
 	// Sello de la transición (Fase 3): deja constancia de que esta base ya
-	// pasó por el reconciliador con el DDL canónico vigente. Sin esto no hay
-	// forma de saberlo en campo sin volcar el esquema.
-	if err := SellarCanonico(db); err != nil {
+	// pasó por el reconciliador con el DDL canónico vigente. Se sella SOLO
+	// cuando la reconciliación quedó limpia: un sello puesto sobre una base
+	// con avisos diría «convergida» a una base que no convergió, y en campo
+	// el sello es justo la prueba de eso. Sin sello la base simplemente
+	// vuelve a intentarlo el arranque siguiente (la cadena, barata por el
+	// ledger, también: ver arriba).
+	if len(resultado.Avisos) > 0 {
+		fmt.Println("  ATENCION: la base NO se sella porque la reconciliacion dejo avisos.")
+		fmt.Println("  Se re-intentara en cada arranque hasta que quede limpia.")
+	} else if err := SellarCanonico(db); err != nil {
 		fmt.Printf("  AVISO: no se pudo sellar el esquema canónico en el ledger: %v\n", err)
 	}
 	return nil
@@ -248,15 +260,26 @@ func normalizarCollationMySQL(db *sql.DB, esquemaNuevo bool) error {
 	// conversión de un lado no es bloqueada por el otro, y al terminar ambas
 	// quedan en la misma collation y la FK se revalida al restaurar el check.
 	// Es la cura estándar de MySQL 8 para Error 3780 al normalizar collations.
-	if _, err := db.Exec("SET FOREIGN_KEY_CHECKS=0"); err != nil {
+	//
+	// PERO EJECUTADO EN UNA SOLA CONEXIÓN (D-5, auditoría 2026-11-22):
+	// FOREIGN_KEY_CHECKS es una variable de SESIÓN, y db.Exec sobre el pool
+	// no garantiza la misma conexión: el SET podía correr en una sesión y
+	// los ALTER en otra con los checks activados —el Error 3780 que el
+	// comentario decía curado reaparecía sin explicación—. conn() fija un
+	// hilo físico y todo el bloque corre por él.
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		return fmt.Errorf("no se pudo tomar una conexión fija para normalizar collation: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), "SET FOREIGN_KEY_CHECKS=0"); err != nil {
 		return fmt.Errorf("no se pudo desactivar los checks de FK para normalizar collation: %w", err)
 	}
-	defer db.Exec("SET FOREIGN_KEY_CHECKS=1")
 	for _, t := range pendientes {
 		// El nombre de la tabla no se interpola sin más: viene de
 		// information_schema, así que es del propio servidor, pero el acento
 		// grave lo delimita igual.
-		if _, err := db.Exec(fmt.Sprintf(
+		if _, err := conn.ExecContext(context.Background(), fmt.Sprintf(
 			"ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", t)); err != nil {
 			// Una tabla que no se puede convertir no debe impedir que las otras
 			// sí se conviertan: se avisa y se sigue. El ERP funciona igual; lo que
@@ -265,8 +288,11 @@ func normalizarCollationMySQL(db *sql.DB, esquemaNuevo bool) error {
 			fallidas++
 		}
 	}
-	if _, err := db.Exec("SET FOREIGN_KEY_CHECKS=1"); err != nil {
-		return fmt.Errorf("no se pudo reactivar los checks de FK tras normalizar collation: %w", err)
+	if _, err := conn.ExecContext(context.Background(), "SET FOREIGN_KEY_CHECKS=1"); err != nil {
+		// Si el restore falla, la CONEXIÓN se descarta (Close tras un error
+		// de sesión): el pool no debe devolver al ERP un hilo con los checks
+		// apagados. Se reintenta explícitamente antes de cerrar.
+		fmt.Printf("  AVISO: no se pudo reactivar los checks de FK: %v\n", err)
 	}
 
 	if _, err := db.Exec(`INSERT INTO schema_migrations (filename, checksum, statements, applied_at)
@@ -370,22 +396,28 @@ func aplicarSentenciasMySQL(db, rapido *sql.DB, contenido string, verboso bool) 
 	}
 
 	for _, sentencia := range sentencias {
-		s := SinSintaxisDeMariaDB(stripSQLComments(sentencia))
-		if s == "" {
-			continue
-		}
-		if _, err := db.Exec(s); err != nil {
-			// Clasificación. "Ya estaba" NO es lo mismo que "no se aplicó".
-			// En SQLite esa diferencia se confundía y el resumen se leía
-			// como "ya estaba" cuando en realidad describía un fallo.
-			if esYaEstabaMySQL(err, s) {
+		// SentenciasEsquema deja los ALTER multi-cláusula como sentencias de
+		// una cláusula cada una (D-2): ejecutado entero, un 1060 en la primera
+		// columna abortaba las demás y el archivo quedaba anotado como
+		// aplicado con la estructura a medias. Por cláusula, cada error se
+		// clasifica sola.
+		for _, s := range SentenciasEsquema(stripSQLComments(sentencia)) {
+			if s == "" {
 				continue
 			}
-			fmt.Printf("  migración: %v <- %.90s\n", err, s)
-			fallidas++
-			continue
+			if _, err := db.Exec(s); err != nil {
+				// Clasificación. "Ya estaba" NO es lo mismo que "no se aplicó".
+				// En SQLite esa diferencia se confundía y el resumen se leía
+				// como "ya estaba" cuando en realidad describía un fallo.
+				if esYaEstabaMySQL(err, s) {
+					continue
+				}
+				fmt.Printf("  migración: %v <- %.90s\n", err, s)
+				fallidas++
+				continue
+			}
+			aplicadas++
 		}
-		aplicadas++
 	}
 	return
 }
@@ -450,10 +482,14 @@ func ejecutarLote(db *sql.DB, contenido string) error {
 	// `CREATE INDEX IF NOT EXISTS` sin traducir, MySQL rechaza TODO el lote por
 	// sintaxis y se cae al camino lento sin necesidad.
 	sentencias := splitSQL(stripSQLComments(contenido))
-	for i, s := range sentencias {
-		sentencias[i] = SinSintaxisDeMariaDB(s)
+	var norm []string
+	for _, s := range sentencias {
+		// Incluye los ALTER multi-cláusula divididos por cláusula: si el lote
+		// fracasa (siempre al primer "ya existe") el camino lento repite ya
+		// con la granularidad correcta (D-2).
+		norm = append(norm, SentenciasEsquema(s)...)
 	}
-	_, err := db.Exec(strings.Join(sentencias, ";\n"))
+	_, err := db.Exec(strings.Join(norm, ";\n"))
 	return err
 }
 

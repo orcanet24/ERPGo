@@ -89,7 +89,7 @@ var routeDepartment = map[string]int{
 	// /data ANTES era módulo 14; son volcados SQL de TODAS las empresas en una
 	// carpeta común: sube a masterOnly (ver /data/backup más abajo) y se deja
 	// aquí sólo como módulo para el resto de lecturas de configuración.
-	"/data": 14,
+	"/data":       14,
 	"/price_list": 3, "/product_price": 3,
 	"/warehouse": 6, "/consumption": 6,
 	"/order": 15, "/delivery_order": 15,

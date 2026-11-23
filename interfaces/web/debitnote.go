@@ -12,6 +12,7 @@ package web
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -201,10 +202,12 @@ func (s *Server) debitNoteSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Serie fiscal ND
-	doc, err := s.nextFiscalDoc(tx, "ND")
+	// Plan de cuentas y totales ANTES de numerar: el fail-closed del IVA no
+	// puede gastar un número de la serie ND para rechazar después (F-3/F-4,
+	// espejo de la nota de crédito y de la venta).
+	pre, err := s.predefineAccount(r)
 	if err != nil {
-		jsonError(w, "No se pudo asignar la serie fiscal: "+err.Error(), 500)
+		jsonError(w, err.Error(), 500)
 		return
 	}
 
@@ -230,6 +233,18 @@ func (s *Server) debitNoteSave(w http.ResponseWriter, r *http.Request) {
 	}
 	grand := round2(total + vatTotal)
 
+	if vatTotal > 0 && pre.VatCode == 0 {
+		jsonError(w, "La nota lleva IVA y no hay cuenta de IVA por pagar asignada. Asígnela en Configuración → Cuentas por defecto.", http.StatusConflict)
+		return
+	}
+
+	// Serie fiscal ND
+	doc, err := s.nextFiscalDoc(tx, "ND")
+	if err != nil {
+		jsonError(w, "No se pudo asignar la serie fiscal: "+err.Error(), 500)
+		return
+	}
+
 	// Insertar nota
 	res, err := tx.Exec(`INSERT INTO debit_note
 		(note_no, control_no, series, invoice_id, customer_id, customer_rif, date,
@@ -254,22 +269,36 @@ func (s *Server) debitNoteSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ---- Asientos contables automáticos ----
-	// Una nota de débito AUMENTA la deuda del cliente:
-	//   Debit: cuenta del gasto/ingreso (según motivo) o directamente Clientes
-	//   Credit: Clientes (aumenta el saldo por cobrar)
-	pre, err := s.predefineAccount(r)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
+	// (pre se cargó antes de la serie ND: el fail-closed del IVA lo exige)
+	// La nota de débito AUMENTA la deuda del cliente, en espejo con la venta
+	// (F-4): Clientes se debita por base e IVA en dos patas, Ventas se
+	// acredita solo por la base y el IVA va a su pasivo. ANTES la pata única
+	// acreditaba Ventas por el total con IVA incluido: el impuesto volvía a
+	// inflar el ingreso y no existía como deuda.
 	ref := fmt.Sprintf("ND-%08d", doc.Number)
 	vno := nextVoucherNoTx(tx, "JV")
-	_ = s.insertVoucherRowTx(r, tx, VoucherRow{
+	if err := s.insertVoucherRowTx(r, tx, VoucherRow{
 		VNo: vno, Vtype: "JV", ReferenceNo: ref,
 		COAID: pre.CustomerCode, RevCodde: pre.SalesCode,
 		Narration: "Nota de débito " + ref, Comment: reason,
-		Debit: grand, SubType: 3, SubCode: s.subcodeID(r, customerID, 3),
-	}, createBy)
+		Debit: total, SubType: 3, SubCode: s.subcodeID(r, customerID, 3),
+	}, createBy); err != nil {
+		jsonError(w, "La nota no se pudo contabilizar: "+err.Error(), 500)
+		return
+	}
+	vno2 := ""
+	if vatTotal > 0 {
+		vno2 = nextVoucherNoTx(tx, "JV")
+		if err := s.insertVoucherRowTx(r, tx, VoucherRow{
+			VNo: vno2, Vtype: "JV", ReferenceNo: ref,
+			COAID: pre.CustomerCode, RevCodde: pre.VatCode,
+			Narration: "IVA nota de débito " + ref, Comment: reason,
+			Debit: vatTotal, SubType: 3, SubCode: s.subcodeID(r, customerID, 3),
+		}, createBy); err != nil {
+			jsonError(w, "La nota no se pudo contabilizar: "+err.Error(), 500)
+			return
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		jsonError(w, err.Error(), 500)
@@ -279,7 +308,14 @@ func (s *Server) debitNoteSave(w http.ResponseWriter, r *http.Request) {
 	// Aprobar voucher si autoaprobado
 	st := s.settingsFor(r)
 	if st.Web.IsAutoapprove == 1 {
-		_ = s.approveVoucher(r, vno, createBy)
+		if err := s.approveVoucher(r, vno, createBy); err != nil {
+			log.Printf("AVISO: nota de débito %s publicada sin aprobar su asiento base: %v", ref, err)
+		}
+		if vno2 != "" {
+			if err := s.approveVoucher(r, vno2, createBy); err != nil {
+				log.Printf("AVISO: nota de débito %s publicada sin aprobar su asiento de IVA: %v", ref, err)
+			}
+		}
 	}
 
 	writeJSON(w, map[string]interface{}{

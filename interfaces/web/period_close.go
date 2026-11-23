@@ -108,17 +108,36 @@ func (s *Server) PeriodSummary(r *http.Request, period string) (map[string]inter
 	from, to := periodBounds(period)
 	out := map[string]interface{}{}
 	var (
-		n      int
 		debit  sql.NullFloat64
 		credit sql.NullFloat64
 	)
-	err := s.dbFor(r).QueryRow(`SELECT COUNT(*), SUM(Debit), SUM(Credit)
-		FROM acc_vaucher WHERE VDate >= ? AND VDate <= ?`, from, to).
-		Scan(&n, &debit, &credit)
-	if err != nil {
+	// La verdad del balance es el LIBRO (acc_transaction), no acc_vaucher.
+	// Un asiento automático se guarda en acc_vaucher como patas sueltas con
+	// su contra-cuenta DECLARADA (RevCodde) y solo al aprobarse se
+	// materializa en el libro como débito + crédito (accounting.go:147-173).
+	// Sumar Debit−Credit sobre acc_vaucher comparaba dos modelos distintos y
+	// encontraba descuadre en cuanto existía UN asiento automático: ningún
+	// mes con facturas podía cerrarse (F-1, auditoría 2026-11-22). En el
+	// libro, en cambio, un descuadre SI significa escritura partida.
+	if err := s.dbFor(r).QueryRow(`SELECT IFNULL(SUM(Debit),0), IFNULL(SUM(Credit),0)
+		FROM acc_transaction WHERE VDate >= ? AND VDate <= ? AND IFNULL(IsPosted,0) = 1`, from, to).
+		Scan(&debit, &credit); err != nil {
+		return nil, err
+	}
+	var n int
+	if err := s.dbFor(r).QueryRow(`SELECT COUNT(DISTINCT VNo)
+		FROM acc_vaucher WHERE VDate >= ? AND VDate <= ?`, from, to).Scan(&n); err != nil {
+		return nil, err
+	}
+	// Pendientes de aprobar: no son descuadre, son trabajo sin publicar. Se
+	// muestran aparte porque el cierre los exige cerrados (validación 2b).
+	var pendientes int
+	if err := s.dbFor(r).QueryRow(`SELECT COUNT(DISTINCT VNo)
+		FROM acc_vaucher WHERE VDate >= ? AND VDate <= ? AND IFNULL(isApproved,0) = 0`, from, to).Scan(&pendientes); err != nil {
 		return nil, err
 	}
 	out["vouchers"] = n
+	out["pendientes"] = pendientes
 	out["total_debit"] = round2(debit.Float64)
 	out["total_credit"] = round2(credit.Float64)
 	out["difference"] = round2(debit.Float64 - credit.Float64)
@@ -189,6 +208,20 @@ func (s *Server) CheckPeriod(r *http.Request, period string) (*PeriodCheckResult
 		add("voucher_balance", "Cada voucher cuadra por sí solo", "", true)
 	}
 
+	// 2b. No cerrar con asientos pendientes de aprobar: su contra no está
+	// todavía en el libro (la pata doble se materializa al aprobar), así que
+	// cerrar ahora firmaría un libro incompleto que cambia al aprobar
+	// después. Probar que un asiento pendiente de mes firmado podía
+	// publicarse después y mover el libro de un mes cerrado fue el origen de
+	// exigirPeriodoAbiertoTx en la aprobación; esta es la otra mitad: antes
+	// de firmar, nada pendiente.
+	if p, _ := summary["pendientes"].(int); p > 0 {
+		add("pendientes", "No hay asientos pendientes de aprobar",
+			fmt.Sprintf("%d asiento(s) pendiente(s): apruébelos para que pasen al libro antes de cerrar", p), true)
+	} else {
+		add("pendientes", "No hay asientos pendientes de aprobar", "", true)
+	}
+
 	// 3. Un período vacío no se cierra: probablemente es un mes que aún no se
 	// usó, y cerrarlo deja un hueco que después nadie sabría explicar.
 	if n, _ := summary["vouchers"].(int); n == 0 {
@@ -238,31 +271,47 @@ func abs64(v float64) float64 {
 	return v
 }
 
-// checkVouchersBalance busca vouchers que no cuadran por sí solos.
+// checkVouchersBalance busca vouchers con filas mal formadas.
+//
+// EL MODELO REAL, DECLARADO (F-1, auditoría): en acc_vaucher un asiento
+// automático vive como PATAS SUELTAS — cada fila lleva Debit o Credit, y su
+// contra-cuenta está DECLARADA en RevCodde; al aprobarse, accounting.go
+// escribe en el libro las dos mitades. Por eso la versión antigua de esta
+// comprobación (SUM(Debit)−SUM(Credit) por VNo) estaba siempre en rojo:
+// comparaba filas de pata única contra una regla de doble entrada y declaraba
+// descuadrado cualquier asiento automático. Lo que SÍ es una fila mal formada
+// en este modelo:
+//   - débito y crédito a la vez DESIGUALES en la misma fila (mitad pata,
+//     mitad asiento: nadie lo produce intencionadamente), o
+//   - fila en cero (asiento vacío ensuciando el libro).
+// Las filas manuales equilibradas (d == c > 0, estilo account.go:391) y las
+// pata únicas con contra declarada son las dos formas legítimas.
 func (s *Server) checkVouchersBalance(r *http.Request, from, to string) string {
 	rows, err := s.dbFor(r).Query(`
-		SELECT VNo, SUM(Debit) - SUM(Credit) AS dif
+		SELECT VNo,
+			SUM(CASE WHEN Debit > 0 AND Credit > 0 AND ABS(Debit - Credit) > 0.005 THEN 1 ELSE 0 END) AS mixtas,
+			SUM(CASE WHEN Debit = 0 AND Credit = 0 THEN 1 ELSE 0 END) AS vacias
 		FROM acc_vaucher
 		WHERE VDate >= ? AND VDate <= ?
 		GROUP BY VNo
-		HAVING ABS(dif) > 0.01
+		HAVING mixtas > 0 OR vacias > 0
 		LIMIT 10`, from, to)
 	if err != nil {
 		return fmt.Sprintf("no se pudo verificar: %v", err)
 	}
 	defer rows.Close()
-	var descuadres []string
+	var malas []string
 	for rows.Next() {
 		var vno string
-		var dif float64
-		if rows.Scan(&vno, &dif) == nil {
-			descuadres = append(descuadres, fmt.Sprintf("%s (%+.2f)", vno, dif))
+		var mixtas, vacias int
+		if rows.Scan(&vno, &mixtas, &vacias) == nil {
+			malas = append(malas, fmt.Sprintf("%s (%d fila(s) con débitos/créditos desiguales, %d vacía(s))", vno, mixtas, vacias))
 		}
 	}
-	if len(descuadres) == 0 {
+	if len(malas) == 0 {
 		return ""
 	}
-	return "vouchers descuadrados: " + strings.Join(descuadres, ", ")
+	return "asientos con filas mal formadas: " + strings.Join(malas, "; ")
 }
 
 // checkInvoicesPosted detecta facturas publicadas sin asiento.
@@ -392,17 +441,31 @@ func (s *Server) ClosePeriod(r *http.Request, period, user string) error {
 		}
 	}
 
+	// El cuadre se comprueba contra el LIBRO publicado, no contra las patas
+	// sueltas de acc_vaucher (F-1: sumar Debit−Credit allí findía siempre
+	// cualquier mes con facturas, porque los asientos automáticos se guardan
+	// como pata única con RevCodde y la doble entrada se materializa en el
+	// libro al aprobar). Dentro de la transacción, además, el libro no puede
+	// tener pendientes sin publicar: se prohíben explícitamente.
 	var dif float64
 	if err := tx.QueryRow(`SELECT IFNULL(SUM(Debit),0) - IFNULL(SUM(Credit),0)
-		FROM acc_vaucher WHERE VDate >= ? AND VDate <= ?`, from, to).Scan(&dif); err != nil {
+		FROM acc_transaction WHERE VDate >= ? AND VDate <= ? AND IFNULL(IsPosted,0) = 1`, from, to).Scan(&dif); err != nil {
 		return err
 	}
 	if abs64(round2(dif)) > 0.01 {
-		return fmt.Errorf("el período no cuadra: diferencia de %.2f", dif)
+		return fmt.Errorf("el libro del período no cuadra: diferencia de %.2f", dif)
+	}
+	var pendientes int
+	if err := tx.QueryRow(`SELECT COUNT(DISTINCT VNo) FROM acc_vaucher
+		WHERE VDate >= ? AND VDate <= ? AND IFNULL(isApproved,0) = 0`, from, to).Scan(&pendientes); err != nil {
+		return err
+	}
+	if pendientes > 0 {
+		return fmt.Errorf("no se puede cerrar con %d asiento(s) pendiente(s) de aprobar", pendientes)
 	}
 
 	var n int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM acc_vaucher WHERE VDate >= ? AND VDate <= ?`,
+	if err := tx.QueryRow(`SELECT COUNT(DISTINCT VNo) FROM acc_vaucher WHERE VDate >= ? AND VDate <= ?`,
 		from, to).Scan(&n); err != nil {
 		return err
 	}
@@ -410,13 +473,7 @@ func (s *Server) ClosePeriod(r *http.Request, period, user string) error {
 		return fmt.Errorf("no se puede cerrar un período sin asientos")
 	}
 
-	_, err = tx.Exec(`
-		INSERT INTO acc_period_close (period, status, closed_at, closed_by, reopened_at, reopened_by, reopen_reason)
-		VALUES (?,'closed',?,?,'','','')
-		ON DUPLICATE KEY UPDATE status='closed', closed_at=VALUES(closed_at), closed_by=VALUES(closed_by),
-			reopened_at='', reopened_by='', reopen_reason=''`,
-		period, now(), user)
-	if err != nil {
+	if err := escribirFilaCierre(tx, period, "closed", now(), user); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -425,6 +482,41 @@ func (s *Server) ClosePeriod(r *http.Request, period, user string) error {
 
 	s.appendAudit(r, user, "", "close_period", "accounting", "acc_period_close", period, nil,
 		map[string]interface{}{"vouchers": n, "status": "closed"})
+	return nil
+}
+
+// escribirFilaCierre deja la fila de acc_period_close en el estado dicho,
+// con UPDATE-primero-e-INSERT-si-no-existe en vez del `ON DUPLICATE KEY
+// UPDATE` de MySQL: la redacción SQL del cierre es idéntica en los dos
+// motores que el ERP soporta (MySQL en campo, SQLite en pruebas), y así el
+// cierre puede estar PROBADO —con `ON DUPLICATE` pelado ninguna prueba de
+// este paquete podía ejecutar ClosePeriod, que es como F-1 sobrevivió—.
+// El INSERT que choca con un cierre concurrente no es error: se reintenta
+// el UPDATE, que es exactamente lo que el competidor ya escribió.
+func escribirFilaCierre(tx *sql.Tx, period, estado, fecha, usuario string) error {
+	actualizar := func() (int64, error) {
+		res, err := tx.Exec(`UPDATE acc_period_close
+			SET status=?, closed_at=?, closed_by=?, reopened_at='', reopened_by='', reopen_reason=''
+			WHERE period=?`, estado, fecha, usuario, period)
+		if err != nil {
+			return 0, err
+		}
+		return res.RowsAffected()
+	}
+	tocadas, err := actualizar()
+	if err != nil {
+		return err
+	}
+	if tocadas > 0 {
+		return nil
+	}
+	if _, err := tx.Exec(`INSERT INTO acc_period_close (period, status, closed_at, closed_by, reopened_at, reopened_by, reopen_reason)
+		VALUES (?,?,?,?, '','','')`, period, estado, fecha, usuario); err != nil {
+		if tocadas, err2 := actualizar(); err2 == nil && tocadas > 0 {
+			return nil
+		}
+		return err
+	}
 	return nil
 }
 

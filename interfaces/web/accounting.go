@@ -329,6 +329,10 @@ type PredefineAccount struct {
 	SuppliesExpenseCode   int64
 	ServiceExpenseCode    int64
 	PurchaseVatCode       int64
+	// IgtfCode: pasivo donde vive el IGTF percibido al cliente (F-12). Se lee
+	// con la misma tolerancia: 0 = la base todavía no corrió la migración y
+	// el llamador decide el respaldo.
+	IgtfCode int64
 }
 
 // CuentaInventarioMercancia: el inventario de lo que se vende.
@@ -397,11 +401,16 @@ func predefineAccountTx(q consultadorUnaFila) (*PredefineAccount, error) {
 	// arranque, restauración a medio migrar), el error se ignora y los métodos de
 	// respaldo deciden. Un fallo aquí no puede tumbar el arranque entero.
 	_ = q.QueryRow(`SELECT IFNULL(supplies_inventory_code,0), IFNULL(supplies_expense_code,0),
-			IFNULL(service_expense_code,0), IFNULL(purchase_vat_code,0)
+			IFNULL(service_expense_code,0), IFNULL(purchase_vat_code,0), IFNULL(igtf_code,0)
 		FROM acc_predefine_account ORDER BY id LIMIT 1`).
-		Scan(&p.SuppliesInventoryCode, &p.SuppliesExpenseCode, &p.ServiceExpenseCode, &p.PurchaseVatCode)
+		Scan(&p.SuppliesInventoryCode, &p.SuppliesExpenseCode, &p.ServiceExpenseCode, &p.PurchaseVatCode, &p.IgtfCode)
 	return &p, nil
 }
+
+// CuentaIgtfPasiva: dónde se debe el IGTF percibido. Con la migración
+// aplicada es 5020702; sin ella devuelve 0 y el llamador decide (la venta no
+// puede inventar el pasivo).
+func (p *PredefineAccount) CuentaIgtfPasiva() int64 { return p.IgtfCode }
 
 // subcodeID returns acc_subcode.id for a reference (customer/supplier id) and subTypeId (3=customer, 4=supplier).
 func (s *Server) subcodeID(r *http.Request, referenceNo int64, subTypeId int) sql.NullInt64 {

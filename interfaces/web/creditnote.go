@@ -188,12 +188,12 @@ func (s *Server) creditNoteForm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	datos := map[string]interface{}{
-		"Title":     "Nueva Nota de Crédito",
-		"Invoices":  opts,
-		"Lines":     template.HTML(lineas.String()),
-		"CustName":  custName,
-		"CustRIF":   custRIF,
-		"InvTotal":  invTotal,
+		"Title":    "Nueva Nota de Crédito",
+		"Invoices": opts,
+		"Lines":    template.HTML(lineas.String()),
+		"CustName": custName,
+		"CustRIF":  custRIF,
+		"InvTotal": invTotal,
 	}
 	// Con factura ya elegida (el front la pide por AJAX) se responde solo el
 	// formulario, sin layout: el desglose va RENDERIDO en #cnRows, así que la
@@ -276,10 +276,17 @@ func (s *Server) creditNoteSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Serie fiscal NC
-	doc, err := s.nextFiscalDoc(tx, "NC")
+	// Serie fiscal NC: se consume DESPUÉS de comprobar el plan de cuentas y
+	// el tope acumulado. El orden antiguo numeraba primero y fallaba después
+	// por reasons de datos, dejando un hueco en la serie NC que nadie puede
+	// explicar en el libro (F-3: prefiero rechazar antes de numerar; el
+	// rechazo no deja huella y el usuario corrige).
+
+	// Plan de cuentas predefinido: se resuelve antes de numerar porque el
+	// fail-closed del IVA lo necesita (F-4 espejo).
+	pre, err := s.predefineAccount(r)
 	if err != nil {
-		jsonError(w, "No se pudo asignar la serie fiscal: "+err.Error(), 500)
+		jsonError(w, err.Error(), 500)
 		return
 	}
 
@@ -342,6 +349,22 @@ func (s *Server) creditNoteSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Espejo del fail-closed de la venta (F-4): una nota con IVA sin cuenta
+	// de IVA por pagar no puede emitirse, y se comprueba ANTES de gastar el
+	// número de la serie NC.
+	if vatTotal > 0 && pre.VatCode == 0 {
+		jsonError(w, "La nota lleva IVA y no hay cuenta de IVA por pagar asignada. Asígnela en Configuración → Cuentas por defecto.", http.StatusConflict)
+		return
+	}
+
+	// Serie fiscal NC: se consume aquí, después de todas las comprobaciones
+	// de datos —un rechazo no debe dejar hueco en la serie—.
+	doc, err := s.nextFiscalDoc(tx, "NC")
+	if err != nil {
+		jsonError(w, "No se pudo asignar la serie fiscal: "+err.Error(), 500)
+		return
+	}
+
 	// Insertar nota
 	res, err := tx.Exec(`INSERT INTO credit_note
 		(note_no, control_no, series, invoice_id, customer_id, customer_rif, date,
@@ -366,11 +389,8 @@ func (s *Server) creditNoteSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ---- Asientos contables automáticos ----
-	pre, err := s.predefineAccount(r)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
+	// (pre se cargó antes de la serie fiscal: el fail-closed del IVA lo
+	// exige antes de gastar número)
 	ref := fmt.Sprintf("NC-%08d", doc.Number)
 	var vno2 string
 	// 1) Reversión de ingreso: Debit Ventas por la BASE, Credit Cliente por la
@@ -382,23 +402,34 @@ func (s *Server) creditNoteSave(w http.ResponseWriter, r *http.Request) {
 	// propio importe y el crédito total al cliente es base+IVA = grand, ni un
 	// céntimo más.
 	vno := nextVoucherNoTx(tx, "JV")
-	_ = s.insertVoucherRowTx(r, tx, VoucherRow{
+	if err := s.insertVoucherRowTx(r, tx, VoucherRow{
 		VNo: vno, Vtype: "JV", ReferenceNo: ref,
 		COAID: pre.SalesCode, RevCodde: pre.CustomerCode,
 		Narration: "Nota de crédito " + ref, Comment: reason,
 		Debit: total, SubType: 3, SubCode: s.subcodeID(r, customerID, 3),
-	}, createBy)
-	// 2) Reversión de IVA: Debit la cuenta de impuesto (la misma pata que la
-	// venta acredita; con la cuenta IVA-por-pagar del plan fiscal, esta fila
-	// reduce el pasivo sin tocar código), Credit Cliente por el IVA.
+	}, createBy); err != nil {
+		// El error se comprueba: un `_ =` aquí dejaba la NC emitida sin
+		// reversión de ingreso (el mismo patrón silencioso de F-2).
+		jsonError(w, "La nota no se pudo contabilizar: "+err.Error(), 500)
+		return
+	}
+	// 2) Reversión de IVA: se debita la cuenta de IVA POR PAGAR (la misma
+	// que la venta acredita con su clasificación) contra el cliente, por el
+	// importe del IVA. Espejo exacto de la venta (F-7/F-4): ANTES esta fila
+	// debitaba el gasto «State Income Tax» —la NC no reducía el pasivo del
+	// período que corregía— y además se sumaba otro crédito al cliente por
+	// el IVA sobre un primero que ya lo incluía.
 	if vatTotal > 0 {
 		vno2 = nextVoucherNoTx(tx, "JV")
-		_ = s.insertVoucherRowTx(r, tx, VoucherRow{
+		if err := s.insertVoucherRowTx(r, tx, VoucherRow{
 			VNo: vno2, Vtype: "JV", ReferenceNo: ref,
-			COAID: pre.TaxCode, RevCodde: pre.CustomerCode,
+			COAID: pre.VatCode, RevCodde: pre.CustomerCode,
 			Narration: "IVA nota de crédito " + ref, Comment: reason,
 			Debit: vatTotal, SubType: 0,
-		}, createBy)
+		}, createBy); err != nil {
+			jsonError(w, "La nota no se pudo contabilizar: "+err.Error(), 500)
+			return
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

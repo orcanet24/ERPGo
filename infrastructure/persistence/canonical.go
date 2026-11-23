@@ -31,6 +31,7 @@ package persistence
 // - No modifica tipos de columnas existentes (un MODIFY puede recortar datos).
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"io/fs"
@@ -40,6 +41,13 @@ import (
 
 	"erpgo"
 )
+
+// ejecutorSQL es la forma común de *sql.DB y *sql.Conn: lo que necesita el
+// reconciliador es ejecutar sentencias de esquema, y a veces ejecutarlas TODAS
+// en la misma conexión física (FOREIGN_KEY_CHECKS es de sesión: D-5).
+type ejecutorSQL interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
 
 // ColumnaCanonica es una columna del DDL canónico: nombre y definición (tipo,
 // nulabilidad, default, auto_increment, ...).
@@ -69,7 +77,68 @@ type ResultadoReconciliacion struct {
 	TablasCreadas     []string
 	ColumnasAgregadas []string
 	IndicesCreados    []string
+	SiembrasAplicadas []string // sentencias de siembra que insertaron filas nuevas
+	SiembrasToleradas int      // sentencias que chocaron con filas ya existentes (no-op esperado)
 	Avisos            []string
+}
+
+// SemillasCanonicas extrae del canónico las sentencias de SIEMBRA (INSERT /
+// REPLACE). El resto —CREATE TABLE, índices, triggers— lo maneja el diff de
+// esquema, no la siembra: separarlas aquí es lo que permite aplicar los
+// catálogos declarados en bases que ya existen, que es el agujero que dejó el
+// sello canónico (D-1, auditoría 2026-11-22: una instalación existente nunca
+// recibía menús/permisos/catálogos nuevos).
+func SemillasCanonicas(contenido string) []string {
+	var semillas []string
+	for _, s := range DividirSentencias(contenido) {
+		recortada := strings.TrimSpace(s)
+		mayus := strings.ToUpper(recortada)
+		if strings.HasPrefix(mayus, "INSERT") || strings.HasPrefix(mayus, "REPLACE") {
+			semillas = append(semillas, recortada)
+		}
+	}
+	return semillas
+}
+
+// AplicarSiembras ejecuta las siembras del canónico sobre una base que ya
+// tiene datos.
+//
+// LA REGLA: solo agrega, nunca pisa. Una siembra que choca contra una fila
+// existente (1062 «Duplicate entry» en MySQL, «UNIQUE constraint failed» en
+// SQLite) se cuenta como TOLERADA, no como fallo: la fila ya está, que es
+// justo el estado deseado, y el dueño pudo además personalizarla (renombre de
+// menú, permiso ajustado) — pisar ese trabajo desde el arranque sería la
+// clase de daño que la política de borrado protege. Los cambios de VALORES
+// sobre filas existentes no viajan aquí: viajan como migración UPDATE en la
+// cadena, que ahora corre siempre (mysql_migrations.go) y las aplica con su
+// propio ledger. Cualquier otro error queda como AVISO para que la base no se
+// selle sobre un fallo silencioso.
+func AplicarSiembras(db *sql.DB, semillas []string) (aplicadas []string, toleradas int, avisos []string) {
+	for _, s := range semillas {
+		if _, err := db.Exec(s); err != nil {
+			msg := strings.ToLower(err.Error())
+			if strings.Contains(msg, "duplicate entry") ||
+				strings.Contains(msg, "unique constraint failed") ||
+				strings.Contains(msg, "constraint failed") {
+				toleradas++
+				continue
+			}
+			avisos = append(avisos, fmt.Sprintf("siembra no aplicada (%s): %v", troncoSiembra(s), err))
+			continue
+		}
+		aplicadas = append(aplicadas, s)
+	}
+	return aplicadas, toleradas, avisos
+}
+
+// troncoSiembra recorta una sentencia para el aviso legible: tabla y primeras
+// palabras, sin volcar 900 bytes de catálogo al log.
+func troncoSiembra(s string) string {
+	t := strings.Join(strings.Fields(s), " ")
+	if len(t) > 80 {
+		return t[:80] + "…"
+	}
+	return t
 }
 
 // DividirSentencias parte un SQL en sentencias, respetando los bloques
@@ -305,13 +374,30 @@ func Reconciliar(db *sql.DB, tablas []TablaCanonica, dialecto string) (Resultado
 	}
 
 	// FOREIGN_KEY_CHECKS a 0 durante la reconcilación: una tabla nueva con FKs
-	// puede referenciar una tabla que el diff todavía no creó. Se restaura al
-	// final; es una variable de sesión, no toca a otras conexiones.
+	// puede referenciar una tabla que el diff todavía no creó. Se hace sobre
+	// UNA SOLA CONEXIÓN (D-5, auditoría 2026-11-22): la variable es de sesión
+	// y el pool reparte cada Exec en un hilo distinto —SET apagado aquí y
+	// ALTER encendido allá—, así que el ejecutor de todo el bloque es una
+	// conn fija que se restaura y se cierra al salir.
+	ctx := context.Background()
+	var e ejecutorSQL = db
 	if dialecto == "mysql" {
-		if _, err := db.Exec("SET FOREIGN_KEY_CHECKS=0"); err != nil {
-			res.Avisos = append(res.Avisos, fmt.Sprintf("no se pudo poner FOREIGN_KEY_CHECKS=0: %v", err))
+		conn, err := db.Conn(ctx)
+		if err != nil {
+			return res, fmt.Errorf("reconciliador: sin conexión fija: %w", err)
 		}
-		defer db.Exec("SET FOREIGN_KEY_CHECKS=1")
+		defer conn.Close()
+		if _, err := conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS=0"); err != nil {
+			res.Avisos = append(res.Avisos, fmt.Sprintf("no se pudo poner FOREIGN_KEY_CHECKS=0: %v", err))
+			// se sigue con el pool: la reconciliación podrá avisar, no abortar
+		} else {
+			e = conn
+			defer func() {
+				if _, err := conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS=1"); err != nil {
+					res.Avisos = append(res.Avisos, fmt.Sprintf("no se pudo restaurar FOREIGN_KEY_CHECKS: %v", err))
+				}
+			}()
+		}
 	}
 
 	// Primero las tablas que faltan: sus columnas e índices vienen con ellas.
@@ -319,7 +405,7 @@ func Reconciliar(db *sql.DB, tablas []TablaCanonica, dialecto string) (Resultado
 		if reales[t.Nombre] {
 			continue
 		}
-		if _, err := db.Exec(t.Crear); err != nil {
+		if _, err := e.ExecContext(ctx, t.Crear); err != nil {
 			res.Avisos = append(res.Avisos, fmt.Sprintf("no se pudo crear %s: %v", t.Nombre, err))
 			continue
 		}
@@ -338,7 +424,7 @@ func Reconciliar(db *sql.DB, tablas []TablaCanonica, dialecto string) (Resultado
 				continue
 			}
 			sentencia := fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s", t.Nombre, c.Nombre, c.Definicion)
-			if _, err := db.Exec(sentencia); err != nil {
+			if _, err := e.ExecContext(ctx, sentencia); err != nil {
 				res.Avisos = append(res.Avisos, fmt.Sprintf("no se pudo agregar %s.%s: %v", t.Nombre, c.Nombre, err))
 				continue
 			}
@@ -366,7 +452,7 @@ func Reconciliar(db *sql.DB, tablas []TablaCanonica, dialecto string) (Resultado
 				unico = "UNIQUE "
 			}
 			sentencia := fmt.Sprintf("CREATE %sINDEX `%s` ON `%s` (%s)", unico, ind.Nombre, t.Nombre, ind.Columnas)
-			if _, err := db.Exec(sentencia); err != nil {
+			if _, err := e.ExecContext(ctx, sentencia); err != nil {
 				res.Avisos = append(res.Avisos, fmt.Sprintf("no se pudo crear el índice %s.%s: %v", t.Nombre, ind.Nombre, err))
 				continue
 			}
@@ -522,7 +608,20 @@ func ReconciliarConCanonico(db *sql.DB, dialecto string) (ResultadoReconciliacio
 	if err != nil {
 		return ResultadoReconciliacion{}, err
 	}
-	return Reconciliar(db, tablas, dialecto)
+	res, err := Reconciliar(db, tablas, dialecto)
+	if err != nil {
+		return res, err
+	}
+	// El DDL converge primero (las tablas de las siembras tienen que estar),
+	// y después las siembras declaradas. Los CREATE TRIGGER del canónico NO
+	// se aplican aquí: los triggers de protección los crea AplicarProteccion
+	// UnaVez en cada arranque con su propia política, y duplicar el camino
+	// sería tener dos dueños para el mismo objeto.
+	aplicadas, toleradas, avisos := AplicarSiembras(db, SemillasCanonicas(contenido))
+	res.SiembrasAplicadas = aplicadas
+	res.SiembrasToleradas = toleradas
+	res.Avisos = append(res.Avisos, avisos...)
+	return res, nil
 }
 
 // leerCanonica lee schema/esquema_canonico_mysql.sql del embed (o del disco en

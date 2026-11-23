@@ -332,6 +332,46 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 	}
 	isCredit := payTypes[0] == "0"
 
+	// (F-9/F-5, auditoría) Una factura emitida con total cero o negativo
+	// consume número fiscal y no deja nada que declarar: se rechaza. El
+	// borrador sí puede estar vacío —no emite nada—; el hueco en la serie
+	// cuesta menos de explicar que una venta fantasma en el libro.
+	if isDraft != "yes" && round2(grandTotal) <= 0 {
+		jsonError(w, "La factura no puede emitirse con total cero o negativo. Para corregir una venta existe la nota de crédito; para prepararla sin emitir, deje el documento como borrador.", http.StatusBadRequest)
+		return
+	}
+
+	// FISCAL VE (F-4, auditoría 2026-11-22): las cuentas por defecto y el
+	// régimen de IVA se resuelven ANTES de numerar y antes de abrir la
+	// transacción. Un documento que llevaría el IVA dentro del ingreso no
+	// merece número: rechazarlo aquí deja un hueco que se puede explicar;
+	// dejarlo vivir deja un libro que no se puede defender. El criterio es
+	// el mismo que compra ya aplicaba (purchase.go:434): fail-closed con
+	// mensaje accionable.
+	pre, err := s.predefineAccount(r)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+
+	// fixed vs dynamic tax: paidTax es el IVA realmente cobrado por la
+	// factura según el régimen declarado en vat_tax_setting.
+	isFixed, isDynamic := 0, 0
+	paidTax := totalTax
+	var fixedTax, dynamicTax int
+	_ = s.dbFor(r).QueryRow(`SELECT fixed_tax, dynamic_tax FROM vat_tax_setting ORDER BY id LIMIT 1`).Scan(&fixedTax, &dynamicTax)
+	if fixedTax == 1 {
+		isFixed, isDynamic = 1, 0
+		paidTax = totalVat
+	} else if dynamicTax == 1 {
+		isFixed, isDynamic = 0, 1
+		paidTax = totalTax
+	}
+	if paidTax > 0 && pre.VatCode == 0 {
+		jsonError(w, "La venta tiene IVA y no hay cuenta de IVA por pagar asignada. Asígnela en Configuración → Cuentas por defecto (papel «IVA por pagar (ventas)»). Sin esa cuenta el impuesto quedaría metido dentro del ingreso: no hay forma de declararlo.", http.StatusConflict)
+		return
+	}
+
 	tx, err := s.dbFor(r).Begin()
 	if err != nil {
 		jsonError(w, err.Error(), 500)
@@ -367,20 +407,9 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// fixed vs dynamic tax
-	isFixed, isDynamic := 0, 0
-	paidTax := totalTax
-	var fixedTax, dynamicTax int
-	_ = s.dbFor(r).QueryRow(`SELECT fixed_tax, dynamic_tax FROM vat_tax_setting ORDER BY id LIMIT 1`).Scan(&fixedTax, &dynamicTax)
-	if fixedTax == 1 {
-		isFixed, isDynamic = 1, 0
-		paidTax = totalVat
-	} else if dynamicTax == 1 {
-		isFixed, isDynamic = 0, 1
-		paidTax = totalTax
-	}
-
 	// (la fecha del documento se resolvió arriba, antes de numerar)
+	// (paidTax, isFixed/isDynamic y pre se resolvieron arriba, antes de
+	// numerar: el régimen fiscal decide si la venta merece número)
 
 	// ---- MULTI-MONEDIA: Tasa BCV del día
 	currencyCode := orDefault(r.FormValue("currency_code"), "VES")
@@ -515,15 +544,29 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 		purchaseValue += costoVentaDeProducto(tx, pid) * qty
 	}
 
-	pre, err := s.predefineAccount(r)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
+	// (pre se cargó arriba, antes de numerar: el fail-closed del IVA lo
+	// necesitaba antes de gastar un número fiscal)
 
 	narration := "Sales Voucher"
 	comment := "Sales Voucher for customer"
 	revSales := pre.SalesCode
+
+	// Cada pata del asiento se COMPRUEBA. El `_ = s.insertVoucherRowTx(...)`
+	// heredado tragaba el fallo en silencio: la factura quedaba emitida sin
+	// contabilidad y el descuadre aparecía semanas después al cerrar el mes
+	// —el mismo fallo que purchase.go:818-821 documenta y corrigió en
+	// compras; las ventas eran nueve llamadas mudadas—. Un fallo aquí
+	// aborta la factura entera (rollback): prefiero un número quemado que
+	// se pueda explicar, a una venta sin libros.
+	var errAsiento error
+	asentar := func(v VoucherRow) {
+		if errAsiento != nil {
+			return
+		}
+		if err := s.insertVoucherRowTx(r, tx, v, createBy); err != nil {
+			errAsiento = err
+		}
+	}
 
 	// 1) credit voucher: debit customer (or payment methods)
 	if len(payAmounts) > 0 && len(payTypes) > 0 {
@@ -531,12 +574,12 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 			// credit sale: Debit customerCode
 			sub := s.subcodeID(r, customerID, 3)
 			vno := nextVoucherNoTx(tx, isCreditVType(isCredit))
-			_ = s.insertVoucherRowTx(r, tx, VoucherRow{
+			asentar(VoucherRow{
 				VNo: vno, Vtype: isCreditVType(isCredit), ReferenceNo: fmt.Sprintf("%d", invoiceNo),
 				COAID: pre.CustomerCode, RevCodde: revSales,
 				Narration: narration, Comment: comment,
 				Debit: grandTotal, SubType: 3, SubCode: sub,
-			}, createBy)
+			})
 		} else if len(pmPays) > 0 {
 			// FISCAL VE: métodos de pago venezolanos (payment_method.coa_id)
 			for _, pp := range pmPays {
@@ -545,33 +588,40 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 					coaid = sql.NullInt64{Int64: pre.CashCode, Valid: true}
 				}
 				vno := nextVoucherNoTx(tx, isCreditVType(isCredit))
-				_ = s.insertVoucherRowTx(r, tx, VoucherRow{
+				asentar(VoucherRow{
 					VNo: vno, Vtype: isCreditVType(isCredit), ReferenceNo: fmt.Sprintf("%d", invoiceNo),
 					COAID: coaid.Int64, RevCodde: revSales,
 					Narration: narration, Comment: pp.pm.Name,
 					Debit: pp.amt,
-				}, createBy)
+				})
 			}
-			// El cobro real al cliente incluye el IGTF percibido
+			// El cobro real al cliente incluye el IGTF percibido. FISCAL VE
+			// (F-12): la percepción es DEUDA con el SENIAT (cuenta 5020702),
+			// no ingreso ni gasto —antes el contracrédito caía en «State
+			// Income Tax», un gasto: el IGTF desaparecía del balance—.
 			if igtfAmount > 0 {
+				if pre.CuentaIgtfPasiva() == 0 {
+					jsonError(w, "La venta genera IGTF y no hay cuenta «IGTF por Pagar» asignada. Revise Configuración → Cuentas por defecto.", http.StatusConflict)
+					return
+				}
 				sub := s.subcodeID(r, customerID, 3)
 				vno := nextVoucherNoTx(tx, "JV")
-				_ = s.insertVoucherRowTx(r, tx, VoucherRow{
+				asentar(VoucherRow{
 					VNo: vno, Vtype: "JV", ReferenceNo: fmt.Sprintf("%d", invoiceNo),
-					COAID: pre.CustomerCode, RevCodde: pre.TaxCode,
+					COAID: pre.CustomerCode, RevCodde: pre.CuentaIgtfPasiva(),
 					Narration: "IGTF factura " + fmt.Sprintf("%d", invoiceNo), Comment: "Percepción IGTF",
 					Debit: igtfAmount, SubType: 3, SubCode: sub,
-				}, createBy)
+				})
 			}
 			if dueAmount > 0 {
 				sub := s.subcodeID(r, customerID, 3)
 				vno := nextVoucherNoTx(tx, "JV")
-				_ = s.insertVoucherRowTx(r, tx, VoucherRow{
+				asentar(VoucherRow{
 					VNo: vno, Vtype: "JV", ReferenceNo: fmt.Sprintf("%d", invoiceNo),
 					COAID: pre.CustomerCode, RevCodde: revSales,
 					Narration: narration, Comment: comment,
 					Debit: dueAmount, SubType: 3, SubCode: sub,
-				}, createBy)
+				})
 			}
 		} else {
 			// El select del formulario manda el ID del método de pago
@@ -588,22 +638,22 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 				}
 				amount := parseMoney(payAmounts[i])
 				vno := nextVoucherNoTx(tx, isCreditVType(isCredit))
-				_ = s.insertVoucherRowTx(r, tx, VoucherRow{
+				asentar(VoucherRow{
 					VNo: vno, Vtype: isCreditVType(isCredit), ReferenceNo: fmt.Sprintf("%d", invoiceNo),
 					COAID: coaid, RevCodde: revSales,
 					Narration: narration, Comment: comment,
 					Debit: amount,
-				}, createBy)
+				})
 			}
 			if dueAmount > 0 {
 				sub := s.subcodeID(r, customerID, 3)
 				vno := nextVoucherNoTx(tx, "JV")
-				_ = s.insertVoucherRowTx(r, tx, VoucherRow{
+				asentar(VoucherRow{
 					VNo: vno, Vtype: "JV", ReferenceNo: fmt.Sprintf("%d", invoiceNo),
 					COAID: pre.CustomerCode, RevCodde: revSales,
 					Narration: narration, Comment: comment,
 					Debit: dueAmount, SubType: 3, SubCode: sub,
-				}, createBy)
+				})
 			}
 		}
 	} else if grandTotal > 0 {
@@ -628,22 +678,22 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 		vtype := isCreditVType(isCredit)
 		if paidAmount > 0 {
 			vno := nextVoucherNoTx(tx, vtype)
-			_ = s.insertVoucherRowTx(r, tx, VoucherRow{
+			asentar(VoucherRow{
 				VNo: vno, Vtype: vtype, ReferenceNo: fmt.Sprintf("%d", invoiceNo),
 				COAID: pre.CashCode, RevCodde: revSales,
 				Narration: narration, Comment: comment,
 				Debit: paidAmount,
-			}, createBy)
+			})
 		}
 		if dueAmount > 0 {
 			sub := s.subcodeID(r, customerID, 3)
 			vno := nextVoucherNoTx(tx, "JV")
-			_ = s.insertVoucherRowTx(r, tx, VoucherRow{
+			asentar(VoucherRow{
 				VNo: vno, Vtype: "JV", ReferenceNo: fmt.Sprintf("%d", invoiceNo),
 				COAID: pre.CustomerCode, RevCodde: revSales,
 				Narration: narration, Comment: comment,
 				Debit: dueAmount, SubType: 3, SubCode: sub,
-			}, createBy)
+			})
 		}
 	}
 
@@ -653,26 +703,40 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 	// de costo en cero, que ensucia el libro y hace creer que hubo mercancía.
 	if purchaseValue > 0 {
 		vnoGoods := nextVoucherNoTx(tx, "JV")
-		if err := s.insertVoucherRowTx(r, tx, VoucherRow{
+		asentar(VoucherRow{
 			VNo: vnoGoods, Vtype: "JV", ReferenceNo: fmt.Sprintf("%d", invoiceNo),
 			COAID: pre.COGSCode, RevCodde: pre.InventoryCode,
 			Narration: "Sales cost of goods Voucher", Comment: "Sales cost of goods Voucher for customer",
 			Debit: purchaseValue,
-		}, createBy); err != nil {
-			jsonError(w, err.Error(), 500)
-			return
-		}
+		})
 	}
 
-	// 3) tax voucher
+	// 3) Clasificación del IVA (F-4, auditoría 2026-11-22). Las patas de
+	// arriba acreditan Ventas por el total —herencia del libro PHP—; esta
+	// fila transfiere el IVA repercutido del INGRESO al PASIVO fiscal
+	// (pre.VatCode = cuenta 5020701, fail-closed arriba si no existe).
+	// ANTES esta fila cargaba el IVA a «State Income Tax» (gasto 4021101)
+	// con su provisión encima: débito y crédito se mataban entre sí, el IVA
+	// no aparecía en ningún lado del balance y Ventas quedaba inflada por el
+	// impuesto. Con esta corrección: Ventas neto = base imponible, IVA por
+	// pagar = deuda real con el SENIAT, y el libro de ventas (base = total
+	// − IVA − IGTF) cuadra por fin con el mayor.
 	if paidTax > 0 {
 		vnoTax := nextVoucherNoTx(tx, "JV")
-		_ = s.insertVoucherRowTx(r, tx, VoucherRow{
+		asentar(VoucherRow{
 			VNo: vnoTax, Vtype: "JV", ReferenceNo: fmt.Sprintf("%d", invoiceNo),
-			COAID: pre.TaxCode, RevCodde: pre.ProvStateTaxCode,
-			Narration: "Tax for Sales Voucher", Comment: "Tax for Sales Voucher for customer",
+			COAID: revSales, RevCodde: pre.VatCode,
+			Narration: "Clasificación de IVA repercutido", Comment: "El IVA cobrado al cliente pasa de Ventas a IVA por pagar",
 			Debit: paidTax,
-		}, createBy)
+		})
+	}
+
+	// Ningún asiento pudo caerse en silencio: si una pata falló, la factura
+	// entera se revierte (defer rollback) y el usuario lo ve ahora, no al
+	// cerrar el mes.
+	if errAsiento != nil {
+		jsonError(w, "La venta no se pudo contabilizar y no se emitió: "+errAsiento.Error(), 500)
+		return
 	}
 
 	// 3.c) Registro de pagos por método VE (para caja X/Z y reportes)
