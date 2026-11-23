@@ -156,7 +156,7 @@ func SemillarCarniceriaLara(db *sql.DB, nombreBase string) (*InformeSemilla, err
 	sess := &SessionData{
 		UserID: "1", Username: "admin", Fullname: "Administrador",
 		UserLevel: "admin", TenantCode: "default",
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().Add(duracionSesion),
 	}
 	sid := s.sessions.Create(sess)
 	s.sessions.Get(sid).CSRFToken = newCSRFToken()

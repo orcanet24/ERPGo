@@ -372,6 +372,6 @@ func (s *Server) authenticateUser(r *http.Request, username, password string) (*
 		Fullname:  fullname,
 		UserLevel: level,
 		Image:     logo.String,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().Add(duracionSesion),
 	}, nil
 }

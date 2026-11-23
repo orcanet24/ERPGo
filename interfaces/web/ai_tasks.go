@@ -112,6 +112,9 @@ type aiTaskRun struct {
 	NeedsHuman bool
 	ReviewedBy string
 	ReviewedAt string
+	// Propuestas de acción crítica que la corrida dejó pendientes (F5): la
+	// pantalla las lista para que un humano las apruebe o retire.
+	Propuestas []aiPropuestaPendiente
 }
 
 type aiStep struct {
@@ -357,8 +360,21 @@ func (s *Server) aiTaskRunView(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Corrida no encontrada", 404)
 		return
 	}
+	// Las propuestas pendientes viajan con la corrida a la vista (F5, cierre
+	// del pendiente de la fase IA): sin lista visible, «aprobación previa»
+	// era un endpoint que nadie sabía que existía —la aprobación humana
+	// también es usabilidad—. El botón solo aparece si hay propuesta y si el
+	// rol puede aplicarla; la autoridad real la revisa el servidor, la UI es
+	// cortesía honesta.
+	run.Propuestas = s.aiPropuestasDeCorrida(s.dbFor(r), id)
+	pendientes := 0
+	for _, p := range run.Propuestas {
+		if p.Status == aiEstadoPropuestaPendiente {
+			pendientes++
+		}
+	}
 	s.render(w, r, "ai_task_run.html", map[string]interface{}{
-		"Title": "Ejecución #" + fmt.Sprintf("%d", run.ID), "Run": run,
+		"Title": "Ejecución #" + fmt.Sprintf("%d", run.ID), "Run": run, "Pendientes": pendientes,
 	})
 }
 

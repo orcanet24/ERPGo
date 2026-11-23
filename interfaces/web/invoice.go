@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,7 +23,7 @@ func (s *Server) registerInvoiceRoutes() {
 	// Las rutas que quedaban aquí (/invoice/pos, /pos/admin) eran del POS web
 	// viejo. El binario POS se comunica vía API (/api/pos/*) y gRPC.
 	s.mux.HandleFunc("GET /invoice/next-number", s.invoiceNextNumber)
-	s.mux.HandleFunc("GET /invoice/walking-customer", s.walkingCustomer)
+	s.mux.HandleFunc("POST /invoice/walking-customer", s.walkingCustomer)
 }
 
 func (s *Server) invoiceList(w http.ResponseWriter, r *http.Request) {
@@ -1266,29 +1265,67 @@ func (s *Server) invoiceNextNumber(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"next": n})
 }
 
-// walkingCustomer: the default walk-in customer (like walking_customer()).
+// walkingCustomer devuelve el cliente genérico de contado, creándolo la
+// primera vez que se necesita —CON SU CUENTA de cartera, que es lo que hacía
+// falta para que el mayor cerrara—.
+//
+// TRES verdades nuevas (auditoría atómica 2026-11-22):
+//  1. Es POST, no GET: un GET que inserta es un bug para el prerenderizado
+//     del navegador, los proxies y cualquier reintentador —la ruta se
+//     registraba "GET /invoice/walking-customer" y el pos.html la llamaba
+//     con getJSON—.
+//  2. create_by es el USUARIO REAL: el '1' fijo atribuía al dueño la
+//     creación del cliente y de su cuenta, borrando el rastro de quién
+//     estaba delante.
+//  3. El Begin se comprueba y la relectura dentro de la transacción cierra
+//     la carrera: dos POST simultáneos a una base sin cliente genérico
+//     fabricaban dos cuentas contiguas en el plan.
 func (s *Server) walkingCustomer(w http.ResponseWriter, r *http.Request) {
+	db := s.dbFor(r)
 	var id int64
 	var name sql.NullString
-	err := s.dbFor(r).QueryRow(`SELECT customer_id, customer_name FROM customer_information
-		WHERE customer_name = 'Walking Customer' OR customer_name = 'Cliente Contado' LIMIT 1`).Scan(&id, &name)
-	if err != nil {
-		// create it
-		tx, _ := s.dbFor(r).Begin()
-		res, err2 := tx.Exec(`INSERT INTO customer_information (customer_name, customer_mobile, status, create_by)
-			VALUES ('Walking Customer','',1,'1')`)
-		if err2 == nil {
-			cid, _ := res.LastInsertId()
-			hc, _ := nextHeadCodeTx(tx, "113100", "1131000001")
-			if _, err := tx.Exec(`INSERT INTO acc_coa (HeadCode, HeadName, PHeadName, HeadLevel, IsActive, IsTransaction, IsGL,
-				HeadType, IsBudget, IsDepreciation, DepreciationRate, customer_id, CreateBy, CreateDate, UpdateBy, UpdateDate, isSubType, subType)
-				VALUES (?,?,?,?,1,1,0,'A',0,0,0,?,?,?,?,?,0,1)`, hc, fmt.Sprintf("%d-Walking Customer", cid), "Customer Receivable", 4, cid, "1", now(), "1", now()); err != nil {
-				log.Printf("factura: no se pudo crear la cuenta contable del cliente genérico: %v", err)
-			}
-			_ = tx.Commit()
-			id = cid
-			name = sql.NullString{String: "Walking Customer", Valid: true}
-		}
+	buscar := `SELECT customer_id, customer_name FROM customer_information
+		WHERE customer_name IN ('Walking Customer','Cliente Contado') ORDER BY customer_id LIMIT 1`
+	if err := db.QueryRow(buscar).Scan(&id, &name); err == nil {
+		writeJSON(w, map[string]interface{}{"id": id, "name": name.String})
+		return
 	}
-	writeJSON(w, map[string]interface{}{"id": id, "name": name.String})
+
+	sess := s.sessionFromRequest(r)
+	createBy := sessUserID(sess)
+	if createBy == "" {
+		createBy = "1"
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := tx.QueryRow(buscar).Scan(&id, &name); err == nil {
+		writeJSON(w, map[string]interface{}{"id": id, "name": name.String})
+		return
+	}
+	res, err := tx.Exec(`INSERT INTO customer_information (customer_name, customer_mobile, status, create_by)
+		VALUES ('Walking Customer','',1,?)`, createBy)
+	if err != nil {
+		jsonError(w, "no se pudo crear el cliente de contado: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	cid, _ := res.LastInsertId()
+	hc, _ := nextHeadCodeTx(tx, "113100", "1131000001")
+	if _, err := tx.Exec(`INSERT INTO acc_coa (HeadCode, HeadName, PHeadName, HeadLevel, IsActive, IsTransaction, IsGL,
+		HeadType, IsBudget, IsDepreciation, DepreciationRate, customer_id, CreateBy, CreateDate, UpdateBy, UpdateDate, isSubType, subType)
+		VALUES (?,?,?,?,1,1,0,'A',0,0,0,?,?,?,?,?,0,1)`, hc, fmt.Sprintf("%d-Walking Customer", cid), "Customer Receivable", 4, cid, createBy, now(), createBy, now()); err != nil {
+		// La cuenta es necesaria para el mayor: si falla, se deshace también
+		// el cliente (una mitad sin la otra era el origen de los descuadres
+		// «imposibles»).
+		jsonError(w, "no se pudo crear la cuenta contable del cliente genérico: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]interface{}{"id": cid, "name": "Walking Customer"})
 }

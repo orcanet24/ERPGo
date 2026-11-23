@@ -12,6 +12,65 @@
         </table>
     </div>
 </div>
+
+<!-- Acceso MCP (puente para IAs externas, M-1): la gestión de tokens vive
+     junto a los agentes porque el token ES un agente: hereda su rol, su
+     departamento y sus topes. El valor en claro se muestra una sola vez —
+     el servidor guarda únicamente su SHA-256—, así que el aviso de copiarlo
+     ahora no es cortésía, es el diseño. -->
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Acceso MCP (IA externas)
+            <button class="btn btn-success btn-sm pull-right" data-toggle="modal" data-target="#mcpNuevoModal"><i class="fa fa-key"></i> Generar token</button></h4></div>
+    </div>
+    <div class="panel-body">
+        <p class="text-muted">Un cliente MCP (Claude Desktop, un agente propio) usa las herramientas del ERP con la identidad del agente elegido: los mismos permisos de rol, el mismo alcance de datos y la misma aprobación humana para las acciones críticas. Cada llamada queda en la cadena de auditoría. Revocar aquí corta el acceso al instante.</p>
+        <table class="table table-striped table-bordered" id="mcpTable" width="100%">
+            <thead>
+                <tr><th>Agente</th><th>Nombre</th><th>Creado</th><th>Último uso</th><th>Estado</th><th>Acciones</th></tr>
+            </thead>
+        </table>
+    </div>
+</div>
+
+<div class="modal fade" id="mcpNuevoModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Cerrar"><span aria-hidden="true">&times;</span></button>
+                <h4 class="modal-title">Nuevo token MCP</h4>
+            </div>
+            <div class="modal-body">
+                <div id="mcpFormBody">
+                    <div class="form-group">
+                        <label for="mcpAgente">Agente</label>
+                        <select class="form-control" id="mcpAgente"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="mcpNombre">Nombre (para reconocerlo al revocar)</label>
+                        <input type="text" class="form-control" id="mcpNombre" placeholder="Claude del escritorio de caja">
+                    </div>
+                    <p class="text-danger">El token se muestra <strong>una sola vez</strong>. El servidor guarda solo su huella: si se pierde, se genera otro.</p>
+                </div>
+                <div id="mcpResultado" style="display:none">
+                    <div class="form-group">
+                        <label>Token (cópialo ahora)</label>
+                        <input type="text" class="form-control" id="mcpTokenValor" readonly>
+                    </div>
+                    <div class="form-group">
+                        <label>Snippet para el cliente MCP</label>
+                        <textarea class="form-control" id="mcpSnippet" rows="7" readonly></textarea>
+                    </div>
+                    <button type="button" class="btn btn-default btn-sm" id="mcpCopiar"><i class="fa fa-copy"></i> Copiar snippet</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Cerrar</button>
+                <button type="button" class="btn btn-success" id="mcpCrearBtn">Generar</button>
+            </div>
+        </div>
+    </div>
+</div>
 {{end}}
 
 {{define "pagejs"}}
@@ -41,7 +100,95 @@ $(function () {
             }}
         ]
     });
+
+    // Tabla de tokens: datos directos del endpoint (son decenas, no miles:
+    // paginación del servidor sería ruido aquí).
+    var mcpTabla = $('#mcpTable').DataTable({
+        ajax: { url: '/ai/agents/mcp/tokens', dataSrc: 'tokens' },
+        columns: [
+            { data: 'agente' },
+            { data: 'nombre' },
+            { data: 'creado' },
+            { data: 'ultimo_uso', render: function (v) { return v || '<span class="text-muted">nunca</span>'; } },
+            { data: 'vigente', orderable: false, render: function (v) {
+                return v ? '<span class="label label-success">Vigente</span>' : '<span class="label label-default">Revocado</span>';
+            }},
+            { data: null, orderable: false, render: function (d) {
+                if (!d.vigente) return '<span class="text-muted">—</span>';
+                return '<button class="btn btn-danger btn-xs" onclick="revocarMCP(' + d.id + ')"><i class="fa fa-ban"></i> Revocar</button>';
+            }}
+        ]
+    });
+
+    // Select de agentes del modal: se llena una vez desde el mismo feed que
+    // usa la tabla (si el borrado de un agente deja un token huérfano, la
+    // revocación sigue disponible desde la tabla — no depende del select).
+    $.getJSON('/ai/agents/data', function (r) {
+        var opts = '';
+        (r.data || []).forEach(function (a) {
+            if (a.enabled) opts += '<option value="' + a.id + '">' + $('<i>').text(a.name).html() + '</option>';
+        });
+        if (!opts) opts = '<option value="">(no hay agentes activos)</option>';
+        $('#mcpAgente').html(opts);
+    });
+
+    $('#mcpCrearBtn').on('click', function () {
+        var $b = $(this);
+        var agente = $('#mcpAgente').val();
+        if (!agente) { alert('Elige un agente activo primero.'); return; }
+        $b.prop('disabled', true).text('Generando…');
+        $.ajax({
+            url: '/ai/agents/mcp/token',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ agent_id: Number(agente), name: $('#mcpNombre').val() })
+        }).done(function (r) {
+            if (r.status !== 1 || !r.token) { alert(r.error || 'No se pudo generar el token'); return; }
+            $('#mcpFormBody').hide();
+            $('#mcpTokenValor').val(r.token);
+            $('#mcpSnippet').val(JSON.stringify(r.snippet, null, 2));
+            $('#mcpResultado').show();
+            $b.hide();
+            mcpTabla.ajax.reload(null, false);
+        }).fail(function (x) {
+            alert((x.responseJSON && x.responseJSON.error) || 'Error al generar el token');
+        }).always(function () {
+            $b.prop('disabled', false).text('Generar');
+        });
+    });
+
+    // Copiar al portapapeles sin librerías nuevas (el ERP va offline-first);
+    // execCommand es viejo precisamente por eso: funciona sin HTTPS en la LAN.
+    $('#mcpCopiar').on('click', function () {
+        var $t = $('#mcpSnippet');
+        $t[0].select(); $t[0].setSelectionRange(0, 99999);
+        try { document.execCommand('copy'); toastr.success('Snippet copiado'); }
+        catch (e) { toastr.error('Copia manual (Ctrl+C) — el navegador bloqueó el portapapeles'); }
+    });
+
+    // Al cerrar el modal con token mostrado, se limpia: el valor en claro no
+    // debe quedar vivo en el DOM más de lo necesario.
+    $('#mcpNuevoModal').on('hidden.bs.modal', function () {
+        $('#mcpResultado').hide();
+        $('#mcpTokenValor').val('');
+        $('#mcpSnippet').val('');
+        $('#mcpFormBody').show();
+        $('#mcpCrearBtn').show();
+        mcpTabla.ajax.reload(null, false);
+    });
 });
+function revocarMCP(id) {
+    if (!confirm('¿Revocar este token? La IA externa quedará fuera al instante.')) return;
+    $.ajax({
+        url: '/ai/agents/mcp/revoke',
+        type: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ id: id })
+    }).done(function (r) {
+        if (r.status === 1) { toastr.success(r.msg); $('#mcpTable').DataTable().ajax.reload(null, false); }
+        else { toastr.error(r.error || 'Error'); }
+    }).fail(function (x) { toastr.error((x.responseJSON && x.responseJSON.error) || 'Error'); });
+}
 function delAgent(id) {
     if (!confirm('¿Eliminar este agente? Se elimina también su usuario.')) return;
     $.post('/ai/agents/delete/' + id, function (r) {

@@ -177,6 +177,26 @@ func (st *SessionStore) Touch(id string, expires time.Time) {
 	}
 }
 
+// TouchSliding alarga una sesión viva (U-6/S-3, auditoría 2026-11-22): sin
+// esto la sesión vencía a las 24 h FIJAS desde el login, y un usuario a
+// media factura la perdía de golpe. La extensión solo ocurre cuando queda
+// menos de la mitad de la vida: una escritura cada ~12 h por sesión, no una
+// por petición. El vencimiento absoluto sigue existiendo (reivindicar una
+// cookie robada hace semanas nunca es cómodo), pero quien usa el ERP no es
+// cortado a mitad de trabajo.
+func (st *SessionStore) TouchSliding(id string, dur time.Duration) {
+	if st == nil || id == "" {
+		return
+	}
+	st.mu.RLock()
+	s := st.sessions[id]
+	st.mu.RUnlock()
+	if s == nil || time.Until(s.ExpiresAt) > dur/2 {
+		return
+	}
+	st.Touch(id, time.Now().Add(dur))
+}
+
 // Delete cierra la sesión en memoria y en la base.
 func (st *SessionStore) Delete(id string) {
 	st.mu.Lock()
@@ -340,5 +360,15 @@ func (s *Server) sessionFromRequest(r *http.Request) *SessionData {
 	if err != nil {
 		return nil
 	}
-	return s.sessions.Get(cookie.Value)
+	sess := s.sessions.Get(cookie.Value)
+	if sess != nil {
+		// Deslizamiento honesto: actividad renueva, abandono caduca.
+		s.sessions.TouchSliding(cookie.Value, duracionSesion)
+	}
+	return sess
 }
+
+// duracionSesion es la vida de una sesión de navegador. vive aquí para que
+// el login que la crea y el sliding que la renueven no discrepen nunca de
+// número (dos 24hs repartidos por archivos es la norma que se olvida).
+const duracionSesion = 24 * time.Hour

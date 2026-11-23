@@ -18,6 +18,40 @@ import (
 	"erpgo/configs"
 )
 
+func TestSesionActivaNoVenceFija(t *testing.T) {
+	// U-6/S-3 (addendum): la sesión con actividad se desliza; sin actividad
+	// vence. TouchSliding solo escribe cuando queda menos de MEDIA vida, así
+	// que renovar no es escribir en cada petición.
+	s, db := basePrueba(t)
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS web_sessions (
+		id TEXT PRIMARY KEY, user_id TEXT, username TEXT, fullname TEXT, user_level TEXT,
+		image TEXT, tenant_code TEXT, is_agent INTEGER, csrf_token TEXT, expires_at TEXT, created_at TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	s.sessions = NewSessionStore()
+	s.sessions.SetDB(db)
+
+	reciente := s.sessions.Create(&SessionData{UserID: "9", Username: "caja", ExpiresAt: time.Now().Add(23 * time.Hour)})
+	vieja := s.sessions.Create(&SessionData{UserID: "9", Username: "caja", ExpiresAt: time.Now().Add(2 * time.Hour)})
+
+	s.sessions.TouchSliding(reciente, duracionSesion)
+	if got := s.sessions.Get(reciente); !got.ExpiresAt.After(time.Now().Add(23*time.Hour - time.Second)) {
+		t.Error("una sesión con casi toda la vida por delante NO debía renovarse todavía")
+	}
+	s.sessions.TouchSliding(vieja, duracionSesion)
+	if got := s.sessions.Get(vieja); time.Until(got.ExpiresAt) < 23*time.Hour {
+		t.Errorf("sesión a punto de vencer con actividad: expira en %v, se quería ~24 h", time.Until(got.ExpiresAt))
+	}
+	// Y la base sigue al día (es Get tras reinicio lo que la lee):
+	var exp string
+	if err := db.QueryRow(`SELECT expires_at FROM web_sessions WHERE id = ?`, vieja).Scan(&exp); err == nil {
+		tt, err2 := time.Parse("2006-01-02 15:04:05", exp)
+		if err2 == nil && time.Until(tt) < 23*time.Hour {
+			t.Errorf("la base quedó con vencimiento viejo: %s", exp)
+		}
+	}
+}
+
 func TestDeleteByUserCierraCacheYBase(t *testing.T) {
 	s, db := basePrueba(t)
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS web_sessions (

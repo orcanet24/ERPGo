@@ -21,11 +21,46 @@
         <div class="alert {{if .Run.ReviewedBy}}alert-success{{else}}alert-warning{{end}}">
             {{if .Run.ReviewedBy}}
             <strong>Revisión humana:</strong> revisada por {{.Run.ReviewedBy}} el {{.Run.ReviewedAt}}.
+            {{else if gt .Pendientes 0}}
+            <!-- Con propuestas pendientes, "marcar como revisada" APROBARÍA y
+                 ejecutaría: ese botón nunca puede estar disfrazado de acuse de
+                 recibo (F5, fase IA). La acción se hace explícita abajo, en el
+                 panel de propuestas. -->
+            <strong>Requiere decisión humana.</strong> Esta corrida dejó {{.Pendientes}} acción(es) críticas pendientes de aprobación. Revísalas en el panel «Propuestas pendientes» —al aprobarlas, la corrida queda revisada—.
             {{else}}
-            <strong>Requiere revisión humana.</strong> Esta corrida ejecutó una acción crítica (pago, voucher o anulación).
+            <strong>Requiere revisión humana.</strong> Esta corrida tocó una acción crítica ya ejecutada.
             Las acciones siguen siendo reversibles con «Revertir»; revísalas y márcalas como vistas.
             <button class="btn btn-warning btn-xs" onclick="reviewRun({{.Run.ID}})"><i class="fa fa-check"></i> Marcar como revisada</button>
             {{end}}
+        </div>
+        {{end}}
+
+        {{$hayPropuestas := gt (len .Run.Propuestas) 0}}
+        {{if $hayPropuestas}}
+        <div class="panel panel-danger">
+            <div class="panel-heading"><strong>Propuestas pendientes de aprobación humana</strong>
+                {{if gt .Pendientes 0}}
+                <button class="btn btn-success btn-xs pull-right" id="aprobar-{{.Run.ID}}" onclick="aprobarPropuestas({{.Run.ID}}, {{.Pendientes}})">
+                    <i class="fa fa-play"></i> Aprobar y ejecutar ({{.Pendientes}})</button>
+                {{end}}
+            </div>
+            <div class="panel-body">
+                <p class="text-muted">El agente NO pudo ejecutar esto: quedó propuesto con sus argumentos exactos. Aprobar aplica TODO el lote o nada (un lote a medias sería peor que ninguno) y firma con TU usuario —la autoría queda dividida honestamente: quién pidió y quién dejó hacer—. Requiere tener el permiso real de cada herramienta.</p>
+                <table class="table table-condensed table-bordered">
+                    <thead><tr><th style="width:50px">ID</th><th style="width:170px">Herramienta</th><th>Argumentos propuestos</th><th style="width:120px">Estado</th><th style="width:110px">Acción</th></tr></thead>
+                    <tbody>
+                    {{range .Run.Propuestas}}
+                        <tr>
+                            <td>{{.ID}}</td>
+                            <td><code>{{.Tool}}</code></td>
+                            <td style="max-width:460px"><small><pre style="white-space:pre-wrap;margin:0">{{.ArgsJSON}}</pre></small></td>
+                            <td>{{if eq .Status "pending"}}<span class="label label-warning">pendiente</span>{{else if eq .Status "applied"}}<span class="label label-success">aplicada</span>{{else if eq .Status "rejected"}}<span class="label label-default">retirada</span>{{else if eq .Status "failed"}}<span class="label label-danger">fallida</span>{{else}}{{.Status}}{{end}}</td>
+                            <td>{{if eq .Status "pending"}}<button class="btn btn-default btn-xs" onclick="retirarPropuesta({{.RunID}}, {{.ID}})"><i class="fa fa-ban"></i> Retirar</button>{{else}}<span class="text-muted">—</span>{{end}}</td>
+                        </tr>
+                    {{end}}
+                    </tbody>
+                </table>
+            </div>
         </div>
         {{end}}
 
@@ -71,6 +106,29 @@ function reviewRun(id) {
     $.post('/ai/tasks/runs/' + id + '/review', function (r) {
         if (r.status === 1) { ERPGo.refrescar(); } else { alert(r.error || 'Error al marcar la revisión'); }
     });
+}
+function aprobarPropuestas(id, n) {
+    if (!confirm('¿Aprobar y ejecutar las ' + n + ' acción(es) críticas propuestas? Se aplican TODAS o ninguna, firmadas con tu usuario, y quedan en la auditoría.')) return;
+    var $b = $('#aprobar-' + id).prop('disabled', true);
+    $.post('/ai/tasks/runs/' + id + '/review', function (r) {
+        if (r.status === 1) {
+            toastr.success(r.msg + (r.aplicadas ? ' (' + r.aplicadas + ' aplicadas)' : ''));
+            ERPGo.refrescar();
+        } else {
+            alert(r.error || 'Error');
+            $b.prop('disabled', false);
+        }
+    }).fail(function (x) {
+        alert((x.responseJSON && x.responseJSON.error) || 'Error al aprobar');
+        $b.prop('disabled', false);
+    });
+}
+function retirarPropuesta(runId, propId) {
+    if (!confirm('¿Retirar esta propuesta sin ejecutarla? Nadie podrá aplicarla después.')) return;
+    $.post('/ai/tasks/runs/' + runId + '/review', { rechazar: propId }, function (r) {
+        if (r.status === 1) { toastr.success(r.msg); ERPGo.refrescar(); }
+        else { alert(r.error || 'Error'); }
+    }).fail(function (x) { alert((x.responseJSON && x.responseJSON.error) || 'Error al retirar'); });
 }
 function undoRun(id) {
     if (!confirm('¿Revertir TODAS las acciones de esta tarea?')) return;

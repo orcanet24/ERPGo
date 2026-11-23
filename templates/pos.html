@@ -320,8 +320,10 @@ function saveMethod(methodCode) {
 }
 
 $(function () {
-    // walking customer by default
-    $.getJSON('/invoice/walking-customer', function (d) {
+    // Cliente de contado por defecto. POST, no getJSON: la primera vez que
+    // una empresa lo usa esto CREA el cliente y su cuenta en el plan —un GET
+    // que escribe lo disparaba cualquier prerenderizador del navegador—.
+    $.post('/invoice/walking-customer', function (d) {
         if (d && d.id) {
             $('#customer_id').val(d.id);
             if (!$('#customer_name').val()) $('#customer_name').val(d.name || 'Cliente Contado');
