@@ -219,19 +219,30 @@ func (s *Server) registrarVentaTerminal(db *sql.DB, req *pos.SyncSaleRequest) (*
 
 		// Inventario: mismo criterio que el panel —servicios y consumo no
 		// descuentan—, leído del campo real item_type.
+		//
+		// EL KARDEX SE REGISTRA CON EL id INTERO de producto, no con el
+		// código: stock_movement.product_id es int (la columna interna de
+		// product_information), y tanto el panel como el checkout en línea
+		// usan ese id. El sync viejo insertaba el código del terminal a
+		// ciegas: funcionaba solo si el código era numérico, y con códigos
+		// alfabéticos el kardex moría (o peor: quedaba en el producto 0).
 		var tipoItem string
 		_ = tx.QueryRow(`SELECT COALESCE(NULLIF(item_type,''), 'venta') FROM product_information WHERE product_id = ?`, pid).Scan(&tipoItem)
 		if tipoItem != "servicio" && tipoItem != "consumo" {
+			var pidInt int64
+			if err := tx.QueryRow(`SELECT id FROM product_information WHERE product_id = ?`, pid).Scan(&pidInt); err != nil || pidInt == 0 {
+				return nil, fmt.Errorf("el producto %s no tiene id interno para el kardex (id=%d, err=%v)", pid, pidInt, err)
+			}
 			if _, err := tx.Exec(`
 				INSERT INTO stock_movement (movement_type, product_id, warehouse_id, quantity, unit_cost,
 					reference_type, reference_id, reference_no, date, is_posted, posted_at, created_at)
 				VALUES ('sale', ?, 'WH-MAIN', ?, ?, 'invoice', ?, ?, ?, 1, ?, ?)`,
-				pid, item.Quantity, item.UnitPrice, invoiceNo, fmt.Sprintf("INV-%d", invoiceNo), fecha, now(), now()); err != nil {
+				pidInt, item.Quantity, item.UnitPrice, invoiceNo, fmt.Sprintf("INV-%d", invoiceNo), fecha, now(), now()); err != nil {
 				return nil, fmt.Errorf("inventario de %s: %w", pid, err)
 			}
 			var restante sql.NullFloat64
 			_ = tx.QueryRow(`SELECT SUM(CASE WHEN movement_type IN ('sale','delivery','consumo','ajuste-') THEN -quantity ELSE quantity END)
-				FROM stock_movement WHERE product_id = ? AND IFNULL(is_posted,1) = 1`, pid).Scan(&restante)
+				FROM stock_movement WHERE product_id = ? AND IFNULL(is_posted,1) = 1`, pidInt).Scan(&restante)
 			if restante.Valid && restante.Float64 < 0 {
 				avisos = append(avisos, fmt.Sprintf("stock de %s quedó en %.2f tras sincronizar la venta offline", pid, restante.Float64))
 			}

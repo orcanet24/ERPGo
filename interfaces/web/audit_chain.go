@@ -300,7 +300,7 @@ func (s *Server) appendAudit(r *http.Request, userID, ip, action, module, table,
 // tests, que deben poder colocar registros en un período concreto.
 //
 // S-10 (auditoría 2026-11-22): todo el registro —INSERT, huella y enlace—
-// vive en UNA transacción. La versión anterior insertaba con record_hash ''
+// vive en UNA transacción. La versión anterior insertaba con record_hash ”
 // y lo sellaba con un UPDATE suelto: un corte de luz entre los dos dejaba
 // una fila con huella vacía que el verificador marcaba como «contenido
 // alterado» PARA SIEMPRE, acusando de manipulación al cliente honesto.
@@ -339,6 +339,11 @@ func (s *Server) appendAuditAt(r *http.Request, userID, ip, action, module, tabl
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		userID, action, module, table, recordID, oldJSON, newJSON, ip, ts, prev, "")
 	if err != nil {
+		// Hablador a propósito (auditoría en vivo 2026-11-23): el Error 1406
+		// de las huellas h2 superaba el ancho viejo y la versión muda de esta
+		// línea borraba el registro sin dejar rastro. Un fallo de auditoría
+		// se ve o no existe.
+		log.Printf("auditoría: no se pudo insertar el registro %s/%s: %v", module, action, err)
 		return
 	}
 	id, _ := res.LastInsertId()
