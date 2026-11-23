@@ -241,11 +241,16 @@ func applyMigrations(db *sql.DB, migs []migFile, verbose bool) (filesApplied, fi
 // que decide si los demás archivos se ejecutan: si viviera en esa carpeta,
 // aplicarla dependería de haber decidido si aplicarla.
 func ensureMigrationLedger(db *sql.DB) error {
+	// Tipos portables a PROPÓSITO (hallazgo del puente MCP, 2026-11-23): esta
+	// función se llamaba también sobre bases MySQL, donde «checksum TEXT con
+	// DEFAULT» es ilegal (Error 1101: BLOB/TEXT no llevan default) y el
+	// ledger entero no nacía. VARCHAR/CHAR con longitud valen en los dos
+	// motores y describen lo mismo: huellas de 64 hex y marcas de tiempo.
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
-		filename   TEXT NOT NULL PRIMARY KEY,
-		checksum   TEXT NOT NULL DEFAULT '',
+		filename   VARCHAR(191) NOT NULL PRIMARY KEY,
+		checksum   CHAR(64) NOT NULL DEFAULT '',
 		statements INTEGER NOT NULL DEFAULT 0,
-		applied_at TEXT NOT NULL DEFAULT ''
+		applied_at VARCHAR(32) NOT NULL DEFAULT ''
 	)`)
 	return err
 }

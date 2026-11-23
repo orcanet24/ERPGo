@@ -162,6 +162,10 @@ var masterOnlyRoutes = map[string]bool{
 var publicRoutes = []string{
 	"/login", "/api/login", "/api/pos/", "/__addon", "/webhooks/",
 	"/health", "/setup/company", "/static/", "/uploads", "/favicon",
+	// El transporte MCP autentica SU Propio bearer (token-hash en la base de
+	// control) antes de tocar cualquier método: es público de transporte,
+	// jamás de contenido.
+	"/mcp",
 }
 
 // esRutaPublica dice si el path cae bajo alguna entrada de publicRoutes.

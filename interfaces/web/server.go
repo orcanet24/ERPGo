@@ -530,6 +530,9 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	registerAITaskRoutes(s)
 	registerAIReportRoutes(s)
 	registerAIDepartmentRoutes(s)
+	// El puente MCP (M-1): transporte JSON-RPC para IAs externas sobre el
+	// catálogo gobernado de herramientas + gestión de tokens por agente.
+	s.registerMCPRoutes()
 	// (F11) ya no se publica la global agentDB: los helpers reciben la base
 	// por parámetro/sesión, y la carrera entre workers de empresas distintas
 	// desapareció con la variable.

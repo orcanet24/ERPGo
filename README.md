@@ -85,6 +85,34 @@ defecto y queda listo para vender.
 
 ---
 
+## IA externa (MCP)
+
+ERPGo expone sus herramientas de IA por el protocolo estándar **MCP**
+(JSON-RPC 2.0 sobre HTTP en `POST /mcp`), para que un Claude Desktop, un
+agente propio o cualquier cliente MCP trabaje con el ERP como una usuaria
+más — consultando, informando y, si se le autoriza, operando:
+
+1. Crea el agente en **IA → Agentes** (rol, departamento y tope de filas
+   como siempre) y genera su token con `POST /ai/agents/mcp/token`
+   `{agent_id, name}` —la pantalla con botones está pendiente; los
+   endpoints ya exigen permiso del módulo IA y audían—. El valor en claro
+   se muestra UNA vez; el server guarda solo su SHA-256.
+2. Pega el snippet que devuelve el ERP en la configuración del cliente:
+   `{"type":"streamable_http","url":"http://<erp>/mcp","headers":
+   {"Authorization":"Bearer <token>"}}`.
+3. Listo: `tools/list` anunciará SOLO lo que ese agente puede usar (el
+   catálogo y el guardián comparten un único predicado; las herramientas
+   críticas quedan en propuesta hasta que un humano las aprueba en la
+   pantalla de corridas).
+
+El token no abre una puerta nueva: es la identidad del agente que elige la
+interfaz, con sus mismos permisos de rol, su departamento y su límite de
+filas. Todo `tools/call` queda en la cadena de auditoría (`mcp_call`).
+Sin token o con token revocado: 401. Los tokens se revocan en cualquier
+momento desde la misma pantalla (o `POST /ai/agents/mcp/revoke`).
+
+---
+
 ## Requisitos
 
 - Windows 10/11 (64 bits)

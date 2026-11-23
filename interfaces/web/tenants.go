@@ -544,6 +544,28 @@ var controlSchema = []string{
 	// El barrido del runner es SIEMPRE por status + proximo: sin índice sería
 	// un escaneo completo por tick en instalaciones con historia larga.
 	`CREATE INDEX idx_addon_hooks_pend ON addon_hook_out (status, proximo)`,
+	// MCP (el cierre del claim, M-1 de la auditoría 2026-11-22): los tokens
+	// con los que una IA EXTERNA (Claude Desktop, un agente propio) llama a
+	// las herramientas del ERP. Viven en la base de CONTROL porque la
+	// primera pregunta que responde un token es «¿en qué empresa me mete?»,
+	// y esa pregunta se contesta antes de tocar ninguna base de empresa —
+	// el mismo argumento que puso web_sessions aquí. Se guarda SOLO el
+	// sha256 del token: la tabla volcada no autoriza nada. El token apunta
+	// a un AGENTE (ai_agent de la empresa), así que heredó sin trabajo
+	// nuevo todo el candado: Nivel 1 (guardián), Nivel 2 (permiso del rol),
+	// scope departamental del SQL y aprobación previa de las críticas.
+	`CREATE TABLE IF NOT EXISTS mcp_tokens (
+		id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+		company_code VARCHAR(64) NOT NULL,
+		agent_id INTEGER NOT NULL DEFAULT 0,
+		name VARCHAR(191) NOT NULL DEFAULT '',
+		token_hash VARCHAR(64) NOT NULL,
+		created_at VARCHAR(32) NOT NULL DEFAULT '',
+		last_used_at VARCHAR(32) NOT NULL DEFAULT '',
+		revoked INTEGER NOT NULL DEFAULT 0
+	)`,
+	`CREATE UNIQUE INDEX idx_mcp_token_hash ON mcp_tokens (token_hash)`,
+	`CREATE INDEX idx_mcp_token_agent ON mcp_tokens (company_code, agent_id)`,
 }
 
 // ---------- Aprovisionamiento ----------
