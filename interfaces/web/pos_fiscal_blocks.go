@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -15,12 +17,29 @@ import (
 // ---------------------------------------------------------------------------
 // Cada caja recibe bloques exclusivos de números fiscales del servidor.
 // Esto evita duplicados cuando múltiples cajas operan offline simultáneamente.
+//
+// F-3 (auditoría 2026-11-22): la reserva y el consumo vivían sin transacción
+// —dos cajas que pedían bloque a la vez leían el mismo contador y recibían el
+// MISMO rango; un consumo concurrente repetía número; y si el UPDATE de
+// sincronización fallaba después de insertar el bloque, el rango quedaba
+// activo mientras el contador seguía abajo (reutilización de controles
+// fiscales: el peor de los fallos SENIAT)—. Ahora cada operación es UNA
+// transacción sobre el contador (UPDATE-primero, igual que nextFiscalDoc)
+// bajo un mutex de proceso, y el consumo es IDEMPOTENTE por venta: el mismo
+// sale_local_id devuelve el mismo número en vez de quemar otro.
 
 const (
 	defaultBlockSize   = 100
 	maxBlocksize       = 1000
 	blockReserveExpiry = 24 * time.Hour
 )
+
+// fiscalBloquesMu serializa reserva y consumo dentro del proceso. El
+// ERPGo es un solo proceso por servidor (decisión del producto), así que el
+// mutex cierra la ventana entre leer el contador y escribir el bloque, que
+// ni el aislamiento de la transacción cierra en todos los motores. La fila
+// del contador da la protección extra para cualquier despliegue multi-proceso.
+var fiscalBloquesMu sync.Mutex
 
 // ReserveBlockRequest es la petición de reserva de un bloque fiscal.
 type ReserveBlockRequest struct {
@@ -92,9 +111,24 @@ func (s *Server) reserveFiscalBlockHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Verificar si la caja ya tiene un bloque activo
+	// El mutex ordena las reservas del proceso; el UPDATE-primero sobre la
+	// fila del contador es la protección real contra DOS CAJAS a la vez
+	// (y contra cualquier segundo proceso que algún día exista).
+	fiscalBloquesMu.Lock()
+	defer fiscalBloquesMu.Unlock()
+
+	tx, err := abrirTxReal(db)
+	if err != nil {
+		writeJSON(w, ReserveBlockResponse{Success: false, Message: fmt.Sprintf("abrir transacción: %v", err)})
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Verificar si la caja ya tiene un bloque activo —DENTRO de la tx:
+	// comprobar fuera y decidir dentro era la ventana que permitía a dos
+	// reservas hermanas de la misma caja quedarse cada una con su rango.
 	var existingBlockID, existingUsed, existingStart, existingEnd int64
-	err = db.QueryRow(
+	err = tx.QueryRow(
 		`SELECT id, used_count, block_start, block_end FROM pos_fiscal_blocks
 		 WHERE terminal_id = ? AND series = ? AND status = 'active'
 		 AND (expires_at IS NULL OR expires_at > NOW())
@@ -115,31 +149,60 @@ func (s *Server) reserveFiscalBlockHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Reservar nuevo bloque: encontrar el último número usado en la serie
-	var lastFiscalNum int64
-	err = db.QueryRow(
-		`SELECT COALESCE(MAX(fiscal_number), 0) FROM pos_fiscal_block_usage WHERE series = ?`,
-		req.Series,
-	).Scan(&lastFiscalNum)
-	if err != nil {
-		lastFiscalNum = 0
+	// Consumir blockSize del contador de la serie con UPDATE-primero
+	// (mecanismo probado de nextFiscalDoc): el bloqueo exclusivo de la fila
+	// dura hasta el commit, así que dos reservas simultáneas se ordenan en
+	// vez de leer el mismo suelo.
+	if _, err := tx.Exec(`UPDATE fiscal_series SET control_next = control_next + ? WHERE code = ?`,
+		int64(blockSize), req.Series); err != nil {
+		writeJSON(w, ReserveBlockResponse{Success: false, Message: fmt.Sprintf("contador de serie: %v", err)})
+		return
+	}
+	var nuevo int64
+	if err := tx.QueryRow(`SELECT control_next FROM fiscal_series WHERE code = ?`, req.Series).Scan(&nuevo); err != nil {
+		// La serie no existe todavía: se crea con el mismo primitivo que usa
+		// la numeración central y se reintenta UNA vez (si siguiera sin
+		// fila, es un fallo de base que el operador debe ver, no un rango
+		// inventado).
+		if e := s.ensureFiscalSeries(tx, req.Series); e != nil {
+			writeJSON(w, ReserveBlockResponse{Success: false, Message: fmt.Sprintf("crear serie %s: %v", req.Series, e)})
+			return
+		}
+		if _, err := tx.Exec(`UPDATE fiscal_series SET control_next = control_next + ? WHERE code = ?`,
+			int64(blockSize), req.Series); err != nil {
+			writeJSON(w, ReserveBlockResponse{Success: false, Message: fmt.Sprintf("contador de serie: %v", err)})
+			return
+		}
+		if err := tx.QueryRow(`SELECT control_next FROM fiscal_series WHERE code = ?`, req.Series).Scan(&nuevo); err != nil {
+			writeJSON(w, ReserveBlockResponse{Success: false, Message: fmt.Sprintf("leyendo serie tras crearla: %v", err)})
+			return
+		}
+	}
+	blockEnd := nuevo - 1
+	blockStart := blockEnd - int64(blockSize) + 1
+
+	// Piso de honestidad: ningún número del bloque puede estar por debajo de
+	// un número YA usado (bases antiguas donde el contador quedó rezagado).
+	// Si el rango calculado chocara, se desplaza y se refija el contador —
+	// dentro de la misma tx y bajo el mismo bloqueo de fila.
+	var maxUso int64
+	_ = tx.QueryRow(`SELECT COALESCE(MAX(fiscal_number), 0) FROM pos_fiscal_block_usage WHERE series = ?`,
+		req.Series).Scan(&maxUso)
+	if maxUso >= blockStart {
+		blockStart = maxUso + 1
+		blockEnd = blockStart + int64(blockSize) - 1
+		if _, err := tx.Exec(`UPDATE fiscal_series SET control_next = ? WHERE code = ?`,
+			blockEnd+1, req.Series); err != nil {
+			writeJSON(w, ReserveBlockResponse{Success: false, Message: fmt.Sprintf("refijar contador tras el piso: %v", err)})
+			return
+		}
 	}
 
-	// También revisar la serie fiscal central
-	var centralNext int64
-	err = db.QueryRow(
-		`SELECT COALESCE(control_next, 1) FROM fiscal_series WHERE code = ?`,
-		req.Series,
-	).Scan(&centralNext)
-	if err == nil && centralNext > lastFiscalNum+1 {
-		lastFiscalNum = centralNext - 1
-	}
-
-	blockStart := lastFiscalNum + 1
-	blockEnd := blockStart + int64(blockSize) - 1
-
-	// Insertar el bloque
-	result, err := db.Exec(
+	// Insertar el bloque — en la MISMA transacción que el contador: si el
+	// INSERT fallara, el rango consumido se devuelve con el rollback y no
+	// queda hueco ni solape (antes quedaba el bloque activo con el
+	// contador abajo: la receta del control duplicado).
+	result, err := tx.Exec(
 		`INSERT INTO pos_fiscal_blocks 
 		 (terminal_id, branch_id, series, block_start, block_end, block_size, reserved_at, expires_at) 
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -153,14 +216,8 @@ func (s *Server) reserveFiscalBlockHandler(w http.ResponseWriter, r *http.Reques
 
 	blockID, _ := result.LastInsertId()
 
-	// Sincronizar la serie fiscal central para que no se solapen futuros bloques.
-	// Si falla, el bloque reservado se solaparía con futuros → error fiscal (SENIAT).
-	if _, err := db.Exec(
-		`UPDATE fiscal_series SET control_next = ? WHERE code = ? AND control_next <= ?`,
-		blockEnd+1, req.Series, blockEnd+1,
-	); err != nil {
-		log.Printf("fiscal: no se pudo sincronizar el contador de la serie %s tras reservar bloque %d: %v", req.Series, blockID, err)
-		writeJSON(w, ReserveBlockResponse{Success: false, Message: fmt.Sprintf("fiscal sync: %v", err)})
+	if err := tx.Commit(); err != nil {
+		writeJSON(w, ReserveBlockResponse{Success: false, Message: fmt.Sprintf("confirmando reserva: %v", err)})
 		return
 	}
 
@@ -172,6 +229,18 @@ func (s *Server) reserveFiscalBlockHandler(w http.ResponseWriter, r *http.Reques
 		BlockEnd:   blockEnd,
 		UsedCount:  0,
 	})
+}
+
+// controlNoDesde lee el prefijo de control de la serie FACT (dentro de la tx
+// que numera) y forma el número de control canónico del número dado.
+func controlNoDesde(tx *sql.Tx, numero int64) string {
+	controlPrefix := "00"
+	var ctrlPrefix sql.NullString
+	_ = tx.QueryRow(`SELECT control_prefix FROM fiscal_series WHERE code = 'FACT'`).Scan(&ctrlPrefix)
+	if ctrlPrefix.Valid && strings.TrimSpace(ctrlPrefix.String) != "" {
+		controlPrefix = strings.TrimSpace(ctrlPrefix.String)
+	}
+	return fmt.Sprintf("%s-%08d", controlPrefix, numero)
 }
 
 // consumeFiscalNumberHandler consume un número fiscal del bloque de la caja.
@@ -198,15 +267,61 @@ func (s *Server) consumeFiscalNumberHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Buscar el bloque activo de la caja
+	fiscalBloquesMu.Lock()
+	defer fiscalBloquesMu.Unlock()
+
+	tx, err := abrirTxReal(db)
+	if err != nil {
+		writeJSON(w, ConsumeFiscalNumberResponse{Success: false, Message: fmt.Sprintf("abrir transacción: %v", err)})
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// IDEMPOTENCIA POR VENTA (F-3, auditoría): el mismo (terminal,
+	// sale_local_id) devuelve el número YA consumido en vez de quemar otro.
+	// El terminal reintenta porque perdió la respuesta, no porque quiera dos
+	// tickets; sin esta rama cada reintento desplazaba last_used y dejaba
+	// números fantasma en el rango.
+	if req.SaleLocalID != 0 {
+		var ya int64
+		if err := tx.QueryRow(`SELECT fiscal_number FROM pos_fiscal_block_usage
+			WHERE terminal_id = ? AND sale_local_id = ? ORDER BY id DESC LIMIT 1`,
+			req.TerminalID, req.SaleLocalID).Scan(&ya); err == nil && ya > 0 {
+			var bloqueYa int64
+			_ = tx.QueryRow(`SELECT block_id FROM pos_fiscal_block_usage
+				WHERE terminal_id = ? AND sale_local_id = ? ORDER BY id DESC LIMIT 1`,
+				req.TerminalID, req.SaleLocalID).Scan(&bloqueYa)
+			writeJSON(w, ConsumeFiscalNumberResponse{
+				Success:      true,
+				Message:      "already consumed",
+				FiscalNumber: ya,
+				ControlNo:    controlNoDesde(tx, ya),
+				BlockID:      bloqueYa,
+			})
+			return
+		}
+	}
+
+	// Buscar el bloque activo de la caja —dentro de la tx y, si el terminal
+	// trajo block_id, exactamente ese bloque: consumir "el último activo"
+	// cuando la caja pidió uno específico era otra forma de repartir el mismo
+	// número entre dos ventas.
 	var blockID, blockStart, blockEnd, lastUsed int64
-	err = db.QueryRow(
-		`SELECT id, block_start, block_end, last_used FROM pos_fiscal_blocks 
-		 WHERE terminal_id = ? AND status = 'active' 
-		 AND (expires_at IS NULL OR expires_at > NOW())
-		 ORDER BY id DESC LIMIT 1`,
-		req.TerminalID,
-	).Scan(&blockID, &blockStart, &blockEnd, &lastUsed)
+	if req.BlockID > 0 {
+		err = tx.QueryRow(
+			`SELECT id, block_start, block_end, last_used FROM pos_fiscal_blocks 
+			 WHERE id = ? AND terminal_id = ? AND status = 'active'`,
+			req.BlockID, req.TerminalID,
+		).Scan(&blockID, &blockStart, &blockEnd, &lastUsed)
+	} else {
+		err = tx.QueryRow(
+			`SELECT id, block_start, block_end, last_used FROM pos_fiscal_blocks 
+			 WHERE terminal_id = ? AND status = 'active' 
+			 AND (expires_at IS NULL OR expires_at > NOW())
+			 ORDER BY id DESC LIMIT 1`,
+			req.TerminalID,
+		).Scan(&blockID, &blockStart, &blockEnd, &lastUsed)
+	}
 
 	if err != nil {
 		writeJSON(w, ConsumeFiscalNumberResponse{Success: false, Message: "no active block for terminal"})
@@ -219,11 +334,16 @@ func (s *Server) consumeFiscalNumberHandler(w http.ResponseWriter, r *http.Reque
 		nextNum = blockStart
 	}
 	if nextNum > blockEnd {
-		// Marcar bloque como agotado. Si falla, el bloque sigue "activo" y los
-		// números se reutilizan → error fiscal (SENIAT).
-		if _, err := db.Exec(`UPDATE pos_fiscal_blocks SET status = 'exhausted' WHERE id = ?`, blockID); err != nil {
+		// Marcar bloque como agotado DENTRO de la tx: si el UPDATE fallara,
+		// el rollback deja el bloque activo… y el error se reporta; nunca
+		// queda "activo" con el contador arriba a ciegas.
+		if _, err := tx.Exec(`UPDATE pos_fiscal_blocks SET status = 'exhausted' WHERE id = ?`, blockID); err != nil {
 			log.Printf("fiscal: no se pudo marcar el bloque %d como agotado: %v", blockID, err)
 			writeJSON(w, ConsumeFiscalNumberResponse{Success: false, Message: fmt.Sprintf("fiscal close: %v", err)})
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			writeJSON(w, ConsumeFiscalNumberResponse{Success: false, Message: fmt.Sprintf("confirmando agotamiento: %v", err)})
 			return
 		}
 		writeJSON(w, ConsumeFiscalNumberResponse{Success: false, Message: "block exhausted, request new block"})
@@ -231,29 +351,38 @@ func (s *Server) consumeFiscalNumberHandler(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Registrar el uso del número
-	controlPrefix := "00"
-	var ctrlPrefix sql.NullString
-	_ = db.QueryRow(`SELECT control_prefix FROM fiscal_series WHERE code = 'FACT'`).Scan(&ctrlPrefix)
-	if ctrlPrefix.Valid && ctrlPrefix.String != "" {
-		controlPrefix = ctrlPrefix.String
-	}
-	controlNo := fmt.Sprintf("%s-%08d", controlPrefix, nextNum)
+	controlNo := controlNoDesde(tx, nextNum)
 
-	_, err = db.Exec(
+	if _, err := tx.Exec(
 		`INSERT INTO pos_fiscal_block_usage (block_id, terminal_id, fiscal_number, sale_local_id, used_at) 
 		 VALUES (?, ?, ?, ?, ?)`,
 		blockID, req.TerminalID, nextNum, req.SaleLocalID, time.Now(),
-	)
-	if err != nil {
+	); err != nil {
 		writeJSON(w, ConsumeFiscalNumberResponse{Success: false, Message: fmt.Sprintf("recording usage: %v", err)})
 		return
 	}
 
-	// Actualizar el contador del bloque
-	_, _ = db.Exec(
-		`UPDATE pos_fiscal_blocks SET used_count = used_count + 1, last_used = ? WHERE id = ?`,
-		nextNum, blockID,
+	// Avanzar el contador del bloque CON la condición de que siga donde lo
+	// leímos (last_used = valor viejo). Filas tocadas != 1 significa que
+	// alguien se cruzó: se deshace TODO y el terminal reintenta —prefiero
+	// un reintento honesto a dos ventas con el mismo número fiscal—.
+	res, err := tx.Exec(
+		`UPDATE pos_fiscal_blocks SET used_count = used_count + 1, last_used = ? WHERE id = ? AND last_used = ?`,
+		nextNum, blockID, lastUsed,
 	)
+	if err != nil {
+		writeJSON(w, ConsumeFiscalNumberResponse{Success: false, Message: fmt.Sprintf("actualizando bloque: %v", err)})
+		return
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		writeJSON(w, ConsumeFiscalNumberResponse{Success: false, Message: "el bloque cambió durante el consumo; reintente"})
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		writeJSON(w, ConsumeFiscalNumberResponse{Success: false, Message: fmt.Sprintf("confirmando consumo: %v", err)})
+		return
+	}
 
 	writeJSON(w, ConsumeFiscalNumberResponse{
 		Success:      true,

@@ -43,11 +43,13 @@ func (s *Server) registrarVentaTerminal(db *sql.DB, req *pos.SyncSaleRequest) (*
 
 	// REFERENCIA DE CONTINGENCIA: la caja sin imprenta entregó un ticket con
 	// numeración propia; el documento ERP es de contingencia (Providencia
-	// SNAT/2024/000102 art. 16/30) y guarda esa referencia. El NÚMERO de
-	// factura, en cambio, es del correlativo CENTRAL: se consume en esta
-	// transacción con bloqueo (nextFiscalDoc), que es la única forma de que
-	// dos cajas y el panel no pisen el mismo número (F-3).
-	controlNo, offlineNo := pos.ContingenciaRef(req.TerminalID, req.FiscalNumber, req.SaleLocalID)
+	// SNAT/2024/000102 art. 16/30). Dos columnas conviven con papeles
+	// distintos y ambos honestos: control_no guarda el NÚMERO DE CONTROL
+	// FISCAL que vio el cliente (el del bloque impreso, o el central si no
+	// lo había), y offline_invoice_no guarda el correlativo local del papel
+	// (abajo, offlineNo). Mezclarlos fue la raíz de que «el ticket dice una
+	// cosa y el ERP otra» (F-3).
+	_, offlineNo := pos.ContingenciaRef(req.TerminalID, req.FiscalNumber, req.SaleLocalID)
 
 	tx, err := abrirTxReal(db)
 	if err != nil {
@@ -100,11 +102,27 @@ func (s *Server) registrarVentaTerminal(db *sql.DB, req *pos.SyncSaleRequest) (*
 	if err != nil {
 		return nil, fmt.Errorf("no se pudo reservar el número de factura: %w", err)
 	}
-	doc, err := s.nextFiscalDoc(tx, "FACT")
-	if err != nil {
-		return nil, fmt.Errorf("número de control fiscal: %w", err)
-	}
 	invoiceNo := numero
+
+	// CONTROL FISCAL: dos orígenes legítimos y registrar SIEMPRE el que vio
+	// el cliente (F-3, auditoría):
+	//   - venta offline con ticket: el número de control que la caja imprimió
+	//     de su bloque. El ERP lo registra TAL CUAL (prefijo de serie + 8
+	//     dígitos) y NO consume la serie central: consumir otro control
+	//     además era dejar un hueco en la serie y un libro que no coincide
+	//     con el papel del cliente.
+	//   - sin control impreso (sincronización antigua o panel): se consume
+	//     la serie FACT central, con bloqueo de fila, igual que invoiceSave.
+	controlNo := ""
+	if impreso := digitosDeNumero(req.FiscalNumber); impreso > 0 {
+		controlNo = controlNoDesde(tx, impreso)
+	} else {
+		doc, err := s.nextFiscalDoc(tx, "FACT")
+		if err != nil {
+			return nil, fmt.Errorf("número de control fiscal: %w", err)
+		}
+		controlNo = doc.ControlNo
+	}
 
 	// 4. Moneda, tasa e IGTF: los manda el terminal; se adoptan con sentido
 	// común (tasa <=0 → 1 con fuente marcada; moneda vacía → VES). Guardar
@@ -321,7 +339,7 @@ func (s *Server) registrarVentaTerminal(db *sql.DB, req *pos.SyncSaleRequest) (*
 	}
 
 	// 11. Cerrar el reclamo de idempotencia con la factura ya puesta.
-	if err := confirmarVentaTerminal(tx, req, invoiceNo, controlNo, doc.ControlNo); err != nil {
+	if err := confirmarVentaTerminal(tx, req, invoiceNo, controlNo, controlNo); err != nil {
 		return nil, err
 	}
 
@@ -333,7 +351,7 @@ func (s *Server) registrarVentaTerminal(db *sql.DB, req *pos.SyncSaleRequest) (*
 		Success:      true,
 		RemoteID:     strconv.FormatInt(invoiceNo, 10),
 		Status:       "synced",
-		FiscalNumber: doc.ControlNo,
+		FiscalNumber: controlNo,
 		Advertencias: avisos,
 	}, nil
 }
@@ -377,6 +395,17 @@ func reclamarVentaTerminal(tx *sql.Tx, req *pos.SyncSaleRequest) (resultadoRecla
 		if err := tx.QueryRow(`SELECT invoice_id FROM invoice WHERE control_no = ? AND series = 'CONT' LIMIT 1`,
 			controlNo).Scan(&existing); err == nil && existing > 0 {
 			return existing, true
+		}
+		// Segunda llave legacy: el terminal pudo imprimir ya un control de
+		// bloque (las filas nuevas se guardan CON ese control en control_no,
+		// no con la referencia CONT-). Sin esta comprobación, una caja de
+		// firmware viejo sin sale_local_id duplicaría la venta tras el
+		// cambio de semántica (F-3).
+		if impreso := digitosDeNumero(req.FiscalNumber); impreso > 0 {
+			if err := tx.QueryRow(`SELECT invoice_id FROM invoice WHERE control_no = ? LIMIT 1`,
+				controlNoDesde(tx, impreso)).Scan(&existing); err == nil && existing > 0 {
+				return existing, true
+			}
 		}
 		return 0, false
 	}

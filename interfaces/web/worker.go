@@ -87,11 +87,12 @@ func (s *Server) runQueuedAITask(ctx context.Context, t queue.Task) error {
 		return fmt.Errorf("no se pudo abrir la base de %s: %w", tenant, err)
 	}
 
-	// Los helpers de agente usan la conexión global agentDB; se apunta a la
-	// base de la tarea y se restaura al terminar.
-	prev := agentDB
-	agentDB = db
-	defer func() { agentDB = prev }()
+	// F11 (auditoría 2026-11-22): la conexión de la empresa NO se publica en
+	// una global del paquete. La versión anterior apuntaba `agentDB` a la
+	// base de la tarea y la restauraba al terminar; con dos workers y dos
+	// empresas, la lectura del presupuesto de uno podía caer en la base del
+	// otro (ventana real, acotada solo por buena suerte). Ahora la conexión
+	// viaja por parámetro, como viaja la empresa.
 
 	// La tarea viene de la cola, no de una petición: la empresa la trae el
 	// contexto de la tarea. Se construye la sesión mínima que necesitan los
@@ -103,7 +104,7 @@ func (s *Server) runQueuedAITask(ctx context.Context, t queue.Task) error {
 		return fmt.Errorf("tarea %d no encontrada en la empresa %s", p.TaskID, tenant)
 	}
 
-	ctx = queue.WithRowBudget(ctx, aiAgentRowBudget(p.AgentID))
+	ctx = queue.WithRowBudget(ctx, aiAgentRowBudget(db, p.AgentID))
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -123,9 +124,14 @@ func (s *Server) runQueuedAITask(ctx context.Context, t queue.Task) error {
 // aiAgentRowBudget devuelve el presupuesto de filas del agente, acotado a un
 // rango seguro. El tope superior es deliberado: un agente con max_rows
 // configurado a 100.000 traería la tabla entera a memoria.
-func aiAgentRowBudget(agentID int64) int {
+//
+// Recibe la base por parámetro (F11): la global agentDB se eliminó cuando el
+// último lector dejó de depender de ella.
+func aiAgentRowBudget(db *sql.DB, agentID int64) int {
 	var maxRows sql.NullInt64
-	_ = agentDB.QueryRow(`SELECT max_rows FROM ai_agent WHERE id = ?`, agentID).Scan(&maxRows)
+	if db != nil {
+		_ = db.QueryRow(`SELECT max_rows FROM ai_agent WHERE id = ?`, agentID).Scan(&maxRows)
+	}
 	budget := 500
 	if maxRows.Valid && maxRows.Int64 > 0 {
 		budget = int(maxRows.Int64)
@@ -227,4 +233,3 @@ func (s *Server) enqueueDueAITasksOf(tenant string, db *sql.DB, nowT time.Time) 
 		}
 	}
 }
-

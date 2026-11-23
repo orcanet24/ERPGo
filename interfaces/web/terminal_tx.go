@@ -136,6 +136,28 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
+// digitosDeNumero extrae el valor numérico de un número de control impreso
+// por el terminal ("00-00001234", "1234", "FACT-00000012" → 1234). Cero
+// significa "no trajo control utilizable", y el llamador decide (serie
+// central). No se inventan dígitos: si el string no es un número razonable,
+// devuelve 0.
+func digitosDeNumero(s string) int64 {
+	var dig strings.Builder
+	for _, r := range strings.TrimSpace(s) {
+		if r >= '0' && r <= '9' {
+			dig.WriteRune(r)
+		}
+	}
+	if dig.Len() == 0 || dig.Len() > 12 {
+		return 0
+	}
+	n, err := strconv.ParseInt(dig.String(), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
 // esMetodoDivisa dice si un método de pago del terminal es de DIVISA o
 // equivalente (zelle, paypal, cripto…): sobre esos recae el IGTF y con esos
 // la tasa BCV importa. Es la misma lista que usa el panel; si el terminal

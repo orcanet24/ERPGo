@@ -266,10 +266,20 @@ func (s *Server) RunReportDefinition(r *http.Request, def *ReportDefinition, val
 		sqlText = replaceParam(sqlText, name, lit)
 	}
 
-	clean, err := aiValidateSQLSelect(sqlText, def.EffectiveMaxRows())
+	// Frontera ÚNICA (S-4, auditoría 2026-11-22; pendiente cerrado por el
+	// integrador tras el cierre del subsistema IA): el motor clásico y el
+	// camino de informes de IA ejecutan el mismo SQL contra la misma
+	// conexión, así que la comprobación no puede ser distinta según quién
+	// la llamó. Antes este punto solo exigía SELECT (verbos): un informe
+	// clásico autorizable leía user_login, ai_providers o audit_log tan
+	// fácil como el agujero que se cerró en el otro camino. El alcance es
+	// el del EJECUTOR (master/admin = IT, paridad con la interfaz); la
+	// lista negra de identidad/auditoría/series es dura para todos.
+	sqlSeguro, err := validarSQLInformes(sqlText, s.aiDeptDelEjecutor(s.sessionFromRequest(r)), def.EffectiveMaxRows())
 	if err != nil {
 		return nil, err
 	}
+	clean := sqlSeguro
 
 	rows, err := s.dbFor(r).Query(clean)
 	if err != nil {
@@ -324,13 +334,14 @@ func (s *Server) RunReportDefinition(r *http.Request, def *ReportDefinition, val
 			if i < len(keys) && keys[i] != "" && keys[i] != claves[i] {
 				sums[keys[i]] += *f
 			}
-		}}
+		}
+	}
 
 	// Existencia de cada nombre en el resultado: keys (aliases del SELECT) y
 	// claves declaradas. Mismo tratamiento por causa que en		// executeReportDefinition (ai_reports.go): resultado vacío ⇒ total 0 sin
-		// aviso; columna existente sin valores numéricos ⇒ aviso honesto; key
-		// ajena al resultado ⇒ aviso de desajuste. El aviso antiguo decía "no
-		// aparece" para todas y mentía en las dos primeras.
+	// aviso; columna existente sin valores numéricos ⇒ aviso honesto; key
+	// ajena al resultado ⇒ aviso de desajuste. El aviso antiguo decía "no
+	// aparece" para todas y mentía en las dos primeras.
 	enResultado := map[string]bool{}
 	for _, k := range claves {
 		if k != "" {

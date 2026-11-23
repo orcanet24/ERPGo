@@ -530,7 +530,9 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	registerAITaskRoutes(s)
 	registerAIReportRoutes(s)
 	registerAIDepartmentRoutes(s)
-	agentDB = db
+	// (F11) ya no se publica la global agentDB: los helpers reciben la base
+	// por parámetro/sesión, y la carrera entre workers de empresas distintas
+	// desapareció con la variable.
 	s.aiTaskRunner()
 	// FISCAL Venezuela: notas de crédito + notas de débito + ajustes fiscales
 	s.registerCreditNoteRoutes()

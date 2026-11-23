@@ -177,21 +177,6 @@ func (s *Server) aiAgentUsername(sess *SessionData, agent aiAgent) string {
 	return "agente." + agent.Name
 }
 
-// agentDB es la conexión global que usaban los helpers de agente.
-//
-// OBSOLETA (F11): el subsistema de informes/auditoría ya no la lee —
-// aiAgentUsername resuelve la base por sesión—. Se conserva porque worker.go sigue
-// asignándola alrededor de cada corrida (`prev := agentDB; agentDB = db`) y
-// `aiAgentRowBudget` la consulta, y esos archivos NO están en el conjunto que este
-// cierre puede tocar: están en vuelo con el integrador.
-//
-// Lo que queda documentado para quien termine la migración: pasar la base por el
-// contexto de la tarea de la cola (queue ya lleva TenantFromContext) o, si se
-// quiere el mismo efecto sin tocar firmantes, inyectar el *sql.DB en el runner y
-// quitar la variable. La ventana de carrera descrita en aiAgentUsername sigue
-// existiendo para aiAgentRowBudget hasta entonces.
-var agentDB *sql.DB
-
 // aiAgentCreator marca el creador de plantillas (user:ID | agente:ID).
 func aiAgentCreator(sess *SessionData, agent aiAgent) string {
 	if sess != nil && sess.UserID == agent.UserID {

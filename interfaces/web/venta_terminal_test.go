@@ -10,7 +10,6 @@ import (
 	"database/sql"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -92,7 +91,7 @@ func TestRegistrarVentaTerminalAsientaBalanceaYDescuenta(t *testing.T) {
 	// Cabecera con moneda y serie de contingencia.
 	var (
 		series, moneda, fuente, control string
-		total, tasa                      float64
+		total, tasa                     float64
 	)
 	if err := db.QueryRow(`SELECT series, currency_code, exchange_rate_source, control_no, total_amount, exchange_rate
 		FROM invoice WHERE invoice_id = ?`, invoiceNo).Scan(&series, &moneda, &fuente, &control, &total, &tasa); err != nil {
@@ -216,8 +215,9 @@ func TestRegistrarVentaTerminalIdempotencia(t *testing.T) {
 }
 
 // TestRegistrarVentaTerminalSinClaveDeducePorControl: una cola vieja (o un
-// terminal sin sale_local_id) no duplica por el camino legacy: la referencia
-// CONT-<terminal>-<numero> es la segunda defensa.
+// terminal sin sale_local_id) no duplica por el camino legacy: la deducción
+// busca primero la referencia CONT-<terminal>-<numero> de las filas antiguas
+// y después el CONTROL IMPRESO 00-######## que las filas nuevas guardan.
 func TestRegistrarVentaTerminalSinClaveDeducePorControl(t *testing.T) {
 	s, db := baseTerminalPrueba(t)
 
@@ -229,13 +229,19 @@ func TestRegistrarVentaTerminalSinClaveDeducePorControl(t *testing.T) {
 	if err != nil || primera.Status != "synced" {
 		t.Fatalf("primer registro sin clave: %v %+v", err, primera)
 	}
-	control, _ := pos.ContingenciaRef(req.TerminalID, req.FiscalNumber, "")
 	var got string
-	if err := db.QueryRow(`SELECT control_no FROM invoice WHERE invoice_id = ?`, primera.RemoteID).Scan(&got); err != nil {
+	var offlineNo int64
+	if err := db.QueryRow(`SELECT control_no, offline_invoice_no FROM invoice WHERE invoice_id = ?`, primera.RemoteID).Scan(&got, &offlineNo); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.EqualFold(got, control) {
-		t.Errorf("control %q, se esperaba la referencia %q", got, control)
+	// El control registrado es el QUE VIO EL CLIENTE en el ticket (control
+	// del bloque impreso, prefijo de serie + 8 dígitos), no una referencia
+	// inventada; la referencia del papel queda en offline_invoice_no (F-3).
+	if got != "00-00000007" {
+		t.Errorf("control_no = %q, se quería el control impreso 00-00000007", got)
+	}
+	if offlineNo != 7 {
+		t.Errorf("offline_invoice_no = %d, se quería 7", offlineNo)
 	}
 
 	segunda, err := s.registrarVentaTerminal(db, req)
