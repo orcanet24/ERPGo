@@ -10,10 +10,10 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -113,8 +113,12 @@ func (s *Server) sessionRoleID(sess *SessionData) int64 {
 	if sess == nil {
 		return 0
 	}
-	// 1. BD de empresa activa (si tiene sec_userrole).
-	if db := s.db; db != nil {
+	// 1. BD de la EMPRESA DE LA SESIÓN —no el puntero global s.db—. Leer el rol
+	// desde la empresa activa del proceso (y no desde la empresa de quien pide)
+	// es el residuo multiempresa que la auditoría señala como D-7: el roleid
+	// decide qué informes se ven, así que leerlo de la empresa equivocada reparte
+	// permisos de otra empresa.
+	if db := s.dbForSession(sess); db != nil {
 		var id int64
 		if err := db.QueryRow(`SELECT roleid FROM sec_userrole WHERE user_id = ? LIMIT 1`, sess.UserID).Scan(&id); err == nil && id > 0 {
 			return id
@@ -154,6 +158,15 @@ func (d reportDefShape) ClavesDeclaradas() []string {
 }
 
 // validateReportDefinition aplica el guardián a la definición JSON.
+//
+// LA FRONTERA ES UNA SOLA. Aquí se comprueba la FORMA del JSON (claves, columnas,
+// totales, gráfico) y se pasa el SQL por la frontera única
+// (ai_sql_scope.go:validarSQLInformes) sin departamento: esta función no sabe quién
+// va a ejecutar, así que aplica lo que aplica siempre —lista negra dura, comentarios
+// ejecutables, STRAIGHT_JOIN y el guardián SELECT— y deja el alcance departamental
+// para validarDefinicionInforme, que sí tiene la identidad. Lo importante no es qué
+// capa corre en cada llamador: es que NINGÚN caminoejecute SQL sin pasar por
+// validarSQLInformes. Prohibido el patrón «cada handler recuerda su propio candado».
 func (s *Server) validateReportDefinition(definition string) error {
 	var d reportDefShape
 	if err := json.Unmarshal([]byte(definition), &d); err != nil {
@@ -165,14 +178,12 @@ func (s *Server) validateReportDefinition(definition string) error {
 	if len(d.Columns) == 0 {
 		return fmt.Errorf("definition.columns debe tener al menos una columna")
 	}
-	if _, err := aiValidateSQLSelect(d.SQL, aiHardMaxRows); err != nil {
+	// Frontera sin identidad de ejecutor: DeptIT es el conjunto más amplio de
+	// ALCANCE, así que lo que aquí se rechaza se rechaza para todo el mundo
+	// (lista negra), y lo que se aprueba podrá ser rechazado después por el
+	// departamento de quien lo ejecute.
+	if _, err := validarSQLInformes(d.SQL, DeptIT, aiHardMaxRows); err != nil {
 		return err
-	}
-	// NUEVA CAPA: validar SQL contra reglas fiscales y de tabla permitidas.
-	// Esto es una segunda barrera DESPUÉS del guardián SELECT y ANTES de la ejecución.
-	// Requiere el esquema completo de la BD (proveniente del MCP) para validar.
-	if vErr := s.validateReportSQLwithSchema(d.SQL); vErr != nil {
-		return vErr
 	}
 	// Cada total debe ser una columna declarada. Si no lo es, el motor no
 	// puede calcularlo: lo descarta y el informe sale sin cifras pero con
@@ -216,16 +227,26 @@ func (s *Server) validateReportDefinition(definition string) error {
 	return nil
 }
 
-// validateReportSQLwithSchema es la segunda barrera de seguridad para SQL de reportes.
-// Se ejecuta DESPUÉS de aiValidateSQLSelect (que asegura que es un SELECT limpio)
-// y VALIDA que el SQL no targetee tablas fiscales protegidas usando el esquema completo.
-func (s *Server) validateReportSQLwithSchema(sql string) error {
-	// Obtener el esquema completo desde el MCP (cacheado por huella).
-	// Por ahora, usamos una validación básica con esquema mínimo incrustado.
-	// El esquema completo se pasará cuando esté totalmente integrado.
-	low := strings.ToLower(sql)
-
-	// Tablas fiscales prohibidas (misma lista que en governance)
+// aiTablasFiscalesDeInforme es la lista de tablas fiscales/contables que ningún
+// informe puede leer.
+//
+// POR QUÉ VIVE AQUÍ Y EN NINGÚN OTRO SITIO. Es la misma lista que lee el
+// generador de dataset de fine-tuning (ia_dev/finetune/exportar.go) para no
+// enseñarle al modelo SQL que producción rechazaría, y su prueba
+// (ia_dev/finetune/finetune_test.go) la compara CONTRA ESTE ARCHIVO: si el
+// criterio se moviera a otro fichero, el dataset empezaría a entrenar informes
+// que el ERP no deja ejecutar —que es exactamente el fallo que esa prueba existe
+// para cazar—.
+//
+// SUSTITUYE a `validateReportSQLwithSchema`, que era una segunda opinión
+// heurística en paralelo a la frontera: extraía tablas con el regex
+// `from\s+(\w+)` (solo veía la primera), bloqueaba palabras como «igv» o
+// «impuesto» aunque fueran el nombre legítimo de una columna venezolana, y
+// declaraba `company` como permitida mientras gobernanza la tenía prohibida. Dos
+// criterios distintos sobre el mismo SQL es la definición del agujero. La lista
+// se conserva —es norma de negocio, no capricho— y ahora la consume la frontera
+// única a través de aiTablasProhibidasEnSQL.
+func aiTablasFiscalesDeInforme() []string {
 	tablasProhibidas := []string{
 		"acc_transaction",
 		"acc_vaucher",
@@ -238,73 +259,30 @@ func (s *Server) validateReportSQLwithSchema(sql string) error {
 		"retention",
 		"pos_fiscal_blocks",
 	}
+	return tablasProhibidas
+}
 
-	for _, tabla := range tablasProhibidas {
-		if strings.Contains(low, tabla) {
-			return fmt.Errorf("El reporte IA no puede targetear la tabla fiscal '%s'. Las operaciones fiscales son solo para humanos. Genera un reporte operacional en su lugar.", tabla)
-		}
+// validarDefinicionInforme es validateReportDefinition MÁS el alcance de quien
+// ejecuta. Se usa en cada camino que tiene identidad (guardado manual, guardado
+// por IA, preview de herramienta, guardado de plantilla) para que el criterio de
+// tablas no dependa de «el handler se acordó»: la frontera es una sola.
+//
+// dept vacío significa «resuelve el departamento de la sesión» (aiDeptDelEjecutor):
+// el de QUIEN EJECUTA, nunca el del creador de la plantilla (F4).
+func (s *Server) validarDefinicionInforme(sess *SessionData, definition, dept string) error {
+	if err := s.validateReportDefinition(definition); err != nil {
+		return err
 	}
-
-	// Tablas permitidas para reportes IA (operacionales)
-	columnasPermitidas := map[string]bool{
-		"product":  true,
-		"client":   true,
-		"supplier": true,
-		"sale":     true,
-		"purchase": true,
-		"invoice":  true,
-		"company":  true,
+	var d reportDefShape
+	if err := json.Unmarshal([]byte(definition), &d); err != nil {
+		return fmt.Errorf("definition no es JSON válido: %v", err)
 	}
-
-	// Extraer nombres de tablas del SQL
-	patronesFROM := []string{
-		`from\s+(\w+)`,
-		`join\s+(\w+)`,
+	if dept == "" {
+		dept = s.aiDeptDelEjecutor(sess)
 	}
-
-	for _, patron := range patronesFROM {
-		matches := findSQLMatches(sql, patron)
-		for _, tabla := range matches {
-			if !columnasPermitidas[tabla] {
-				// Verificar si es una tabla fiscal conocida
-				esFiscal := false
-				for _, fTabla := range tablasProhibidas {
-					if strings.EqualFold(tabla, fTabla) {
-						esFiscal = true
-						break
-					}
-				}
-				if esFiscal {
-					return fmt.Errorf("Tabla '%s' es fiscal y está prohibida en reportes IA. Humanos editan en laboratorio.", tabla)
-				}
-				// Tabla no reconocida: advertir pero permitir si parece operación legítima
-				// (en producción real, esto requeriría el esquema completo del MCP)
-			}
-		}
+	if _, err := validarSQLInformes(d.SQL, dept, aiHardMaxRows); err != nil {
+		return err
 	}
-
-	// Verificar palabras clave fiscales sensibles en SELECT
-	palabrasClaveFiscales := []string{
-		"impuesto",
-		"retencion",
-		"igtf",
-		"base_imponible",
-		"igv",
-		"total_fiscal",
-		"subtotal_fiscal",
-	}
-
-	for _, kw := range palabrasClaveFiscales {
-		if strings.Contains(low, kw) {
-			// Permitir si está en contexto de agregación (GROUP BY, SUM, COUNT)
-			if strings.Contains(low, "group by") || strings.Contains(low, "sum(") || strings.Contains(low, "count(") {
-				continue
-			}
-			// Advertir si aparece sola sin contexto de cálculo
-			return fmt.Errorf("Palabra clave fiscal '%s' detectada en SQL de reporte. Verifica que sea parte de cálculo sobre datos, no configuración manual.", kw)
-		}
-	}
-
 	return nil
 }
 
@@ -319,15 +297,51 @@ type reportResult struct {
 	// que el motor tipado). Va aparte de Totals: el gráfico lo alimentan las
 	// filas del propio informe, no un cálculo nuevo.
 	Chart *ReportRunChart `json:"chart,omitempty"`
+
+	// runID es el id de la fila que dejó esta ejecución en report_run. No sale en
+	// el JSON (campo sin exportar) porque es dato de auditoría interna: lo usa la
+	// exportación para sellar exported_at sobre ESTA corrida.
+	runID int64
 }
 
 // executeReportDefinition corre el SQL del informe y estructura el resultado.
-func (s *Server) executeReportDefinition(sess *SessionData, definition, from, to string) (*reportResult, error) {
+//
+// LA FRONTERA ES UNA SOLA Y ESTÁ AQUÍ, en el punto por donde pasa TODA ejecución
+// de plantilla (pantalla Mis informes, run clásico, preview de herramienta, guardado
+// por IA): validar en el save y no validar en el run es lo que dejaba abiertos los
+// informes guardados antes del candado (F2/F4). reportID es opcional porque el
+// preview de una definición todavía sin guardar no tiene id que anotar; cuando se
+// pasa, cada ejecución deja su corrida en report_run (F9).
+func (s *Server) executeReportDefinition(sess *SessionData, definition, from, to string, reportID ...int64) (*reportResult, error) {
+	return s.ejecutarDefinicion(sess, "", definition, from, to, idDeVariadic(reportID))
+}
+
+// idDeVariadic traduce el parámetro opcional de executeReportDefinition.
+func idDeVariadic(ids []int64) int64 {
+	if len(ids) > 0 {
+		return ids[0]
+	}
+	return 0
+}
+
+// ejecutarDefinicion es el núcleo de ejecución de una definición de informe.
+//
+// dept vacío = «resuelve el departamento de la sesión» (aiDeptDelEjecutor). Los
+// caminos que YA saben quién ejecuta —la herramienta de un agente, cuyo alcance
+// viene de ai_agent y no de una tabla de roles— lo pasan explícito, para que el
+// alcance no dependa de que la sesión del runner tenga o no su fila de agente en
+// la base consultada.
+func (s *Server) ejecutarDefinicion(sess *SessionData, dept, definition, from, to string, reportID int64) (*reportResult, error) {
 	var d reportDefShape
 	if err := json.Unmarshal([]byte(definition), &d); err != nil {
 		return nil, fmt.Errorf("definition inválida: %v", err)
 	}
-	sqlText, err := aiValidateSQLSelect(d.SQL, aiHardMaxRows)
+	// Frontera única con el alcance de QUIEN EJECUTA. Devuelve la cadena que se va
+	// a ejecutar: no se valida una y se ejecuta otra.
+	if dept == "" {
+		dept = s.aiDeptDelEjecutor(sess)
+	}
+	sqlText, err := validarSQLInformes(d.SQL, dept, aiHardMaxRows)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +355,16 @@ func (s *Server) executeReportDefinition(sess *SessionData, definition, from, to
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.dbForSession(sess).Query(sqlText)
+	// Se RE-CORRE la frontera sobre el texto final. Cuesta un regex y es lo que
+	// hace cierto el enunciado «se ejecuta exactamente lo que se validó»: si
+	// mañana alguien añade otro marcador sustituible, lo que llega a Query() sigue
+	// habiendo pasado por la lista negra y por el alcance.
+	sqlText, err = validarSQLInformes(sqlText, dept, aiHardMaxRows)
+	if err != nil {
+		return nil, err
+	}
+	db := s.dbForSession(sess)
+	rows, err := db.Query(sqlText)
 	if err != nil {
 		return nil, fmt.Errorf("error de SQL: %v", err)
 	}
@@ -489,7 +512,97 @@ func (s *Server) executeReportDefinition(sess *SessionData, definition, from, to
 			res.Warnings = append(res.Warnings, fmt.Sprintf("no se pudo generar el gráfico: %v", err))
 		}
 	}
+	// Corrida auditable (F9). Se anota DESPUÉS de leer las filas porque lo que se
+	// registra es el hecho: qué SQL corrió, con qué definición, con qué parámetros,
+	// cuántas filas salió y quién lo pidió. El id de la corrida se guarda en el
+	// resultado para que la exportación pueda sellar exported_at sobre ESTA corrida
+	// y no sobre «la última que haya por ahí».
+	res.runID = s.registrarCorridaInforme(db, reportID, definition, sqlText,
+		map[string]string{"desde": from, "hasta": to}, len(res.Rows), sess, false)
 	return res, nil
+}
+
+// registrarCorridaInforme deja la fila en report_run (migración
+// schema_z_ai_report_run.sql) y devuelve su id; 0 si no pudo escribir.
+//
+// POR QUÉ NO BLOQUEA EL INFORME. Un informe que ya está ejecutado y no se puede
+// anotar es un informe correcto con un agujero de auditoría; un informe que no se
+// ejecuta porque falta una migración es una pantalla rota. Se elige lo primero,
+// pero se grita: el log dice exactamente qué falta. Si alguien convierte esto en
+// «silencio», F9 vuelve a abrirse sin que nadie lo note —por eso el mensaje va con
+// el nombre del archivo de migración.
+func (s *Server) registrarCorridaInforme(db *sql.DB, reportID int64, definition, sqlText string,
+	params map[string]string, filas int, sess *SessionData, exportado bool) int64 {
+	if db == nil {
+		return 0
+	}
+	usuario := ""
+	tenant := ""
+	if sess != nil {
+		usuario = sessUserID(sess)
+		tenant = sess.TenantCode
+		if usuario == "" {
+			usuario = sess.Username
+		}
+	}
+	agentID := sql.NullInt64{}
+	if a, ok := s.loadAIAgentByUser(sess, usuario); ok {
+		agentID = sql.NullInt64{Int64: a.ID, Valid: true}
+	}
+	pj, _ := json.Marshal(params)
+	exportadoEn := sql.NullString{}
+	if exportado {
+		exportadoEn = sql.NullString{String: now(), Valid: true}
+	}
+	res, err := db.Exec(`INSERT INTO report_run
+		(report_id, definition_hash, sql, params, rows_count, run_by, agent_id, tenant_code, created_at, exported_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		reportID, aiHashKey(definition), sqlText, string(pj), filas, usuario, agentID, tenant, now(), exportadoEn)
+	if err != nil {
+		// Fallo blando PERO RUIDOSO: un informe ya ejecutado sin anotar es un
+		// agujero de auditoría, y un informe que no se ejecuta porque falta una
+		// migración es una pantalla rota. Se elige anotar-perder-el-rastro y
+		// gritarlo en el log con el nombre del archivo que falta.
+		//
+		// Si la tabla NO EXISTE (instalación a medio migrar, base de prueba), el
+		// aviso se emite UNA vez por proceso: repetirlo en cada run llena el log,
+		// y un log lleno es la forma en que un aviso deja de leerse. Cualquier otro
+		// error (base caída, restricción) sí se repite: es anómalo y hay que verlo.
+		if esTablaAusenteErr(err) {
+			avisoReportRunUnaVez.Do(func() {
+				log.Printf("[AI report] NO AUDITABLE: no existe la tabla report_run; ninguna corrida de informe queda registrada. Aplique la migración schema_z_ai_report_run.sql (este aviso se emite una sola vez)")
+			})
+		} else {
+			log.Printf("[AI report] NO AUDITABLE: no se pudo registrar la corrida de informe (id=%d): %v", reportID, err)
+		}
+		return 0
+	}
+	id, _ := res.LastInsertId()
+	return id
+}
+
+// avisoReportRunUnaVez pone el once del aviso de tabla ausente (ver
+// registrarCorridaInforme).
+var avisoReportRunUnaVez sync.Once
+
+// esTablaAusenteErr reconoce el error de «esa tabla no existe todavía» en los dos
+// motores que corre este proyecto (MySQL en producción, SQLite en pruebas).
+func esTablaAusenteErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := strings.ToLower(err.Error())
+	return strings.Contains(m, "no such table") || strings.Contains(m, "doesn't exist")
+}
+
+// marcarCorridaExportada sella exported_at de una corrida ya registrada.
+func (s *Server) marcarCorridaExportada(db *sql.DB, runID int64) {
+	if db == nil || runID <= 0 {
+		return
+	}
+	if _, err := db.Exec(`UPDATE report_run SET exported_at = ? WHERE id = ?`, now(), runID); err != nil {
+		log.Printf("[AI report] no se pudo sellar exported_at de la corrida %d: %v", runID, err)
+	}
 }
 
 // containsIntKey verifica si key ya está mapeado en m.
@@ -590,7 +703,10 @@ func (s *Server) previewDefinitionFromJSON(sess *SessionData, jsonText string) (
 		err = fmt.Errorf("la definición no es JSON válido: %v", err)
 		return
 	}
-	if vErr := s.validateReportDefinition(jsonText); vErr != nil {
+	// El preview se valida con el alcance del que lo pide: es la misma frontera que
+	// va a correr en el run, así que lo que el usuario ve en pantalla es lo que el
+	// sistema le deja ejecutar (frontera única, no «el save ya lo comprobará»).
+	if vErr := s.validarDefinicionInforme(sess, jsonText, ""); vErr != nil {
 		err = fmt.Errorf("la definición no pasa el guardián: %v", vErr)
 		return
 	}
@@ -1211,7 +1327,7 @@ func (s *Server) reportTemplateAISave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "Nombre y definition son obligatorios", http.StatusBadRequest)
 		return
 	}
-	if err := s.validateReportDefinition(req.Definition); err != nil {
+	if err := s.validarDefinicionInforme(sess, req.Definition, ""); err != nil {
 		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -1499,7 +1615,7 @@ func (s *Server) reportTemplateEngineRun(w http.ResponseWriter, r *http.Request)
 		jsonError(w, "La plantilla no existe", http.StatusNotFound)
 		return
 	}
-	run, err := s.runSavedReportDefinition(r, t.Definition)
+	run, err := s.runSavedReportDefinition(r, t.Definition, id, false)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1520,7 +1636,7 @@ func (s *Server) reportTemplateEngineExport(w http.ResponseWriter, r *http.Reque
 		jsonError(w, "La plantilla no existe", http.StatusNotFound)
 		return
 	}
-	run, err := s.runSavedReportDefinition(r, t.Definition)
+	run, err := s.runSavedReportDefinition(r, t.Definition, id, true)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1544,22 +1660,50 @@ func (s *Server) reportTemplateEngineExport(w http.ResponseWriter, r *http.Reque
 // (p.ej. un bloque chart legacy que no satisface la validación moderna). Esas
 // definiciones se guardan en la misma tabla y tienen que seguir siendo visibles
 // y ejecutables, no desaparecer o terminar en un error de JSON al seleccionarlas.
-func (s *Server) runSavedReportDefinition(r *http.Request, raw string) (*ReportRun, error) {
+//
+// LA FRONTERA TAMBIÉN AQUÍ (F2/F4). El motor tipado (report_engine.go) corre
+// `aiValidateSQLSelect`, que solo mira VERBOS: sin esta capa, un informe guardado
+// con `SELECT api_key FROM ai_providers` se ejecutaba por esa puerta aunque la
+// pantalla de guardado lo hubiera dejado pasar. Aquí se aplica la frontera única
+// con el alcance de quien pulsa «Ver» y, si la cadena aprobada difiere del SQL
+// guardado, la definición se reescribe EN MEMORIA con la cadena aprobada antes de
+// llamar al motor: el texto que el motor ejecuta es exactamente el que pasó por la
+// frontera, no otro. (No se toca la fila: lo que se normaliza es esta ejecución.)
+//
+// reportID/exportado alimentan report_run (F9): cada ejecución y cada exportación
+// quedan anotadas con huella de definición, SQL, parámetros, filas y usuario.
+func (s *Server) runSavedReportDefinition(r *http.Request, raw string, reportID int64, exportado bool) (*ReportRun, error) {
 	var def ReportDefinition
 	if err := json.Unmarshal([]byte(raw), &def); err != nil {
 		return nil, fmt.Errorf("la definición del informe está dañada: %w", err)
 	}
-	values := make(map[string]string, len(def.Params))
+	sess := s.sessionFromRequest(r)
+	valores := make(map[string]string, len(def.Params))
 	for _, p := range def.Params {
-		values[p.Name] = r.FormValue("p_" + p.Name)
+		valores[p.Name] = r.FormValue("p_" + p.Name)
 	}
 	if err := def.Validate(); err == nil {
-		return s.RunReportDefinition(r, &def, values)
+		dept := s.aiDeptDelEjecutor(sess)
+		aprobado, err := validarSQLInformes(def.SQL, dept, def.EffectiveMaxRows())
+		if err != nil {
+			return nil, err
+		}
+		// El texto que viaja al motor es el aprobado (ver comentario arriba).
+		def.SQL = aprobado
+		run, err := s.RunReportDefinition(r, &def, valores)
+		if err != nil {
+			return nil, err
+		}
+		s.registrarCorridaInforme(s.dbFor(r), reportID, raw, aprobado, valores, len(run.Rows), sess, exportado)
+		return run, nil
 	}
 
-	legacy, err := s.executeReportDefinition(s.sessionFromRequest(r), raw, values["desde"], values["hasta"])
+	legacy, err := s.executeReportDefinition(sess, raw, valores["desde"], valores["hasta"], reportID)
 	if err != nil {
 		return nil, err
+	}
+	if exportado {
+		s.marcarCorridaExportada(s.dbFor(r), legacy.runID)
 	}
 	keys := def.ClavesDeclaradas()
 	if len(keys) != len(legacy.Headers) {
@@ -1572,7 +1716,7 @@ func (s *Server) runSavedReportDefinition(r *http.Request, raw string) (*ReportR
 	return &ReportRun{
 		Title: legacy.Title, Headers: legacy.Headers, Keys: keys, Rows: rows,
 		Totals: legacy.Totals, Backend: "mysql", MaxRows: aiHardMaxRows,
-		Params: values, Warnings: legacy.Warnings,
+		Params: valores, Warnings: legacy.Warnings,
 	}, nil
 }
 
@@ -1598,7 +1742,7 @@ func (s *Server) reportTemplateSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "Nombre y definition son obligatorios", 400)
 		return
 	}
-	if err := s.validateReportDefinition(definition); err != nil {
+	if err := s.validarDefinicionInforme(s.sessionFromRequest(r), definition, ""); err != nil {
 		jsonError(w, err.Error(), 400)
 		return
 	}
@@ -1683,10 +1827,15 @@ func (s *Server) reportTemplateRun(w http.ResponseWriter, r *http.Request) {
 	}
 	from := orDefault(r.FormValue("from"), aiFirstOfMonth())
 	to := orDefault(r.FormValue("to"), today())
-	res, err := s.executeReportDefinition(s.sessionFromRequest(r), tpl.Definition, from, to)
+	sess := s.sessionFromRequest(r)
+	// tpl.ID viaja a la ejecución: cada corrida queda anotada en report_run con la
+	// huella de la definición que se ejecutó (F9). La frontera corre dentro de
+	// executeReportDefinition con el alcance de quien pulsa «Ejecutar», que no es
+	// necesariamente quien creó el informe (F4).
+	res, err := s.executeReportDefinition(sess, tpl.Definition, from, to, tpl.ID)
 	if err != nil {
 		s.render(w, r, "report_template_run.html", map[string]interface{}{
-			"Title": tpl.Name, "Err": err.Error(), "From": from, "To": to, "TplID": tpl.ID,
+			"Title": tpl.Name, "Err": aiErrorInformeNoEjecutable(tpl.Name, err).Error(), "From": from, "To": to, "TplID": tpl.ID,
 		})
 		return
 	}
@@ -1807,16 +1956,8 @@ func substituteReportParams(sqlText, from, to string) (string, error) {
 	return sqlText, nil
 }
 
-// findSQLMatches busca coincidencias de patrón regex simple en SQL.
-// Devuelve la primera palabra capturada de cada match.
-func findSQLMatches(sql, pattern string) []string {
-	var results []string
-	re := regexp.MustCompile(pattern)
-	matches := re.FindAllStringSubmatch(sql, -1)
-	for _, m := range matches {
-		if len(m) > 1 {
-			results = append(results, strings.ToLower(m[1]))
-		}
-	}
-	return results
-}
+// aiTablasFiscalesDeInforme y la frontera son hoy las dos únicas normas de SQL de
+// informes. El helper findSQLMatches —que el anterior guardián usaba para extraer
+// tablas con el regex `from\s+(\w+)`— se quitó con él: ese regex solo veía la
+// primera tabla de cada FROM y esa limitación ES el agujero (aiTablasEnSQL recorre
+// la lista entera). Dejar la función viva sería dejar la tentación de usarla.

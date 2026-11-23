@@ -52,7 +52,7 @@ func (s *Server) aiToolFinanceReceivables(sess *SessionData, agent aiAgent, args
 	if db == nil {
 		return string(mustJSON(aiToolError{"sin base de datos para esta empresa"})), nil
 	}
-	usuario := aiAgentUsername(sess, agent)
+	usuario := s.aiAgentUsername(sess, agent)
 
 	escaneo, err := s.financeEscanear(db, scopeCxC, usuario, false)
 	if err != nil {
@@ -100,7 +100,7 @@ func (s *Server) aiToolFinancePayables(sess *SessionData, agent aiAgent, args ma
 	if db == nil {
 		return string(mustJSON(aiToolError{"sin base de datos para esta empresa"})), nil
 	}
-	escaneo, err := s.financeEscanear(db, scopeCxP, aiAgentUsername(sess, agent), false)
+	escaneo, err := s.financeEscanear(db, scopeCxP, s.aiAgentUsername(sess, agent), false)
 	if err != nil {
 		return string(mustJSON(aiToolError{"no se pudo recalcular las cuentas por pagar: " + err.Error()})), nil
 	}
@@ -133,7 +133,7 @@ func (s *Server) aiToolFinanceScan(sess *SessionData, agent aiAgent, args map[st
 	if db == nil {
 		return string(mustJSON(aiToolError{"sin base de datos para esta empresa"})), nil
 	}
-	usuario := aiAgentUsername(sess, agent)
+	usuario := s.aiAgentUsername(sess, agent)
 	scope := strings.ToLower(strings.TrimSpace(aiStrParam(args, "scope")))
 
 	ambitos := []string{scopeCxC, scopeCxP}
@@ -247,7 +247,7 @@ func (s *Server) aiToolCustomerRequestPayment(sess *SessionData, agent aiAgent, 
 	res["status"] = "ok"
 	res["cliente"] = alerta["party"]
 	res["alerta"] = alertID
-	s.aiAudit(sess, aiAgentUsername(sess, agent), "create", "ai_operator", "finance_message",
+	s.aiAudit(sess, s.aiAgentUsername(sess, agent), "create", "ai_operator", "finance_message",
 		fmt.Sprintf("%v", res["id"]), nil, map[string]interface{}{
 			"canal": canal.Name, "destino": res["destino"], "cliente": alerta["party"],
 			"enviado": res["enviado"], "alerta": alertID,
@@ -421,7 +421,7 @@ func (s *Server) aiToolSupplierSendRetention(sess *SessionData, agent aiAgent, a
 	res["periodo"] = e.Periodo
 	res["retenido"] = money(e.Retenido)
 	res["comprobantes"] = comprobantes
-	s.aiAudit(sess, aiAgentUsername(sess, agent), "create", "ai_operator", "finance_message",
+	s.aiAudit(sess, s.aiAgentUsername(sess, agent), "create", "ai_operator", "finance_message",
 		fmt.Sprintf("%v", res["id"]), nil, map[string]interface{}{
 			"canal": canal.Name, "destino": res["destino"], "proveedor": e.Supplier,
 			"periodo": e.Periodo, "retenido": e.Retenido, "enviado": res["enviado"],
@@ -524,7 +524,7 @@ func (s *Server) aiToolNotifyEvent(sess *SessionData, agent aiAgent, args map[st
 		ref_type, ref_id, status, idem_key, created_by, created_at)
 		VALUES (?,?,?,?,?,?, 'evento', ?, 'enviando', ?, ?, ?)`,
 		canal.ID, canal.Name, canal.Kind, "webhook://"+canal.Name, evento, crudo, refID, clave,
-		aiAgentUsername(sess, agent), now())
+		s.aiAgentUsername(sess, agent), now())
 	if err != nil {
 		if aiEsClaveDuplicada(err) {
 			return string(mustJSON(map[string]interface{}{
@@ -555,7 +555,7 @@ func (s *Server) aiToolNotifyEvent(sess *SessionData, agent aiAgent, args map[st
 	_, _ = db.Exec(`UPDATE finance_message SET status = 'enviado', sent_at = ?, provider_ref = ? WHERE id = ?`,
 		now(), respuesta, msgID)
 
-	s.aiAudit(sess, aiAgentUsername(sess, agent), "create", "ai_operator", "finance_message",
+	s.aiAudit(sess, s.aiAgentUsername(sess, agent), "create", "ai_operator", "finance_message",
 		strconv.FormatInt(msgID, 10), nil, map[string]interface{}{
 			"event": evento, "canal": canal.Name, "referencia": refID,
 		})

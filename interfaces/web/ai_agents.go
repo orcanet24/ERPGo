@@ -60,7 +60,8 @@ type aiAgent struct {
 //
 // La fila del agente vive en la BASE DE CONTROL, junto a su identidad
 // (users, user_login, sec_userrole): user.go la crea dentro de su misma
-// transacción (crearAgenteParaUsuarioTx) y el runner la lee con agentDB.
+// transacción (crearAgenteParaUsuarioTx) y el runner la lee por la base de
+// control (authDB), no por la global agentDB —ver aiAgentUsername—.
 // Leerla de la base de la empresa dejaba el listado vacío y sin roles en
 // cualquier empresa que no fuera la maestra —donde ambas bases coinciden, lo
 // que escondió el fallo hasta que se creó una segunda empresa.
@@ -137,22 +138,58 @@ func (s *Server) loadAIAgentByUser(sess *SessionData, userID string) (aiAgent, b
 
 // aiAgentUsername es la identidad de auditoría: username real del usuario
 // agente (creado por agentSave como "agente.<slug>").
-func aiAgentUsername(sess *SessionData, agent aiAgent) string {
+//
+// ES UN MÉTODO DE Server Y NO LEE LA VARIABLE GLOBAL agentDB (F11). La versión
+// anterior consultaba un `*sql.DB` de paquete que el worker asignaba alrededor de
+// cada corrida (`prev := agentDB; agentDB = db; defer agentDB = prev`) y que el
+// arranque fijaba en NewServer. Con dos tareas encoladas de empresas distintas —o
+// unHTTP request y una corrida a la vez— el valor global cambiaba bajo los pies
+// de la primera: el username del agente de la empresa A podía leerse de la base de
+// la empresa B, y si esa base no tenía la fila, la auditoría firmaba
+// «agente.<nombre>» en vez del usuario real. Una carrera que escribe en el
+// rastro de auditoría es exactamente el tipo de fallo que no se ve hasta que hace
+// falta.
+//
+// Ahora la conexión se resuelve por la SESIÓN de la corrida, que ya lleva su
+// empresa (TenantCode): el mismo camino dbForSession/authDB que usa todo lo demás.
+// Sin sesión (llamadas puras de prueba) se usa la base de control, que es donde
+// vive user_login.
+func (s *Server) aiAgentUsername(sess *SessionData, agent aiAgent) string {
 	if sess != nil && sess.UserID == agent.UserID {
 		return sess.Username
 	}
-	var u sql.NullString
-	if agentDB != nil {
-		_ = agentDB.QueryRow(`SELECT username FROM user_login WHERE user_id = ?`, agent.UserID).Scan(&u)
+	db := s.db
+	if s.controlDB != nil {
+		db = s.controlDB
 	}
+	if db == nil {
+		// Sin ninguna base montada (Server de prueba con ceros): no se intenta
+		// abrir la de control, que en un montaje así apuntaría a un MySQL que no
+		// existe. Se firma con el nombre del agente, que es lo que hacía la
+		// versión anterior cuando la consulta fallaba.
+		return "agente." + agent.Name
+	}
+	var u sql.NullString
+	_ = s.authDB(s.requestForSession(sess)).QueryRow(`SELECT username FROM user_login WHERE user_id = ?`, agent.UserID).Scan(&u)
 	if u.Valid && u.String != "" {
 		return u.String
 	}
 	return "agente." + agent.Name
 }
 
-// agentDB es la conexión usada por los helpers de agente (asignada en
-// NewServer y en tests; nil-checked en aiAgentUsername vía dbAgentLookup).
+// agentDB es la conexión global que usaban los helpers de agente.
+//
+// OBSOLETA (F11): el subsistema de informes/auditoría ya no la lee —
+// aiAgentUsername resuelve la base por sesión—. Se conserva porque worker.go sigue
+// asignándola alrededor de cada corrida (`prev := agentDB; agentDB = db`) y
+// `aiAgentRowBudget` la consulta, y esos archivos NO están en el conjunto que este
+// cierre puede tocar: están en vuelo con el integrador.
+//
+// Lo que queda documentado para quien termine la migración: pasar la base por el
+// contexto de la tarea de la cola (queue ya lleva TenantFromContext) o, si se
+// quiere el mismo efecto sin tocar firmantes, inyectar el *sql.DB en el runner y
+// quitar la variable. La ventana de carrera descrita en aiAgentUsername sigue
+// existiendo para aiAgentRowBudget hasta entonces.
 var agentDB *sql.DB
 
 // aiAgentCreator marca el creador de plantillas (user:ID | agente:ID).

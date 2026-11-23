@@ -125,6 +125,11 @@ type CompanyInfo struct {
 	Website     string
 	VatNo       string
 	CrNo        string
+	// UploadPath es el directorio de esta empresa dentro de uploads/
+	// (EMP+hex). Se cachea con el resto de los ajustes para que la guarda
+	// de pertenencia de /uploads/ (S-7) no consulte la base en cada
+	// petición de imágenes.
+	UploadPath string
 }
 
 // WebSetting mirrors web_setting row (subset used everywhere).
@@ -228,6 +233,13 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 		walVigilas: map[string]func(){},
 	}
 	s.sessions.StartJanitor()
+
+	// Qué X-Forwarded-For se cree (R8, ver proxy_confianza.go). Se fija una
+	// vez por proceso: el valor viene del .env y no cambia en la vida del
+	// servidor.
+	if cfg != nil {
+		configurarProxyConfianza(cfg.ProxyTrustedIPs)
+	}
 
 	// El handle que llega del arranque es la BASE DE CONTROL: catálogo de
 	// empresas, miembros y sesiones. Se fija ANTES de cualquier consulta para
@@ -373,10 +385,37 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 			return
 		}
 
+		// S-7 (auditoría 2026-11-22): pertenencia de empresa. Cada empresa
+		// sube a su directorio EMP+hex bajo uploads/, y hasta aquí la única
+		// defensa era que el nombre era aleatorio: cualquier usuario con el
+		// enlace —en un correo, en un PDF de factura— abría el documento de
+		// OTRA empresa con su propia sesión. El primer segmento del path
+		// debe ser el directorio de la empresa de la petición; si no lo es,
+		// 404 (no 403: un 403 confirmado enseñaría qué rutas existen).
+		// Master puede cruzar: gestiona todas las empresas por definición.
+		rel := strings.TrimPrefix(r.URL.Path, "/uploads/")
+		if primer := strings.SplitN(rel, "/", 2)[0]; primer != "" && primer != "personal" {
+			st := s.settingsFor(r)
+			if esperado := strings.TrimSpace(st.Company.UploadPath); esperado != "" && primer != esperado {
+				nivel := ""
+				if db := s.dbFor(r); db != nil {
+					nivel = s.nivelDeSesion(r, db, sess)
+				}
+				if nivel != "master" {
+					http.NotFound(w, r)
+					return
+				}
+			}
+		}
+
 		// Bloquear directorio 'personal' para no-admins (master/admin)
 		if strings.Contains(r.URL.Path, "/personal/") {
-			level, err := loadUserRole(s.db, sess.UserID)
-			if err != nil || (level != "master" && level != "admin") {
+			db := s.dbFor(r)
+			level := ""
+			if db != nil {
+				level = s.nivelDeSesion(r, db, sess)
+			}
+			if level != "master" && level != "admin" {
 				http.Error(w, "No autorizado. Solo administradores.", http.StatusForbidden)
 				return
 			}
@@ -558,13 +597,18 @@ func registerAIDepartmentRoutes(s *Server) { s.registerAIDepartmentRoutes() }
 // Es la vía para la empresa activa: la usan el arranque y el cambio de empresa.
 // Los handlers usan settingsFor(r), que resuelve por la empresa de la petición.
 func (s *Server) reloadSettings() {
-	st := s.loadSettings(s.activeDB())
+	// El handle y el código activos se leen bajo UN solo RLock
+	// (snapshotActivo): leerlos por separado permitía que un cambio de
+	// empresa entre las dos lecturas cachease los ajustes de A bajo la clave
+	// de B (D-7, auditoría 2026-11-22).
+	db, code := s.snapshotActivo()
+	st := s.loadSettings(db)
 
 	s.settingsMu.Lock()
 	if s.settingsByTenant == nil {
 		s.settingsByTenant = map[string]*AppSettings{}
 	}
-	s.settingsByTenant[s.activeTenantCode()] = st
+	s.settingsByTenant[code] = st
 	s.settings = st
 	s.settingsMu.Unlock()
 }
@@ -581,8 +625,8 @@ func (s *Server) loadSettings(db *sql.DB) *AppSettings {
 	var logo, invoiceLogo, favicon, cur, tz, footer, lang, rtr sql.NullString
 	var isQr, isAuto, discType sql.NullInt64
 	err := db.QueryRow(`SELECT company_name, email, address, mobile, website,
-		IFNULL(vat_no,''), IFNULL(cr_no,'') FROM company_information WHERE status=1 ORDER BY company_id LIMIT 1`).
-		Scan(&c.CompanyName, &c.Email, &c.Address, &c.Mobile, &c.Website, &c.VatNo, &c.CrNo)
+		IFNULL(vat_no,''), IFNULL(cr_no,''), IFNULL(upload_path,'') FROM company_information WHERE status=1 ORDER BY company_id LIMIT 1`).
+		Scan(&c.CompanyName, &c.Email, &c.Address, &c.Mobile, &c.Website, &c.VatNo, &c.CrNo, &c.UploadPath)
 	if err == nil {
 		st.Company = c
 	}
@@ -743,6 +787,14 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		// HSTS solo cuando se sirve por TLS: es la cabecera que impide que
+		// un navegador vuelva a conectar por http y exponga la cookie de
+		// sesión (S-5, auditoría 2026-11-22). Enviarla en http plano sería
+		// peor que inútil: fijaría en el navegador del usuario la orden de
+		// no volver a entrar por el único acceso que funciona en la tienda.
+		if r.TLS != nil {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")

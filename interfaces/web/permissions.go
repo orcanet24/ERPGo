@@ -900,6 +900,14 @@ func (s *Server) permissionUserSave(w http.ResponseWriter, r *http.Request) {
 	// su menú y sus botones se recalcula en el acto. Lo que NO se toca aquí es
 	// la puerta de ejecución, que no está cacheada.
 	invalidarCachePermisos()
+	// S-3 (auditoría 2026-11-22): Y se revocan sus sesiones. El nivel del
+	// usuario vive también en la sesión (SessionData.UserLevel, que
+	// hasPermission lee) y sin este cierre una degradación de rol no
+	// expulsaba al usuario: seguía operando con el nivel viejo hasta las
+	// 24 horas.
+	if cerradas := s.sessions.DeleteByUser(userID); cerradas > 0 {
+		log.Printf("permisos: %d sesión(es) de %s revocada(s) al cambiar su rol", cerradas, userID)
+	}
 
 	writeJSON(w, map[string]interface{}{"saved": true})
 }

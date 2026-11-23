@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -162,8 +163,17 @@ func (s *Server) auditChainRange(r *http.Request, from, to string) (auditChainRe
 		if t, err := time.Parse(time.RFC3339, ts); err == nil {
 			ts = t.Format("2006-01-02 15:04:05")
 		}
-		want := computeAuditHash(expectedPrev, id, uid.String, action.String, module.String, table.String, recordID.String, oldVal.String, newVal.String, ip.String, ts)
-		if hash.String != want {
+		// Verificación en dos formatos (S-10): la fila pudo escribirse antes
+		// de la clave (sha pelado) o con ella ("h2:" HMAC simple). Basta con
+		// que coincida UNA de las dos recalculaciones; una fila que no
+		// coincide con ninguna está alterada, venga de la época que venga.
+		clave := s.claveCadenaAuditoria()
+		want := computeAuditHash(expectedPrev, id, uid.String, action.String, module.String, table.String, recordID.String, oldVal.String, newVal.String, ip.String, ts, clave)
+		wantVieja := want
+		if clave != "" {
+			wantVieja = computeAuditHash(expectedPrev, id, uid.String, action.String, module.String, table.String, recordID.String, oldVal.String, newVal.String, ip.String, ts, "")
+		}
+		if hash.String != want && hash.String != wantVieja {
 			res.BrokenAt = id
 			res.Reason = fmt.Sprintf("contenido alterado en registro %d: el hash recalculado no coincide con el almacenado", id)
 			return res, nil
@@ -235,11 +245,35 @@ func (s *Server) sealAuditPeriod(r *http.Request, period string) error {
 }
 
 // computeAuditHash builds the chained hash for one audit entry.
-func computeAuditHash(prev string, id int64, userID, action, module, table, recordID, oldV, newV, ip, ts string) string {
+//
+// S-10 (auditoría 2026-11-22): la versión anterior era SHA-256 público —
+// quien pudiera escribir en la base podía recalcular TODA la cadena y
+// reescribir la historia sin dejar rastro, que es justo lo que la cadena
+// promete impedir ante el SENIAT—. Con clave maestra (MasterKey del .env,
+// que no vive en la base) la huella se marca "h2:" y usa HMAC simple
+// sha256(payload|clave): sin la clave no hay forma de fabricar huellas
+// válidas. Sin clave (instalaciones antiguas sin JWT_SECRET configurado)
+// se mantiene el formato antiguo para no romper cadenas existentes; el
+// verificador acepta ambos formatos y la traza de verificación avisa de
+// qué versión lleva cada fila.
+func computeAuditHash(prev string, id int64, userID, action, module, table, recordID, oldV, newV, ip, ts, clave string) string {
 	payload := fmt.Sprintf("%s|%d|%s|%s|%s|%s|%s|%s|%s|%s|%s",
 		prev, id, userID, action, module, table, recordID, oldV, newV, ip, ts)
-	sum := sha256.Sum256([]byte(payload))
-	return hex.EncodeToString(sum[:])
+	if strings.TrimSpace(clave) == "" {
+		sum := sha256.Sum256([]byte(payload))
+		return hex.EncodeToString(sum[:])
+	}
+	sum := sha256.Sum256([]byte(payload + "|" + clave))
+	return "h2:" + hex.EncodeToString(sum[:])
+}
+
+// claveCadenaAuditoria devuelve la MasterKey con la que se sellan las huellas
+// nuevas. Config nil (pruebas) o clave vacía = formato clásico.
+func (s *Server) claveCadenaAuditoria() string {
+	if s == nil || s.config == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.config.MasterKey)
 }
 
 // audit appends a tamper-evident record to the audit chain.
@@ -264,6 +298,16 @@ func (s *Server) appendAudit(r *http.Request, userID, ip, action, module, table,
 // appendAuditAt es appendAudit con instante explícito. Lo necesitan las
 // auditorías programadas o atrasadas, cuyo created_at no es "ahora", y los
 // tests, que deben poder colocar registros en un período concreto.
+//
+// S-10 (auditoría 2026-11-22): todo el registro —INSERT, huella y enlace—
+// vive en UNA transacción. La versión anterior insertaba con record_hash ''
+// y lo sellaba con un UPDATE suelto: un corte de luz entre los dos dejaba
+// una fila con huella vacía que el verificador marcaba como «contenido
+// alterado» PARA SIEMPRE, acusando de manipulación al cliente honesto.
+// Ahora: si el sellado falla, el registro entero se deshace (no queda fila
+// coja) y se avisa; si el commit falla, tampoco. La lectura del hash
+// anterior ocurre dentro de la misma transacción, bajo auditChainMu, para
+// que el enlace no pueda calcularse contra un mundo que ya cambió.
 func (s *Server) appendAuditAt(r *http.Request, userID, ip, action, module, table, recordID string, oldVal, newVal interface{}, at time.Time) {
 	oldJSON := marshalJSON(oldVal)
 	newJSON := marshalJSON(newVal)
@@ -271,9 +315,26 @@ func (s *Server) appendAuditAt(r *http.Request, userID, ip, action, module, tabl
 
 	auditChainMu.Lock()
 	defer auditChainMu.Unlock()
-	prev := s.lastAuditHash(r)
 
-	res, err := s.dbFor(r).Exec(`INSERT INTO audit_log
+	db := s.dbFor(r)
+	if db == nil {
+		return
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("auditoría: no se pudo abrir la transacción del registro (%s/%s): %v", module, action, err)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var h sql.NullString
+	_ = tx.QueryRow(`SELECT record_hash FROM audit_log ORDER BY id DESC LIMIT 1`).Scan(&h)
+	prev := "GENESIS"
+	if h.Valid && h.String != "" {
+		prev = h.String
+	}
+
+	res, err := tx.Exec(`INSERT INTO audit_log
 		(user_id, action, module, table_name, record_id, old_value, new_value, ip_address, created_at, prev_hash, record_hash)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		userID, action, module, table, recordID, oldJSON, newJSON, ip, ts, prev, "")
@@ -281,32 +342,45 @@ func (s *Server) appendAuditAt(r *http.Request, userID, ip, action, module, tabl
 		return
 	}
 	id, _ := res.LastInsertId()
-	hash := computeAuditHash(prev, id, userID, action, module, table, recordID, oldJSON, newJSON, ip, ts)
-	// The hash is written right after INSERT so the row is complete; this is the
-	// only UPDATE the system ever issues on audit_log and it only fills the hash
-	// of the row we just created (never touches previous rows).
-	if _, err := s.dbFor(r).Exec(`UPDATE audit_log SET record_hash=? WHERE id=? AND record_hash=''`, hash, id); err != nil {
-		// La cadena de hashes queda rota para esta fila; no es deseable pero no hay
-		// transacción abierta aquí para deshacer el INSERT. Se logguea para que el
-		// administrador sepa que la integridad de auditoría está comprometida.
-		log.Printf("auditoría: no se pudo escribir la huella del registro %d: %v", id, err)
+	hash := computeAuditHash(prev, id, userID, action, module, table, recordID, oldJSON, newJSON, ip, ts, s.claveCadenaAuditoria())
+	if _, err := tx.Exec(`UPDATE audit_log SET record_hash=? WHERE id=? AND record_hash=''`, hash, id); err != nil {
+		// El rollback deshace el INSERT: nunca queda una fila sin huella.
+		log.Printf("auditoría: no se pudo escribir la huella del registro %d; el registro se deshizo: %v", id, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		log.Printf("auditoría: no se pudo confirmar el registro %s/%s: %v", module, action, err)
+		return
 	}
 
 	// Sella los períodos cerrados. Barato: solo corre al cambiar de mes.
 	s.sealClosedAuditBlocks(r, at)
 }
 
-// clientIP extracts the real client IP (proxies aware).
+// clientIP devuelve la IP que se puede AUDITAR (R8, auditoría 2026-11-22).
+//
+// Antes bastaba con enviar X-Forwarded-For para ser quien hiciera falta:
+// con eso se saltaba el límite de fuerza bruta del POS (la clave del
+// supervisor se podía probar cambiando una cabecera) y la auditoría
+// quedaba con un ip_address inventado. La cabecera solo se cree cuando la
+// conexión TCP viene de un proxy declarado por el operador
+// (PROXY_TRUSTED_IPS); en cualquier otro caso se usa el origen real.
 func clientIP(r *http.Request) string {
-	if xf := r.Header.Get("X-Forwarded-For"); xf != "" {
-		return strings.TrimSpace(strings.Split(xf, ",")[0])
+	if r == nil {
+		return ""
 	}
-	if r.RemoteAddr != "" {
-		if i := strings.LastIndex(r.RemoteAddr, ":"); i > 0 {
-			return r.RemoteAddr[:i]
+	host := r.RemoteAddr
+	if i := strings.LastIndex(host, ":"); i > 0 && !strings.Contains(host[i:], "]") {
+		host = host[:i]
+	}
+	if ip := net.ParseIP(strings.TrimSpace(host)); ip != nil && esProxyConfiado(ip) {
+		if xf := r.Header.Get("X-Forwarded-For"); xf != "" {
+			if primera := strings.TrimSpace(strings.Split(xf, ",")[0]); primera != "" {
+				return primera
+			}
 		}
 	}
-	return r.RemoteAddr
+	return strings.TrimSpace(host)
 }
 
 // sufijosSoloLectura son rutas que se sirven por POST pero NO cambian nada: los

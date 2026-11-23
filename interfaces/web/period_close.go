@@ -119,14 +119,28 @@ func (s *Server) PeriodSummary(r *http.Request, period string) (map[string]inter
 	// encontraba descuadre en cuanto existía UN asiento automático: ningún
 	// mes con facturas podía cerrarse (F-1, auditoría 2026-11-22). En el
 	// libro, en cambio, un descuadre SI significa escritura partida.
+	//
+	// IsPosted es char(10) heredado y el propio sistema lo escribe de dos
+	// formas ('1' al aprobar, 'yes' desde el POS): la condición correcta es
+	// EXCLUIR lo marcado como no publicado, no exigir un literal. Filtrar
+	// por '=1' habría dejado las ventas POS fuera del cuadre.
 	if err := s.dbFor(r).QueryRow(`SELECT IFNULL(SUM(Debit),0), IFNULL(SUM(Credit),0)
-		FROM acc_transaction WHERE VDate >= ? AND VDate <= ? AND IFNULL(IsPosted,0) = 1`, from, to).
+		FROM acc_transaction WHERE VDate >= ? AND VDate <= ? AND IFNULL(IsPosted,'yes') NOT IN ('no','0','')`, from, to).
 		Scan(&debit, &credit); err != nil {
 		return nil, err
 	}
+	// Movimientos del período: los asientos del panel (acc_vaucher) MÁS las
+	// ventas POS que publican el libro directamente sin fila en acc_vaucher
+	// (checkout, gRPC y ahora registrarVentaTerminal). Contar solo
+	// acc_vaucher hacía que un mes de caja pura se viera «sin asientos» y no
+	// pudiera cerrarse. UNION (no suma): el mismo VNo publicado aparece en
+	// las dos tablas y contarlo doble inflaría el resumen.
 	var n int
-	if err := s.dbFor(r).QueryRow(`SELECT COUNT(DISTINCT VNo)
-		FROM acc_vaucher WHERE VDate >= ? AND VDate <= ?`, from, to).Scan(&n); err != nil {
+	if err := s.dbFor(r).QueryRow(`SELECT COUNT(*) FROM (
+		SELECT VNo FROM acc_vaucher WHERE VDate >= ? AND VDate <= ?
+		UNION
+		SELECT VNo FROM acc_transaction WHERE VDate >= ? AND VDate <= ? AND IFNULL(IsPosted,'yes') NOT IN ('no','0','')
+		) movimientos`, from, to, from, to).Scan(&n); err != nil {
 		return nil, err
 	}
 	// Pendientes de aprobar: no son descuadre, son trabajo sin publicar. Se
@@ -315,20 +329,28 @@ func (s *Server) checkVouchersBalance(r *http.Request, from, to string) string {
 }
 
 // checkInvoicesPosted detecta facturas publicadas sin asiento.
+//
+// Se consulta el LIBRO (acc_transaction), no acc_vaucher, y por dos razones
+// (F-1/F-2, auditoría): los caminos POS (checkout en línea y ahora
+// registrarVentaTerminal) publican su doble entrada directamente en el libro
+// sin pasar por acc_vaucher —con la comprobación vieja esas ventas parecían
+// «sin asiento» y bloqueaban el cierre de otro modo—, y el asiento pendiente
+// lo cubre aparte la validación 'pendientes'. La fecha se compara normalizada
+// porque invoice.date es varchar heredado y acc_transaction.VDate es DATE.
 func (s *Server) checkInvoicesPosted(r *http.Request, from, to string) string {
 	var n int
 	// Una factura de crédito va con signo negativo y no genera asiento propio;
 	// se excluye para no reportar como faltante algo que es correcto.
 	err := s.dbFor(r).QueryRow(`
-		SELECT COUNT(*) FROM invoice
-		WHERE date >= ? AND date <= ?
-		  AND IFNULL(is_draft,'no') = 'no'
-		  AND IFNULL(is_credit,0) = 0
+		SELECT COUNT(*) FROM invoice i
+		WHERE i.date >= ? AND i.date <= ?
+		  AND IFNULL(i.is_draft,'no') = 'no'
+		  AND IFNULL(i.is_credit,0) = 0
 		  AND NOT EXISTS (
-			SELECT 1 FROM acc_vaucher v
-			WHERE v.VDate = invoice.date
-			  AND v.referenceNo = CAST(invoice.invoice AS CHAR)
-		  )`, from, to).Scan(&n)
+			SELECT 1 FROM acc_transaction t
+			WHERE CAST(t.VDate AS CHAR) >= ? AND CAST(t.VDate AS CHAR) <= ?
+			  AND t.referenceNo = CAST(i.invoice AS CHAR)
+		  )`, from, to, from, to).Scan(&n)
 	if err != nil {
 		return fmt.Sprintf("no se pudo verificar: %v", err)
 	}
@@ -447,9 +469,11 @@ func (s *Server) ClosePeriod(r *http.Request, period, user string) error {
 	// como pata única con RevCodde y la doble entrada se materializa en el
 	// libro al aprobar). Dentro de la transacción, además, el libro no puede
 	// tener pendientes sin publicar: se prohíben explícitamente.
+	// (IsPosted es char(10): el panel publica con '1' y el POS con 'yes'; se
+	// excluye lo no publicado, no se exige un literal —ver PeriodSummary—.)
 	var dif float64
 	if err := tx.QueryRow(`SELECT IFNULL(SUM(Debit),0) - IFNULL(SUM(Credit),0)
-		FROM acc_transaction WHERE VDate >= ? AND VDate <= ? AND IFNULL(IsPosted,0) = 1`, from, to).Scan(&dif); err != nil {
+		FROM acc_transaction WHERE VDate >= ? AND VDate <= ? AND IFNULL(IsPosted,'yes') NOT IN ('no','0','')`, from, to).Scan(&dif); err != nil {
 		return err
 	}
 	if abs64(round2(dif)) > 0.01 {
@@ -464,9 +488,15 @@ func (s *Server) ClosePeriod(r *http.Request, period, user string) error {
 		return fmt.Errorf("no se puede cerrar con %d asiento(s) pendiente(s) de aprobar", pendientes)
 	}
 
+	// Movimientos: libro UNION asientos del panel (un mes de caja pura no
+	// tiene filas en acc_vaucher y sería un período cerrado «sin asientos»,
+	// F-2 de la auditoría: las ventas POS existían pero el cierre las negaba).
 	var n int
-	if err := tx.QueryRow(`SELECT COUNT(DISTINCT VNo) FROM acc_vaucher WHERE VDate >= ? AND VDate <= ?`,
-		from, to).Scan(&n); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM (
+		SELECT VNo FROM acc_vaucher WHERE VDate >= ? AND VDate <= ?
+		UNION
+		SELECT VNo FROM acc_transaction WHERE VDate >= ? AND VDate <= ? AND IFNULL(IsPosted,'yes') NOT IN ('no','0','')
+		) movimientos`, from, to, from, to).Scan(&n); err != nil {
 		return err
 	}
 	if n == 0 {

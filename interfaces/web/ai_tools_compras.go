@@ -127,7 +127,7 @@ func (s *Server) aiToolSupplierUpsert(sess *SessionData, agent aiAgent, args map
 		return string(mustJSON(aiToolError{"el proveedor se guardó pero no se pudo recuperar su id para la compra"})), nil
 	}
 	journal.add("supplier", map[string]interface{}{"supplier_id": nuevo, "name": name})
-	s.aiAudit(sess, aiAgentUsername(sess, agent), "create", "ai_operator", "supplier_information",
+	s.aiAudit(sess, s.aiAgentUsername(sess, agent), "create", "ai_operator", "supplier_information",
 		strconv.FormatInt(nuevo, 10), nil, map[string]interface{}{"name": name, "rif": rif})
 	return string(mustJSON(map[string]interface{}{
 		"status": "ok", "created": true, "supplier_id": nuevo, "name": name, "rif": rif,
@@ -183,7 +183,7 @@ func (s *Server) aiToolProductUpsert(sess *SessionData, agent aiAgent, args map[
 		nuevo = v
 	}
 	journal.add("product", map[string]interface{}{"product_id": nuevo, "name": name})
-	s.aiAudit(sess, aiAgentUsername(sess, agent), "create", "ai_operator", "product_information",
+	s.aiAudit(sess, s.aiAgentUsername(sess, agent), "create", "ai_operator", "product_information",
 		nuevo, nil, map[string]interface{}{"name": name, "barcode": barcode})
 	return string(mustJSON(map[string]interface{}{
 		"status": "ok", "created": pid == "", "product_id": nuevo, "name": name,
@@ -523,7 +523,7 @@ func (s *Server) aiToolPurchaseCreate(sess *SessionData, agent aiAgent, args map
 	journal.add("purchase", map[string]interface{}{
 		"purchase_id": purchaseID, "supplier_id": supplierID, "total": grand, "items": len(lineas),
 	})
-	s.aiAudit(sess, aiAgentUsername(sess, agent), "create", "ai_operator", "product_purchase",
+	s.aiAudit(sess, s.aiAgentUsername(sess, agent), "create", "ai_operator", "product_purchase",
 		strconv.FormatInt(purchaseID, 10), nil, map[string]interface{}{
 			"supplier_id": supplierID, "total": grand, "items": len(lineas), "fecha": fecha,
 		})

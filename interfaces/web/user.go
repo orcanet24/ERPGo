@@ -3,6 +3,7 @@ package web
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -365,6 +366,13 @@ func (s *Server) userSave(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
+	// S-3 (auditoría 2026-11-22): si la edición cambió clave o rol, las
+	// sesiones vivas del usuario quedan cerradas. Sin esto, un empleado con
+	// sesión seguía trabajando con el nivel cacheado de la sesión vieja
+	// hasta las 24 horas aunque el panel lo acabara de degradar.
+	if cerradas := s.sessions.DeleteByUser(uid); cerradas > 0 {
+		log.Printf("usuario %s: %d sesión(es) revocada(s) al guardar sus datos", uid, cerradas)
+	}
 	writeJSON(w, map[string]interface{}{
 		"status":   1,
 		"msg":      "Usuario guardado",
@@ -504,6 +512,9 @@ func (s *Server) userDelete(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
+		// S-3: la sesión podía estar montada en la empresa recién quitada;
+		// se cierran todas y el usuario entra de nuevo eligiendo empresa.
+		s.sessions.DeleteByUser(id)
 		writeJSON(w, map[string]interface{}{
 			"status": 1,
 			"msg":    "Se le quitó el acceso a esta empresa; sigue perteneciendo a " + strings.Join(otrasEmpresas(empresas, empresa), ", "),
@@ -530,6 +541,10 @@ func (s *Server) userDelete(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
+	// S-3 (auditoría 2026-11-22): la baja es efectiva en el acto. Antes la
+	// identidad desaparecía del panel pero la cookie del usuario seguía
+	// operativa hasta 24 horas, y en el POS hasta 12.
+	s.sessions.DeleteByUser(id)
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Eliminado", "redirect": saveRedirect(r, "/user/list")})
 }
 
@@ -584,7 +599,17 @@ func (s *Server) userChangePassword(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Contraseña actualizada", "redirect": saveRedirect(r, "/user/list")})
+	// S-3 (auditoría 2026-11-22): cambiar la clave revoca TODAS las sesiones
+	// del usuario —incluida esta—. Es la respuesta al escenario real: el
+	// dueño detecta que alguien usó su cuenta, cambia la clave y antes el
+	// atacante seguía dentro hasta que expirara la cookie. El mensaje avisa
+	// para que no parezca un fallo del sistema.
+	cerradas := s.sessions.DeleteByUser(sess.UserID)
+	msg := "Contraseña actualizada"
+	if cerradas > 0 {
+		msg = "Contraseña actualizada. Por seguridad se cerraron sus sesiones: vuelva a iniciar sesión."
+	}
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": msg, "redirect": saveRedirect(r, "/user/list")})
 }
 
 // userPhotoSave sube la foto de un usuario y guarda la ruta en users.photo.

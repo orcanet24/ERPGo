@@ -1,4 +1,4 @@
-﻿package web
+package web
 
 // ai_tasks.go — Tareas de agente: instrucciones claras + programación. El
 // runner ejecuta el bucle modelo-herramientas con límites estrictos y deja
@@ -530,7 +530,7 @@ func (s *Server) aiRunLoop(sess *SessionData, agent aiAgent, task aiTask, steps 
 	// TenantCode viaja a la sesión del runner: las herramientas resuelven la base
 	// por sesión (dbForSession), y perderla hacía que una tarea encolada de la
 	// empresa A pudiera escribir contra la empresa activa del proceso.
-	sess = &SessionData{UserID: agent.UserID, Username: aiAgentUsername(nil, agent), Fullname: agent.Name, UserLevel: "agent", TenantCode: tenant}
+	sess = &SessionData{UserID: agent.UserID, Username: s.aiAgentUsername(nil, agent), Fullname: agent.Name, UserLevel: "agent", TenantCode: tenant}
 
 	roleName := agent.RoleName
 	if roleName == "" {

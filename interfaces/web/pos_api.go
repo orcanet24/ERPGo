@@ -129,8 +129,8 @@ func (s *Server) posAPIMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		controlDB := s.posDBFor(r)
-		if controlDB == nil {
+		tenantDB := s.posDBFor(r)
+		if tenantDB == nil {
 			jsonError(w, "Empresa POS no disponible", http.StatusServiceUnavailable)
 			return
 		}
@@ -138,7 +138,7 @@ func (s *Server) posAPIMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		var terminalID sql.NullString
 		var branchID sql.NullInt64
 		var expiresAt string
-		if err := controlDB.QueryRow(`
+		if err := tenantDB.QueryRow(`
 			SELECT user_id, terminal_id, branch_id, expires_at FROM pos_sessions
 			WHERE token = ? AND expires_at > NOW() AND is_active = 1 AND IFNULL(revoked, 0) = 0
 			LIMIT 1`, token).Scan(&userID, &terminalID, &branchID, &expiresAt); err != nil {
@@ -150,18 +150,31 @@ func (s *Server) posAPIMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		ctx = context.WithValue(ctx, posTenantContextKey{}, s.posTenantCode(r))
 		ctx = context.WithValue(ctx, posTerminalContextKey{}, terminalID.String)
 		ctx = context.WithValue(ctx, posBranchContextKey{}, int(branchID.Int64))
-		ctx = context.WithValue(ctx, posSessionDBContextKey{}, controlDB)
+		ctx = context.WithValue(ctx, posSessionDBContextKey{}, tenantDB)
 		ctx = context.WithValue(ctx, posSessionTokenContextKey{}, token)
 
 		// Límite de VOLUMEN por terminal (token): una caja en mal estado o un
 		// token robado no pueden inundar el servidor con syncs/checkout. Generoso
 		// para no apretar la operación real; solo corta abuso. Ver pos_ratelimit.go.
+		//
+		// S-2 (auditoría 2026-11-22): el ESTADO del cajero se comprueba en la
+		// base de control, la misma que el panel usa para dar de baja. Con la
+		// copia de la empresa, un despido no cerraba la caja.
 		var activeUser bool
-		if err := controlDB.QueryRow(`SELECT EXISTS(SELECT 1 FROM users WHERE user_id = ? AND status = 1)`, userID).Scan(&activeUser); err != nil {
-			jsonError(w, "No se pudo validar el usuario POS", http.StatusInternalServerError)
+		if ctl, errCtl := s.controlStore(); errCtl == nil {
+			if err := ctl.QueryRow(`SELECT EXISTS(SELECT 1 FROM users u JOIN user_login ul ON ul.user_id = u.user_id
+				WHERE u.user_id = ? AND u.status = 1 AND ul.status = 1)`, userID).Scan(&activeUser); err != nil {
+				jsonError(w, "No se pudo validar el usuario POS", http.StatusInternalServerError)
+				return
+			}
+		} else {
+			// Sin identidad no hay permiso: fail-closed (el checkout no se
+			// inventa un cajero activo).
+			jsonError(w, "Servicio de identidad no disponible", http.StatusServiceUnavailable)
 			return
 		}
 		if !activeUser {
+			_, _ = tenantDB.Exec(`UPDATE pos_sessions SET is_active = 0, revoked = 1 WHERE token = ?`, token)
 			jsonError(w, "Usuario POS inactivo", http.StatusUnauthorized)
 			return
 		}

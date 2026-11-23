@@ -176,29 +176,53 @@ func (s *Server) tenantOfSession(sess *SessionData) string {
 	return s.activeTenantCode()
 }
 
-// dbForTenant devuelve la base de una empresa concreta.
+// dbForTenant devuelve la base de una empresa concreta, o nil si esa empresa
+// no está disponible.
 //
 // Para la empresa ACTIVA se devuelve el handle activo sin más. No es una vía
 // corta: es lo que mantiene el servidor de pruebas y cualquier montaje manual
 // donde se abre una base y se asigna a s.db sin pasar por el catálogo de
 // empresas. Para el resto de empresas se abre (o se reutiliza) su archivo.
+//
+// FAIL-CLOSED (D-7/S-9, auditoría 2026-11-22): si la empresa pedida no abre,
+// se devuelve nil —los llamadores responden 503—, NUNCA la base de la
+// empresa activa. La versión anterior caía a activeDB(), que en una
+// instalación multiempresa significaba: B pide datos, la base de B está
+// caída, y la petición se ejecuta contra los datos de A leyendo Y
+// ESCRIBIENDO en la empresa equivocada en silencio. Un 503 es recuperable;
+// una factura en la empresa ajena no.
+//
+// El par (handle, código) activos se lee bajo UN solo candado (snapshot
+// abajo): leerlos por separado dejaba una ventana en la que un cambio de
+// empresa entre las dos lecturas devolvía el handle de una empresa bajo el
+// código de otra.
 func (s *Server) dbForTenant(tenant string) *sql.DB {
-	if tenant == "" {
-		tenant = s.activeTenantCode()
-	}
-	if db := s.activeDB(); db != nil && tenant == s.activeTenantCode() {
+	if db, code := s.snapshotActivo(); db != nil && (tenant == "" || tenant == code) {
 		return db
 	}
-	if s.isMasterTenant(tenant) {
-		if db, err := s.tenantDB(tenant); err == nil {
-			return db
-		}
-		return nil
+	if tenant == "" {
+		_, code := s.snapshotActivo()
+		tenant = code
 	}
 	if db, err := s.tenantDB(tenant); err == nil {
 		return db
 	}
-	return s.activeDB()
+	// Ni activa ni abriible: nil. El llamador responde 503 y el usuario
+	// reintenta; nadie escribe en una empresa que no pidió.
+	return nil
+}
+
+// snapshotActivo lee el handle y el código activos bajo un único RLock:
+// las dos lecturas son del MISMO instante o la comparación
+// «tenant == empresa activa» puede mentir en la ventana entre ambas.
+func (s *Server) snapshotActivo() (*sql.DB, string) {
+	s.tenantMu.RLock()
+	defer s.tenantMu.RUnlock()
+	code := s.activeTenant
+	if code == "" {
+		code = defaultTenantCode
+	}
+	return s.db, code
 }
 
 // activeDB devuelve el handle de la empresa activa. Solo para lo que no está
@@ -258,6 +282,14 @@ func (s *Server) attachScope(w http.ResponseWriter, r *http.Request) (*http.Requ
 
 // settingsOfTenant devuelve los ajustes de una empresa, cargándolos la primera
 // vez. La caché es por empresa y no global: ver settingsFor.
+//
+// D-7 (auditoría 2026-11-22): si la base de la empresa NO abre, se devuelve
+// una configuración neutra y no se cachea nada. La versión anterior caía a
+// tenantDBMust —que usa la empresa activa— y guardaba el resultado bajo la
+// clave de la empresa pedida: en cuanto B se recuperaba, la cabecera seguía
+// mostrando la razón social y la moneda de A hasta el reinicio. «Un dato
+// cosmético» dicho en el comentario viejo; una cabecera con la empresa
+// equivocada es precisamente el bug que motivó la caché por empresa.
 func (s *Server) settingsOfTenant(tenant string) *AppSettings {
 	s.settingsMu.RLock()
 	if st, ok := s.settingsByTenant[tenant]; ok {
@@ -266,7 +298,11 @@ func (s *Server) settingsOfTenant(tenant string) *AppSettings {
 	}
 	s.settingsMu.RUnlock()
 
-	st := s.loadSettings(s.tenantDBMust(tenant))
+	db, err := s.tenantDB(tenant)
+	if err != nil {
+		return &AppSettings{Web: WebSetting{Currency: "$"}}
+	}
+	st := s.loadSettings(db)
 
 	s.settingsMu.Lock()
 	if s.settingsByTenant == nil {

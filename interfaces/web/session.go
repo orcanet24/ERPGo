@@ -188,6 +188,44 @@ func (st *SessionStore) Delete(id string) {
 	}
 }
 
+// DeleteByUser cierra TODAS las sesiones vivas de una identidad (S-3,
+// auditoría 2026-11-22).
+//
+// POR QUÉ EXISTE: antes borrar a un usuario o cambiarle la contraseña no lo
+// expulsaba: su cookie seguía válida hasta las 24 horas y su nivel seguía
+// siendo el que tenía en la sesión, con lo que un administrador
+// comprometido conservaba todo el panel aunque el dueño cambiara la clave,
+// y un gerente degradado seguía siendo admin mientras durara el cacheo.
+// La revocación por identidad es determinista: ocurre en el instante en que
+// cambia la credencial o el rol, y no añade una consulta por request.
+// Devuelve cuántas sesiones se cerraron para el aviso al operador.
+func (st *SessionStore) DeleteByUser(userID string) int {
+	if st == nil || strings.TrimSpace(userID) == "" {
+		return 0
+	}
+	cerradas := 0
+	st.mu.Lock()
+	for id, s := range st.sessions {
+		if s != nil && s.UserID == userID {
+			delete(st.sessions, id)
+			cerradas++
+		}
+	}
+	st.mu.Unlock()
+
+	if db := st.database(); db != nil {
+		if res, err := db.Exec(`DELETE FROM web_sessions WHERE user_id = ?`, userID); err == nil {
+			if n, _ := res.RowsAffected(); int(n) > cerradas {
+				// La base puede tener sesiones que este proceso no tiene en
+				// caché (creadas antes de un reinicio): el número que se
+				// reporta es cuántas quedaron cerradas en total.
+				cerradas = int(n)
+			}
+		}
+	}
+	return cerradas
+}
+
 // StartJanitor purga las sesiones expiradas.
 //
 // Se ejecuta periódicamente para que la tabla no crezca sin límite y para que

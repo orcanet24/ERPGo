@@ -45,6 +45,12 @@ type Config struct {
 	// sirve http plano (normal en LAN/local, donde no hace falta certificado).
 	TLSCertFile string
 	TLSKeyFile  string
+	// ProxyTrustedIPs: lista separada por comas de IPs o redes cuyas
+	// X-Forwarded-For se cree (PROXY_TRUSTED_IPS en el .env). Vacío = no se
+	// cree ninguna cabecera: la IP de una petición es su conexión TCP
+	// (R8, auditoría 2026-11-22 —el límite de fuerza bruta del POS y el
+	// ip_address de la auditoría se falsificaban con una cabecera—).
+	ProxyTrustedIPs string
 	// MasterKey es la llave maestra que cifra las contraseñas de las bases de
 	// datos de cada empresa (AES-256-GCM en internal/security). Se lee de la
 	// variable de entorno JWT_SECRET por compatibilidad con instalaciones
@@ -132,6 +138,8 @@ func Load() (*Config, error) {
 		ServerHost:  getEnv("SERVER_HOST", "127.0.0.1"),
 		TLSCertFile: getEnv("TLS_CERT_FILE", ""),
 		TLSKeyFile:  getEnv("TLS_KEY_FILE", ""),
+		// Sin proxy declarado no se cree ninguna X-Forwarded-For (R8).
+		ProxyTrustedIPs: getEnv("PROXY_TRUSTED_IPS", ""),
 		MasterKey:   getMasterKey(),
 		JWTExpiry:   jwtExpiry,
 		AppName:     getEnv("APP_NAME", "ERPGo"),

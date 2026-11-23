@@ -26,6 +26,20 @@ var loginLimiter = &rateLimiter{
 	attempts: make(map[string]*loginAttempts),
 }
 
+// hashSeneloLogin es un bcrypt constante —coste igual al de una verificación
+// real— para una contraseña que nadie va a presentar. La rama de
+// "usuario inexistente" del login lo compara antes de responder, y así el
+// tiempo de la respuesta deja de revelar qué usuarios existen (R8,
+// auditoría 2026-11-22). Se genera una sola vez por proceso en el init del
+// paquete; no es un secreto: es trabajo falso con forma de trabajo.
+var hashSeneloLogin = func() string {
+	h, err := bcryptGenerate([]byte("senelo-temporal-del-login"))
+	if err != nil {
+		return ""
+	}
+	return string(h)
+}()
+
 const maxAttempts = 5
 const lockoutDuration = 15 * time.Minute
 
@@ -123,10 +137,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if len(tenants) > 1 {
 			sess.TenantCode = ""
 			id := s.sessions.Create(sess)
-			http.SetCookie(w, &http.Cookie{
-				Name: "erpgow_session", Value: id, Path: "/",
-				HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 86400,
-			})
+			s.escribirGalletaSesion(w, r, id, 86400)
 			http.Redirect(w, r, "/switch-tenant", http.StatusFound)
 			return
 		}
@@ -137,14 +148,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 
 		id := s.sessions.Create(sess)
-		http.SetCookie(w, &http.Cookie{
-			Name:     "erpgow_session",
-			Value:    id,
-			Path:     "/",
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-			MaxAge:   86400,
-		})
+		s.escribirGalletaSesion(w, r, id, 86400)
 		// returnTo (U-2 de la auditoría): quien llegó aquí por una sesión
 		// vencida vuelve a la pantalla donde estaba, en vez del panel con el
 		// formulario perdido. safeReturnTo solo admite rutas relativas propias.
@@ -201,13 +205,35 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie("erpgow_session"); err == nil {
 		s.sessions.Delete(cookie.Value)
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:   "erpgow_session",
-		Value:  "",
-		Path:   "/",
-		MaxAge: -1,
-	})
+	s.escribirGalletaSesion(w, r, "", -1)
 	http.Redirect(w, r, "/login", http.StatusFound)
+}
+
+// escribirGalletaSesion es el ÚNICO sitio donde se construye la cookie de
+// sesión (S-5, auditoría 2026-11-22; antes cada handler la escribía a mano
+// y ninguno ponía Secure: en una tienda con Wi-Fi compartida, o con el ERP
+// publicado sin TLS por un router, la captura del tráfico entregaba el
+// panel completo durante 24 horas).
+//
+// Secure se activa cuando la petición ya es https O cuando el operador
+// configuró TLS en este servidor: el navegador solo envía la cookie por
+// canal cifrado, y quien sirve http plano en LAN (el despliegue normal de
+// PyME) no recibe una cookie que no puede usar.
+func (s *Server) escribirGalletaSesion(w http.ResponseWriter, r *http.Request, id string, maxAge int) {
+	secure := r != nil && r.TLS != nil
+	if !secure && s != nil && s.config != nil {
+		secure = strings.TrimSpace(s.config.TLSCertFile) != "" ||
+			strings.HasPrefix(strings.ToLower(strings.TrimSpace(s.config.AppURL)), "https")
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "erpgow_session",
+		Value:    id,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   maxAge,
+	})
 }
 
 // handleAPILogin is the JSON login endpoint (mobile/API).
@@ -281,6 +307,13 @@ func (s *Server) authenticateUser(r *http.Request, username, password string) (*
 		LIMIT 1`, username).
 		Scan(&userID, &userType, &passwordHash, &first, &last, &logo)
 	if err == sql.ErrNoRows {
+		// Oráculo temporal (R8, auditoría 2026-11-22): sin este detalle,
+		// "usuario inexistente" respondía ~60 ms antes que "contraseña
+		// incorrecta" (bcrypt solo corría en el segundo caso) y medir los
+		// tiempos del login bastaba para enumerar qué usuarios existen.
+		// Se ejecuta la misma comparación contra un hash señuelo: el coste
+		// es idéntico en las dos ramas y el mensaje al usuario no cambia.
+		_, _ = verificarPassword(hashSeneloLogin, password)
 		return nil, fmt.Errorf("user not found")
 	}
 	if err != nil {

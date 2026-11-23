@@ -758,6 +758,7 @@ func aiToolsJSONExcluyendo(operator bool, gate aiRoleGate, excluir []string) str
 	b, _ := json.Marshal(wire)
 	return string(b)
 }
+
 type aiRunJournal struct {
 	Actions []aiJournalAction `json:"actions"`
 
@@ -857,9 +858,9 @@ func (s *Server) aiDispatchTool(sess *SessionData, agent aiAgent, p aiToolPayloa
 			Tool:    p.Name,
 		})), nil
 	}
-	// Las acciones críticas (nómina, pagos, anulaciones) se marcan para que un
-	// humano las revise aunque el agente tenga permisos de operador. La marca
-	// viaja en el journal y se PERSISTE con la corrida (ai_task_run.needs_human).
+	// Las acciones críticas (nómina, pagos, anulaciones, avisos a terceros) se
+	// marcan para que la corrida quede en revisión humana. La marca viaja en el
+	// journal y se PERSISTE con la corrida (ai_task_run.needs_human).
 	if verdict.NeedsHuman && journal != nil {
 		journal.NeedsHuman = true
 	}
@@ -888,6 +889,22 @@ func (s *Server) aiDispatchTool(sess *SessionData, agent aiAgent, p aiToolPayloa
 	if tool.Run == nil {
 		return string(mustJSON(aiToolError{"La herramienta '" + p.Name + "' está declarada pero aún no está disponible."})), nil
 	}
+
+	// APROBACIÓN PREVIA (F5). Una acción crítica NO se ejecuta aquí: se guarda con
+	// sus argumentos exactos como propuesta pendiente y el modelo recibe «pendiente
+	// de aprobación humana». Este es el orden que faltaba: antes el guardián marcaba
+	// needs_human DESPUÉS de que el agente moviera el dinero, así que la «revisión»
+	// era un parte de daños, no una autorización.
+	//
+	// La condición la devuelve aiGuardAction (RequiereAprobacionPrevia) en vez de
+	// deducirse aquí con un `if tool.Risk == RiskCritical`: una regla copiada en
+	// cada llamador es la que se olvida en el siguiente. El humano la aplica desde
+	// POST /ai/tasks/runs/{id}/review, donde exigirPermiso comprueba que ÉL tiene el
+	// permiso real de la herramienta (ai_run_slot.go).
+	if verdict.RequiereAprobacionPrevia {
+		return s.aiDespacharComoPropuesta(sess, agent, tool, p.Args, journal), nil
+	}
+
 	out, err := tool.Run(s, sess, agent, p.Args, journal)
 	if err == nil && s.activeCompanyID() > 0 {
 		// Si el proveedor aplica cache y la operación tiene categoría
@@ -896,6 +913,46 @@ func (s *Server) aiDispatchTool(sess *SessionData, agent aiAgent, p aiToolPayloa
 		aiOpTemplateCapture(s, sess, agent, p.Name, p.Args)
 	}
 	return out, err
+}
+
+// aiDespacharComoPropuesta convierte en registro lo que el modelo pidió hacer y
+// el Nivel 1 no deja ejecutar a una máquina. Devuelve SIEMPRE el JSON para el
+// modelo: nunca un error de transporte, porque «pendiente de aprobación» es un
+// resultado válido y el agente debe poder contarlo en su informe final.
+//
+// FALLA CERRADO: si la propuesta no se puede escribir, la acción no se ejecuta.
+// La alternativa —«no pudimos registrarla, así que la hacemos»— es exactamente el
+// comportamiento que la auditoría señala (F5): el dinero se mueve sin que nadie lo
+// autorice y sin rastro que revisar.
+func (s *Server) aiDespacharComoPropuesta(sess *SessionData, agent aiAgent, tool aiToolDef,
+	args map[string]interface{}, journal *aiRunJournal) string {
+	db := s.dbForSession(sess)
+	argsJSON, mErr := json.Marshal(args)
+	if mErr != nil {
+		return string(mustJSON(aiToolBlocked{
+			Error:   "los argumentos de la acción crítica no se pudieron serializar; la acción NO se ejecutó: " + mErr.Error(),
+			Blocked: true, Rule: "aprobacion-previa", Tool: tool.Name,
+		}))
+	}
+	idem := aiIdemKey(tool.Name, journal.idemScope(), aiStrParam(args, "external_ref"), args)
+	id, err := s.aiRegistrarPropuesta(db, journal, tool.Name, string(argsJSON), idem,
+		aiMotivoAprobacionPrevia(tool.Name), s.aiAgentUsername(sess, agent))
+	if err != nil {
+		return string(mustJSON(aiToolBlocked{
+			Error: "la acción es crítica y quedó SIN ejecutar porque no se pudo registrar la propuesta para su aprobación: " +
+				err.Error() + ". No se ha movido ningún dato.",
+			Blocked: true, Rule: "aprobacion-previa", Tool: tool.Name,
+		}))
+	}
+	return string(mustJSON(map[string]interface{}{
+		"status":  "pendiente_aprobacion_humana",
+		"tool":    tool.Name,
+		"applied": false,
+		// proposal_id: el identificador con el que un humano aplica la propuesta
+		// desde la pantalla de revisión de la corrida.
+		"proposal_id": id,
+		"note":        aiMotivoAprobacionPrevia(tool.Name),
+	}))
 }
 
 // aiOpTemplateCapture extrae y guarda la plantilla de una operación resuesta.
@@ -941,17 +998,22 @@ func (s *Server) aiToolDBQuery(sess *SessionData, agent aiAgent, args map[string
 	if limit <= 0 {
 		limit = 100
 	}
-	// Guardián de escritura (SELECT puro, sin DML/DDL) MÁS guardián de lectura
-	// (las tablas tienen que ser del departamento del rol del agente).
+	// Guardián de ESCRITURA (SELECT puro, sin DML/DDL) y de LECTURA (lista negra +
+	// departamento del rol del agente), en una sola llamada a la frontera única:
+	// ai_sql_scope.go:validarSQLInformes, el mismo candado que corre en informes,
+	// preview y plantillas guardadas. Antes db.query era el único camino que
+	// aplicaba alcance, y lo hacía sobre otra cadena que la ejecutada.
 	//
-	// Antes solo pasaba el primero: un SELECT podía leer cualquier tabla de las
-	// 139 de la base, incluidas las que no le tocaban. El scopado del prompt es
-	// cortesía; esto es el candado.
+	// El alcance es el del AGENTE porque el agente es quien ejecuta la consulta. La
+	// lista negra aplica aunque sea de IT: esa es la fuga que midió la auditoría
+	// (`SELECT api_key FROM ai_providers`).
 	dept := aiDeptDelAgente(agent)
 	clean, err := aiValidarSQLConScope(sqlText, dept, limit)
 	if err != nil {
 		return string(mustJSON(aiToolError{Error: err.Error()})), nil
 	}
+	// Se ejecuta `clean`, la cadena que devolvió la frontera (normalizada y con su
+	// LIMIT), no la que escribió el modelo.
 	rows, err := s.dbForSession(sess).Query(clean)
 	if err != nil {
 		return string(mustJSON(aiToolError{"Error de SQL: " + err.Error()})), nil
@@ -1016,7 +1078,7 @@ func (s *Server) aiToolSaveTemplate(sess *SessionData, agent aiAgent, args map[s
 	if name == "" || strings.TrimSpace(definition) == "" {
 		return string(mustJSON(aiToolError{"Nombre y definition son obligatorios."})), nil
 	}
-	if err := s.validateReportDefinition(definition); err != nil {
+	if err := s.validarDefinicionInforme(sess, definition, aiDeptDelAgente(agent)); err != nil {
 		return string(mustJSON(aiToolError{Error: err.Error()})), nil
 	}
 	// Se ejecuta antes de guardar. Un informe con un total que no se puede
@@ -1025,7 +1087,11 @@ func (s *Server) aiToolSaveTemplate(sess *SessionData, agent aiAgent, args map[s
 	// que la plantilla no se guarde y el agente reciba el motivo, porque está a
 	// dos pasos de arreglarlo; si se guarda, el error aparece semanas después,
 	// cuando alguien abre un informe que nunca dio cifras.
-	if res, err := s.executeReportDefinition(sess, definition, "", ""); err == nil {
+	//
+	// La ejecución usa el MISMO núcleo que la pantalla (con el alcance del
+	// agente): así «se guardó un informe que luego no se puede ejecutar» deja de
+	// ser posible, que era el agujero de S-4.
+	if res, err := s.ejecutarDefinicion(sess, aiDeptDelAgente(agent), definition, "", "", 0); err == nil {
 		if len(res.Warnings) > 0 {
 			return string(mustJSON(aiToolError{
 				Error: "la definición no da los totales que pide: " + strings.Join(res.Warnings, "; ") +
@@ -1040,20 +1106,26 @@ func (s *Server) aiToolSaveTemplate(sess *SessionData, agent aiAgent, args map[s
 		return string(mustJSON(aiToolError{"No se pudo guardar: " + err.Error()})), nil
 	}
 	id, _ := res.LastInsertId()
-	s.aiAudit(sess, aiAgentUsername(sess, agent), "create", "custom_reports", "report_template", fmt.Sprintf("%d", id), nil, map[string]interface{}{"name": name})
+	s.aiAudit(sess, s.aiAgentUsername(sess, agent), "create", "custom_reports", "report_template", fmt.Sprintf("%d", id), nil, map[string]interface{}{"name": name})
 	return string(mustJSON(map[string]interface{}{"status": "ok", "template_id": id, "name": name})), nil
 }
 
 // aiToolRunPreview ejecuta la definición y devuelve headers/rows (sin guardar).
+//
+// Frontera ÚNICA (F4): valida con el departamento del AGENTE —el que ejecuta la
+// herramienta, no el que creó la definición— y ejecuta por el mismo núcleo, que
+// vuelve a pasar el SQL. report.run_preview era uno de los caminos que la
+// auditoría encontró sin alcance alguno.
 func (s *Server) aiToolRunPreview(sess *SessionData, agent aiAgent, args map[string]interface{}) (string, error) {
 	definition := aiStrParam(args, "definition")
 	if strings.TrimSpace(definition) == "" {
 		return string(mustJSON(aiToolError{"definition es obligatorio."})), nil
 	}
-	if err := s.validateReportDefinition(definition); err != nil {
+	dept := aiDeptDelAgente(agent)
+	if err := s.validarDefinicionInforme(sess, definition, dept); err != nil {
 		return string(mustJSON(aiToolError{Error: err.Error()})), nil
 	}
-	res, err := s.executeReportDefinition(sess, definition, today(), today())
+	res, err := s.ejecutarDefinicion(sess, dept, definition, today(), today(), 0)
 	if err != nil {
 		return string(mustJSON(aiToolError{Error: err.Error()})), nil
 	}
@@ -1119,7 +1191,7 @@ func (s *Server) aiToolInvoiceDraft(sess *SessionData, agent aiAgent, args map[s
 	if !aiValidDate(date) {
 		date = today()
 	}
-	creator := aiAgentUsername(sess, agent)
+	creator := s.aiAgentUsername(sess, agent)
 
 	tx, err := s.dbForSession(sess).Begin()
 	if err != nil {
@@ -1187,7 +1259,7 @@ func (s *Server) aiToolInvoicePost(sess *SessionData, agent aiAgent, args map[st
 	if err != nil {
 		return string(mustJSON(aiToolError{"No se pudo cargar el plan de cuentas: " + err.Error()})), nil
 	}
-	creator := aiAgentUsername(sess, agent)
+	creator := s.aiAgentUsername(sess, agent)
 	tx, err := s.dbForSession(sess).Begin()
 	if err != nil {
 		return "", err
@@ -1246,7 +1318,7 @@ func (s *Server) aiToolPaymentRecord(sess *SessionData, agent aiAgent, args map[
 	if err != nil {
 		return string(mustJSON(aiToolError{"No se pudo cargar el plan de cuentas: " + err.Error()})), nil
 	}
-	creator := aiAgentUsername(sess, agent)
+	creator := s.aiAgentUsername(sess, agent)
 	tx, err := s.dbForSession(sess).Begin()
 	if err != nil {
 		return "", err
@@ -1334,7 +1406,7 @@ func (s *Server) aiToolVoucherCreate(sess *SessionData, agent aiAgent, args map[
 	if round2(sumD) != round2(sumC) {
 		return string(mustJSON(aiToolError{fmt.Sprintf("No cuadra: débito %.2f vs crédito %.2f.", sumD, sumC)})), nil
 	}
-	creator := aiAgentUsername(sess, agent)
+	creator := s.aiAgentUsername(sess, agent)
 	tx, err := s.dbForSession(sess).Begin()
 	if err != nil {
 		return "", err
@@ -1384,7 +1456,7 @@ func (s *Server) aiUndoLastRun(sess *SessionData, agent aiAgent, runID int64) er
 			return fmt.Errorf("journal inválido: %v", err)
 		}
 	}
-	creator := aiAgentUsername(sess, agent)
+	creator := s.aiAgentUsername(sess, agent)
 	for i := len(j.Actions) - 1; i >= 0; i-- {
 		a := j.Actions[i]
 		switch a.Kind {

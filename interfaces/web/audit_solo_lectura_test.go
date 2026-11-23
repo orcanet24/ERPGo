@@ -160,7 +160,7 @@ func TestAuditoriaCadenaSigueEncadenada(t *testing.T) {
 	// …y su hash recalculado coincide con el guardado.
 	querido := computeAuditHash(filas[1].prevHash, filas[1].id, filas[1].userID, filas[1].action,
 		filas[1].module, filas[1].table, filas[1].recordID, filas[1].oldV, filas[1].newV,
-		filas[1].ip, filas[1].createdAt)
+		filas[1].ip, filas[1].createdAt, "")
 	if querido != filas[1].hash {
 		t.Errorf("hash de la fila 2 no recalcula: guardado %q, calculado %q", filas[1].hash, querido)
 	}

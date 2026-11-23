@@ -1170,14 +1170,7 @@ func (s *Server) switchTenantDo(w http.ResponseWriter, r *http.Request) {
 
 	sess.TenantCode = code
 	newID := s.sessions.Create(sess)
-	http.SetCookie(w, &http.Cookie{
-		Name:     "erpgow_session",
-		Value:    newID,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   86400,
-	})
+	s.escribirGalletaSesion(w, r, newID, 86400)
 
 	// Auditoría: el cambio de empresa se registra en la empresa destino, que
 	// es donde este usuario tiene permisos.

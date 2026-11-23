@@ -183,6 +183,20 @@ func (s *Server) aiToolQueryReport(sess *SessionData, agent aiAgent, args map[st
 		}
 	}
 
+	// query_report también pasa por la FRONTERA ÚNICA (F2/F4). El motor tipado
+	// (report_engine.go:RunReportDefinition) solo comprueba verbos con
+	// aiValidateSQLSelect, así que una plantilla guardada con
+	// `SELECT api_key FROM ai_providers` se ejecutaba por aquí sin lista negra ni
+	// alcance. Se valida con el departamento del AGENTE que consulta —no con el
+	// del que creó el informe— y se reescribe def.SQL EN MEMORIA con la cadena
+	// aprobada: lo que el motor ejecuta es exactamente lo que pasó la frontera.
+	dept := aiDeptDelAgente(agent)
+	aprobado, err := validarSQLInformes(def.SQL, dept, def.EffectiveMaxRows())
+	if err != nil {
+		return string(mustJSON(aiToolError{Error: err.Error()})), nil
+	}
+	def.SQL = aprobado
+
 	run, err := s.RunReportDefinition(s.requestForSession(sess), &def, values)
 	if err != nil {
 		return string(mustJSON(aiToolError{Error: err.Error()})), nil
