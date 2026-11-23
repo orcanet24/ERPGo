@@ -33,9 +33,14 @@ func randomPassword() (string, error) {
 }
 
 // insertIgnoreSQL returns the dialect-appropriate idempotent INSERT prefix.
+//
+// SQLite no conoce INSERT IGNORE (su forma equivalente es INSERT OR IGNORE):
+// devolver el mismo string para los dos motores era otra de las copias de la
+// mentira «SQLite único» (D-10, auditoría 2026-11-22) — sobre SQLite estas
+// siembras habrían muerto en error de sintaxis.
 func insertIgnoreSQL(dialect string) string {
 	if dialect == "sqlite" {
-		return "INSERT IGNORE INTO "
+		return "INSERT OR IGNORE INTO "
 	}
 	return "INSERT IGNORE INTO "
 }
@@ -211,6 +216,27 @@ func InitializeAdminUser(db *sql.DB, dialect, username, password string) error {
 	// roles
 	if _, err := tx.Exec(`INSERT INTO sec_role (id, type) VALUES (1,'admin'),(2,'usuario')`); err != nil {
 		return fmt.Errorf("failed to insert roles: %w", err)
+	}
+	// EL ADMIN INICIAL NACE CON PODER DE VERDAD (bootstrap, auditoría
+	// 2026-11-23): las rutas de sistema (/ai, /users, /tenants) exigen nivel
+	// 'master', y la siembra vieja dejaba al administrador sin fila en
+	// sec_userrole y a los roles con el default 'employee' —el dueño de una
+	// instalación recién creada quedaba fuera de las pantallas que necesita
+	// para asignárselo (medido en arranque limpio: /ai/agents devolvía 403
+	// con la pantalla de tokens MCP vacía al otro lado). Se siembra el rol
+	// maestro y se ata al usuario 1 en la MISMA transacción: semilla y
+	// autoridad no pueden quedar a mitades.
+	if _, err := tx.Exec(`INSERT INTO sec_role (type, level, description, is_system)
+		VALUES ('super', 'master', 'Super Administrador del sistema', 1)`); err != nil {
+		return fmt.Errorf("no se pudo sembrar el rol maestro: %w", err)
+	}
+	var masterRoleID int64
+	if err := tx.QueryRow(`SELECT id FROM sec_role WHERE level = 'master' ORDER BY id LIMIT 1`).Scan(&masterRoleID); err != nil {
+		return fmt.Errorf("no se encontró el rol maestro recién sembrado: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO sec_userrole (user_id, roleid, createby, createdate)
+		VALUES ('1', ?, 'bootstrap', ?)`, masterRoleID, time.Now().Format("2006-01-02 15:04:05")); err != nil {
+		return fmt.Errorf("no se pudo atar el rol maestro al administrador: %w", err)
 	}
 
 	// walking customer

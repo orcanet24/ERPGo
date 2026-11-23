@@ -206,8 +206,20 @@ Y corregidos con su prueba, porque la política era causa-raíz:
 - **`getSettings()` devolvía nil** contra veinte llamadores `st.Web.X`.
 - **Traductor SQLite mentía en silencio** (causa de que «todo verde en pruebas» no probara la vida real): statements con cabecera de comentario se ejecutaban CRUDOS (pos_sale_sync nunca nacía), no traducía ENUM (stock_movement tampoco), dejaba pasar COLLATE suelto, y desconocía la clave heredada `ALTER…MODIFY col AUTO_INCREMENT`. Warnings de la cadena: 325 → 42, archivos aplicados: 30 → 54 (`1b9ff38c`, `7cb3fe2a`).
 - **`INSERT IGNORE` en rutas compartidas** (ensureFiscalSeries, reservarConsecutivoTx): exclusiva de MySQL que tiraba en pruebas; reescrita portable (`1b9ff38c`, `7cb3fe2a`).
-- **Ledger de migraciones con TEXT DEFAULT ''** (ilegal en MySQL → 0 archivos aplicados en silencio sobre bases nuevas por esa ruta) (`519ef578`).
+PLACEHOLDER → 0 archivos aplicados en silencio sobre bases nuevas por esa ruta) (`519ef578`).
 
+- **Instalación nueva nacía ingobernable** (destapado al verificar en vivo la
+  pantalla MCP contra una base de cero): la siembra creaba roles sin nivel
+  'master' y NUNCA ataba al admin en sec_userrole —las rutas de sistema
+  (/ai, /users, /tenants) exigen master, y el dueño recién instalado recibía
+  403 en las pantallas que necesita para asignárselo; los despliegues
+  existentes lo tapaban a mano con UPDATE, que es la marca de agua del
+  agujero—. Corregido en la SIEMBRA (admin.go: rol 'super' master + vinculo
+  al usuario admin en la misma transaccion) y con migración para las bases ya
+  creadas (`34dae90e`, `schema_z_admin_master.sql`). Demostrado dos veces en
+  vivo: arranque limpio sin tocar SQL → login → /ai/agents 200 con el panel
+  MCP. De paso, insertIgnoreSQL del seed dijo por fin la verdad del dialecto
+  SQLite (INSERT OR IGNORE).
 ## Lo que NO se tocó (decisión documentada, no olvido)
 
 - N+1 de stock en listados y dashboard con escaneo completo (rendimiento; no corrompe datos; requiere diseño de índices por-tenant medido en producción).
