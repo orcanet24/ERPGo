@@ -31,9 +31,18 @@ import (
 // "venta", que es el valor histórico de todo lo que ya existía.
 func (s *Server) tipoItemProducto(r *http.Request, productID int) string {
 	var tipo sql.NullString
+	// COINCIDENCIA DOBLE (D-4, pruebas de ajuste/reversión): los llamadores
+	// llegan con dos mundos distintos metidos en el mismo int —el CÓDIGO
+	// numérico del producto (product_id, varchar) en los formularios viejos,
+	// y el id interno en quien ya lo resolvió con idInternoProducto—. Con
+	// `WHERE product_id = ?` a secas, un código alfanumérico ya resuelto a id
+	// interno no encontraba su fila y todo producto era «venta» por defecto:
+	// los servicios descontaban stock y los suministros se colaban en las
+	// ventas. Comparar por código O por id cubre ambos sin tocar llamadores.
 	err := s.dbFor(r).QueryRow(
-		`SELECT IFNULL(item_type,'venta') FROM product_information WHERE product_id = ?`,
-		productID).Scan(&tipo)
+		`SELECT IFNULL(NULLIF(item_type,''),'venta') FROM product_information
+		 WHERE product_id = CAST(? AS CHAR) OR id = ? LIMIT 1`,
+		productID, productID).Scan(&tipo)
 	if err != nil {
 		return ItemVenta
 	}

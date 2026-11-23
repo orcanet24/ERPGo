@@ -164,7 +164,7 @@ func digitosDeNumero(s string) int64 {
 // manda un nombre nuevo, NO se asume divisa (asumir cobraría IGTF de más).
 func esMetodoDivisa(m string) bool {
 	switch strings.TrimSpace(m) {
-	case "zelle", "paypal", "crypto", "cripto", "binance", "usdt", "usd", "efectivo_usd", "dolar", "dólar":
+	case "zelle", "paypal", "crypto", "cripto", "binance", "usdt", "usd", "efectivo_usd", "cash_usd", "dolar", "dólar":
 		return true
 	}
 	return false

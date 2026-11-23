@@ -26,6 +26,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -277,6 +278,28 @@ func destinoDeRenglonCompra(pre *PredefineAccount, tipoItem, almacen string, cue
 // conexión como una transacción.
 type consultadorStock interface {
 	QueryRow(query string, args ...any) *sql.Row
+}
+
+// idInternoProducto resuelve el id ENTERO interno de un producto a partir del
+// identificador que trae el formulario o el payload: puede ser el código
+// (product_information.product_id, varchar) o el id en texto. El kardex
+// (stock_movement.product_id) es entero: hacer Atoi al código era la trampa
+// que dejaba los ajustes de productos alfanuméricos sin movimiento de stock
+// —lo destapó la prueba de reversión D-4, auditoría 2026-11-22, y estaba
+// igual en la venta del panel y en el consumo interno—.
+func idInternoProducto(q consultadorStock, identificador string) int {
+	identificador = strings.TrimSpace(identificador)
+	if identificador == "" {
+		return 0
+	}
+	var id int64
+	if err := q.QueryRow(`SELECT id FROM product_information WHERE product_id = ?`, identificador).Scan(&id); err == nil && id > 0 {
+		return int(id)
+	}
+	if n, err := strconv.ParseInt(identificador, 10, 64); err == nil {
+		return int(n) // catálogos antiguos donde el código ES el número
+	}
+	return 0
 }
 
 // stockPorMovimientos calcula el stock real de un producto.

@@ -662,8 +662,16 @@ func (s *Server) loadSettings(db *sql.DB) *AppSettings {
 
 func (s *Server) getSettings() *AppSettings {
 	s.settingsMu.RLock()
-	defer s.settingsMu.RUnlock()
-	return s.settings
+	st := s.settings
+	s.settingsMu.RUnlock()
+	if st == nil {
+		// Nunca nil: veinte llamadores hacen st.Web.X sin comprobar, y un
+		// arranque parcial (o un servidor de prueba sin company_settings)
+		// los reventaba. El valor por defecto es el mismo que carga
+		// loadSettings cuando la tabla está vacía.
+		st = &AppSettings{Web: WebSetting{Currency: "$"}}
+	}
+	return st
 }
 
 // Start runs the HTTP server with graceful timeouts.

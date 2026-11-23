@@ -537,7 +537,7 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 		// Un servicio no tiene costo de mercancía: su costo es el gasto en que
 		// se incurrió, que ya está en su propia cuenta. Sumarlo aquí inventaba
 		// un costo de ventas que no existe.
-		pidInt, _ := strconv.Atoi(pid)
+		pidInt := idInternoProducto(tx, pid)
 		if !itemMueveStock(s.tipoItemProducto(r, pidInt)) {
 			continue
 		}
@@ -792,7 +792,7 @@ func (s *Server) invoiceSave(w http.ResponseWriter, r *http.Request) {
 			desc = descriptions[i]
 		}
 
-		pidInt, _ := strconv.Atoi(pid)
+		pidInt := idInternoProducto(tx, pid)
 
 		// Un suministro de consumo interno no se vende: si aparece en una
 		// factura es un error de carga, no una venta. Se detiene aquí en vez de
@@ -929,7 +929,7 @@ func (s *Server) posBarcodeLookup(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "Producto no encontrado", 404)
 		return
 	}
-	pidInt, _ := strconv.Atoi(pid)
+	pidInt := idInternoProducto(s.dbFor(r), pid)
 	stock = s.stockForProduct(r, pidInt)
 	writeJSON(w, map[string]interface{}{
 		"id": pid, "name": name, "price": price, "stock": stock,

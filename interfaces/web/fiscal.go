@@ -298,8 +298,17 @@ func reservarConsecutivoTx(tx *sql.Tx, nombre string, piso int64) (int64, error)
 		// Camino frío: la fila no está (base migrada antes de que existiera la
 		// tabla, o alguien la borró). Se crea y se reserva otra vez. En régimen
 		// normal la siembra la hace la migración.
-		if _, err := tx.Exec(`INSERT IGNORE INTO pos_counters (name, value, updated_at) VALUES (?, ?, ?)`, nombre, piso, now()); err != nil {
-			return 0, fmt.Errorf("creando el contador %s: %w", nombre, err)
+		//
+		// INSERT pelado con duplicado tolerado —no INSERT IGNORE, que es
+		// exclusiva de MySQL y tiraba esta ruta en SQLite, donde el mismo
+		// SQL se prueba (D-10)—: si la fila apareció entre la lectura y la
+		// escritura, el error de única es exactamente "ya está", y la
+		// segunda reserva lo confirma.
+		if _, err := tx.Exec(`INSERT INTO pos_counters (name, value, updated_at) VALUES (?, ?, ?)`, nombre, piso, now()); err != nil {
+			msg := strings.ToLower(err.Error())
+			if !strings.Contains(msg, "duplicate") && !strings.Contains(msg, "unique") && !strings.Contains(msg, "constraint") {
+				return 0, fmt.Errorf("creando el contador %s: %w", nombre, err)
+			}
 		}
 		valor, err = reservarUnaVez(tx, nombre)
 	}

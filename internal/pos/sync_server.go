@@ -61,6 +61,12 @@ type SyncSaleRequest struct {
 	Currency     string          `json:"currency"`
 	ExchangeRate float64         `json:"exchange_rate"`
 	IgtfAmount   float64         `json:"igtf_amount"`
+	// CreatedAt: la fecha-hora LOCAL de la caja en el momento del cobro
+	// (RFC3339 con offset —la acordamos con el terminal en su fase 4—). El
+	// ERP la usa para la fecha de la factura: now() del servidor reclasificaba
+	// como «de hoy» una venta sincronizada a medianoche y descuadraba el corte
+	// diario del arqueo. Vacío o mal formato → fecha del servidor (hoy).
+	CreatedAt string `json:"created_at,omitempty"`
 }
 
 // SyncSaleResponse es la respuesta al sincronizar una venta.

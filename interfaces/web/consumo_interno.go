@@ -171,7 +171,7 @@ func (s *Server) consumoSave(w http.ResponseWriter, r *http.Request) {
 		if pid == "" || qty <= 0 {
 			continue
 		}
-		pidInt, _ := strconv.Atoi(pid)
+		pidInt := idInternoProducto(tx, pid)
 		var nombre, tipo sql.NullString
 		if err := tx.QueryRow(`SELECT product_name, IFNULL(item_type,'venta') FROM product_information WHERE product_id = ?`, pid).
 			Scan(&nombre, &tipo); err != nil {

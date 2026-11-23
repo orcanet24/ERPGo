@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"erpgo/internal/pos"
 )
@@ -40,6 +41,17 @@ func (s *Server) registrarVentaTerminal(db *sql.DB, req *pos.SyncSaleRequest) (*
 		return nil, fmt.Errorf("sin base de empresa para la venta del terminal")
 	}
 	fecha := today()
+	// Fecha del COBRO, no de la sincronización: el terminal manda su hora
+	// local en created_at (RFC3339 con offset, acordado en su fase 4). Se
+	// conserva el reloj de pared del ticket; si falta o no parsea, se usa el
+	// hoy del servidor y la venta no se pierde por un dato cosmético.
+	if raw := strings.TrimSpace(req.CreatedAt); raw != "" {
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			fecha = t.Format("2006-01-02 15:04:05")
+		} else if t, err := time.Parse("2006-01-02 15:04:05", raw); err == nil {
+			fecha = t.Format("2006-01-02 15:04:05")
+		}
+	}
 
 	// REFERENCIA DE CONTINGENCIA: la caja sin imprenta entregó un ticket con
 	// numeración propia; el documento ERP es de contingencia (Providencia

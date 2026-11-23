@@ -44,23 +44,26 @@ $(function () {
             { data: 'items', className: 'text-center' },
             { data: 'note' },
             { data: null, orderable: false, searchable: false, render: function (d) {
-                return '<a class="btn btn-info btn-xs" href="/adjustment/details/' + d.id + '" title="Ver"><i class="fa fa-eye"></i></a> ' +
-                    '<button class="btn btn-danger btn-xs do-del" data-id="' + d.id + '" title="Eliminar"><i class="fa fa-trash"></i></button>';
+                return '<a class="btn btn-link btn-xs" href="/adjustment/details/' + d.id + '" title="Ver detalle"><i class="fa fa-eye"></i> Ver</a> ' +
+                    // D-4 (auditoría 2026-11-22): no se ELIMINA —eso borraba
+                    // kardex y mayor—; se revierte creando el ajuste inverso.
+                    '<button class="btn btn-default btn-xs do-revert" data-id="' + d.id + '" data-adj="' + d.adjustment_no + '" title="Revertir (crea el ajuste inverso)"><i class="fa fa-undo"></i></button>';
             }}
         ]
     });
 
-    $('#adjustmentTable').on('click', '.do-del', function () {
+    $('#adjustmentTable').on('click', '.do-revert', function () {
         var id = $(this).data('id');
+        var adj = $(this).data('adj') || ('#' + id);
         swal({
-            title: "¿Eliminar ajuste #" + id + "?",
-            text: "Se revertirán los cambios en stock y se eliminará el ajuste.",
+            title: "¿Revertir el ajuste " + adj + "?",
+            text: "Se creará el ajuste inverso con su asiento en la fecha de hoy. El ajuste original queda visible: la contabilidad no borra, corrige.",
             type: "warning",
             showCancelButton: true,
-            confirmButtonText: "Eliminar",
+            confirmButtonText: "Revertir",
             confirmButtonColor: ERPGo.appearance.css("--erp-danger", "#9c3333")
         }, function () {
-            $.post('/adjustment/delete/' + id, function (r) {
+            $.post('/adjustment/revert/' + id, function (r) {
                 if (r.status == 1) { toastr.success(r.msg); table.ajax.reload(); }
                 else toastr.error(r.error || 'Error');
             }).fail(function (x) { toastr.error(x.responseJSON ? x.responseJSON.error : 'Error'); });

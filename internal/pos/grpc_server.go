@@ -707,6 +707,14 @@ func (s *GRPCServer) processSale(db *sql.DB, terminalID string, sale *pb.SaleTra
 		Total:        sale.GetTotal(),
 		FiscalNumber: sale.GetOfflineControlNo(),
 	}
+	// El protocolo gRPC lleva el instante de cobro como epoch (int64). Se
+	// pasa al motor en RFC3339 —el formato del contrato HTTP— para que la
+	// factura lleve la FECHA DEL COBRO y no la de sincronización (caja que
+	// cobra a las 23:58 y sincroniza a las 00:05: la venta es del día
+	// anterior, y el arqueo diario del corte tiene que decirlo).
+	if ts := sale.GetCreatedAt(); ts > 0 {
+		req.CreatedAt = time.Unix(ts, 0).Format(time.RFC3339)
+	}
 	for _, it := range sale.GetItems() {
 		req.Items = append(req.Items, SaleItem{
 			ProductCode: it.GetProductCode(),

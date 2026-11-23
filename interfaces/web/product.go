@@ -383,7 +383,7 @@ func (s *Server) productAutocomplete(w http.ResponseWriter, r *http.Request) {
 // productStockCheck: available quantity of a product.
 func (s *Server) productStockCheck(w http.ResponseWriter, r *http.Request) {
 	pid := r.FormValue("product_id")
-	pidInt, _ := strconv.Atoi(pid)
+	pidInt := idInternoProducto(s.dbFor(r), pid)
 	stock := s.stockForProduct(r, pidInt)
 	writeJSON(w, map[string]interface{}{"available": stock})
 }

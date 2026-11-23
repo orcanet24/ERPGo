@@ -3,6 +3,7 @@ package web
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,7 +17,13 @@ func (s *Server) registerAdjustmentRoutes() {
 	s.mux.HandleFunc("GET /adjustment/new", s.adjustmentForm)
 	s.mux.HandleFunc("POST /adjustment/save", s.adjustmentSave)
 	s.mux.HandleFunc("GET /adjustment/details/{id}", s.adjustmentDetails)
-	s.mux.HandleFunc("POST /adjustment/delete/{id}", s.adjustmentDelete)
+	// POST /adjustment/revert/{id} reemplaza a /adjustment/delete/{id}
+	// (D-4, auditoría atómica 2026-11-22): el borrado físico destruía el
+	// kardex y el mayor de un ajuste —aunque el período estuviera cerrado—
+	// y mentía contra la política del propio README ("los registros
+	// históricos nunca se modifican"). Un ajuste mal se CORRIGE con su
+	// reverso, que deja las dos mitades visibles.
+	s.mux.HandleFunc("POST /adjustment/revert/{id}", s.adjustmentRevert)
 }
 
 func (s *Server) adjustmentList(w http.ResponseWriter, r *http.Request) {
@@ -119,60 +126,26 @@ func (s *Server) adjustmentForm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "adjustment_form.html", data)
 }
 
-// adjustmentSave creates an inventory adjustment and adjusts stock.
-//   - ADD: inserts a positive row in product_purchase_details (batch_id='ADJ-ADD-{n}')
-//   - REMOVE: inserts a negative row in product_purchase_details (batch_id='ADJ-REM-{n}')
-//     Also generates accounting vouchers (adjustment expense/income vs inventory).
-func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
-	sess := s.sessionFromRequest(r)
-	if sess == nil {
-		jsonError(w, "Sesión requerida", 401)
-		return
-	}
-	createBy := sessUserID(sess)
+// ajusteRenglón es una línea de ajuste, compartida por la ALTA (que la saca
+// del formulario) y la REVERSIÓN (que la saca del detalle original con el
+// tipo invertido — D-4, auditoría atómica 2026-11-22—).
+type ajusteRenglón struct {
+	PID    string
+	Type   string // add | remove
+	Qty    float64
+	Batch  string
+	Expiry string
+	Reason string
+}
 
-	r.ParseMultipartForm(32 << 20)
-
-	productIDs := r.Form["product_id"]
-	types := r.Form["adjust_type"]
-	quantities := r.Form["quantity"]
-	batchIDs := r.Form["batch_id"]
-	expiryDates := r.Form["expiry_date"]
-	reasons := r.Form["reason"]
-
-	if len(productIDs) == 0 {
-		jsonError(w, "Agregue al menos un producto", 400)
-		return
-	}
-
-	reference := strings.TrimSpace(r.FormValue("reference"))
-	note := strings.TrimSpace(r.FormValue("note"))
-	warehouse := strings.TrimSpace(r.FormValue("warehouse_id"))
-	date := orDefault(r.FormValue("adjustment_date"), today())
-
-	tx, err := s.dbFor(r).Begin()
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Adjustment number: MAX(id)+1 formatted as ADJ-{n}
-	var nextID int64
-	if err := tx.QueryRow(`SELECT IFNULL(MAX(id),0)+1 FROM store_adjustment`).Scan(&nextID); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	adjNo := fmt.Sprintf("ADJ-%d", nextID)
-
-	// Insert adjustment header
-	if _, err := tx.Exec(`
-		INSERT INTO store_adjustment (adjustment_no, date, warehouse_id, reference, note, created_by, created_at, status)
-		VALUES (?,?,?,?,?,?,?,1)`,
-		adjNo, date, warehouse, reference, note, createBy, now()); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
+// ajustar escribe el ajuste —cabecera, detalles, kardex y asientos— dentro
+// de la transacción que recibe el llamador. Alta y reversión comparten así
+// LA MISMA regla de escritura: duplicar el bloque era la segunda copia que
+// se queda atrás (patrón que el propio repo persigue desde la fase fiscal).
+// Si un paso falla responde aquí y devuelve false; el defer del llamador
+// deshace todo, y no queda ni kardex sin cabecera ni asiento sin kardex.
+func (s *Server) ajustar(w http.ResponseWriter, r *http.Request, tx *sql.Tx, createBy string,
+	nextID int64, adjNo, date, warehouse, reference, note string, renglones []ajusteRenglón) bool {
 
 	// Process each line
 	type adjLine struct {
@@ -186,30 +159,32 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 		Reason    string
 	}
 	var lines []adjLine
-	for i, pid := range productIDs {
-		qty := 0.0
-		adjType := "add"
-		if i < len(quantities) {
-			qty = parseMoney(quantities[i])
-		}
-		if i < len(types) {
-			adjType = types[i]
+
+	// Insert adjustment header
+	if _, err := tx.Exec(`
+		INSERT INTO store_adjustment (adjustment_no, date, warehouse_id, reference, note, created_by, created_at, status)
+		VALUES (?,?,?,?,?,?,?,1)`,
+		adjNo, date, warehouse, reference, note, createBy, now()); err != nil {
+		jsonError(w, err.Error(), 500)
+		return false
+	}
+
+	for _, rg := range renglones {
+		pid := rg.PID
+		qty := rg.Qty
+		adjType := rg.Type
+		if adjType == "" {
+			adjType = "add"
 		}
 		if qty <= 0 {
 			continue
 		}
-		batch := ""
-		if i < len(batchIDs) {
-			batch = batchIDs[i]
-		}
+		batch := rg.Batch
 		expiry := interface{}(nil)
-		if i < len(expiryDates) && expiryDates[i] != "" {
-			expiry = expiryDates[i]
+		if rg.Expiry != "" {
+			expiry = rg.Expiry
 		}
-		reason := ""
-		if i < len(reasons) {
-			reason = reasons[i]
-		}
+		reason := rg.Reason
 
 		// Store adjustment detail
 		if _, err := tx.Exec(`
@@ -217,7 +192,7 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 			VALUES (?,?,?,?,?,?)`,
 			adjNo, pid, batch, expiry, qty, adjType); err != nil {
 			jsonError(w, err.Error(), 500)
-			return
+			return false
 		}
 
 		// Un ajuste NO es una compra. Antes se escribía una fila en
@@ -225,8 +200,21 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 		// y eso contaminaba el costo promedio y el historial de compras. Ahora
 		// se escribe en `stock_movement`, que es el libro real del inventario,
 		// con el almacén y el costo del producto.
-		pidInt, _ := strconv.Atoi(pid)
-		tipo := s.tipoItemProducto(r, pidInt)
+		//
+		// El identificador del formulario puede ser el código (varchar) o el
+		// id interno en texto: stock_movement.product_id es ENTERO, así que
+		// el viejo `strconv.Atoi(pid)` mandaba los códigos alfanuméricos al
+		// producto 0 —el ajuste se registraba "bien" y el stock no se movía
+		// (lo destapó la prueba de reversión D-4)—. Se resuelve el id real;
+		// sin resolución no hay kardex posible y se dice, no se finge.
+		pidInt := idInternoProducto(tx, pid)
+		if pidInt == 0 {
+			jsonError(w, fmt.Sprintf("el producto %q no existe en el catálogo: el ajuste no puede tocar el inventario", pid), http.StatusBadRequest)
+			return false
+		}
+		var tipoRaw sql.NullString
+		_ = tx.QueryRow(`SELECT IFNULL(NULLIF(item_type,''), 'venta') FROM product_information WHERE id = ?`, pidInt).Scan(&tipoRaw)
+		tipo := normalizarTipoItem(tipoRaw.String)
 		if !itemMueveStock(tipo) {
 			continue // un servicio no tiene existencias que ajustar
 		}
@@ -248,7 +236,7 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := insertStockMovement(tx, mov, pidInt, alm, qty, costo, "adjustment", int(nextID), adjNo, date); err != nil {
 			jsonError(w, err.Error(), 500)
-			return
+			return false
 		}
 
 		lines = append(lines, adjLine{ProductID: pid, Type: adjType, Quantity: qty, Tipo: tipo,
@@ -259,7 +247,7 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 	pre, err := s.predefineAccount(r)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
-		return
+		return false
 	}
 
 	// Los importes se valorizan al costo: antes se sumaba la CANTIDAD como si
@@ -299,7 +287,7 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 	for _, c := range requeridas {
 		if c.Codigo == 0 {
 			jsonError(w, fmt.Sprintf("El ajuste necesita la cuenta «%s». Asígnela en Configuración → Cuentas por defecto.", c.Papel), 400)
-			return
+			return false
 		}
 	}
 
@@ -314,7 +302,7 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 			Debit: prodAdd,
 		}, createBy); err != nil {
 			jsonError(w, err.Error(), 500)
-			return
+			return false
 		}
 	}
 	if prodRemove > 0 {
@@ -326,7 +314,7 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 			Debit: prodRemove,
 		}, createBy); err != nil {
 			jsonError(w, err.Error(), 500)
-			return
+			return false
 		}
 	}
 	// Consumo interno: su inventario es un activo aparte y su gasto no es costo
@@ -340,7 +328,7 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 			Debit: consAdd,
 		}, createBy); err != nil {
 			jsonError(w, err.Error(), 500)
-			return
+			return false
 		}
 	}
 	if consRemove > 0 {
@@ -352,8 +340,92 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 			Debit: consRemove,
 		}, createBy); err != nil {
 			jsonError(w, err.Error(), 500)
-			return
+			return false
 		}
+	}
+
+	return true
+}
+
+// reservarAjusteNoTx reserva el correlativo de ajuste con el contador con
+// bloqueo (F-3): MAX(id)+1 sin reserva dejaba a dos ajustes simultáneos con
+// el mismo ADJ-, y el detalle huérfano se atribuía al primero. El suelo es
+// el MAX(id) actual, para no volver a emitir nunca un número heredado.
+func reservarAjusteNoTx(tx *sql.Tx) (int64, string, error) {
+	var piso int64
+	if err := tx.QueryRow(`SELECT IFNULL(MAX(id),0) FROM store_adjustment`).Scan(&piso); err != nil {
+		return 0, "", err
+	}
+	valor, err := reservarConsecutivoTx(tx, "store_adjustment", piso)
+	if err != nil {
+		return 0, "", err
+	}
+	return valor, fmt.Sprintf("ADJ-%d", valor), nil
+}
+
+func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionFromRequest(r)
+	if sess == nil {
+		jsonError(w, "Sesión requerida", 401)
+		return
+	}
+	createBy := sessUserID(sess)
+
+	r.ParseMultipartForm(32 << 20)
+
+	productIDs := r.Form["product_id"]
+	types := r.Form["adjust_type"]
+	quantities := r.Form["quantity"]
+	batchIDs := r.Form["batch_id"]
+	expiryDates := r.Form["expiry_date"]
+	reasons := r.Form["reason"]
+
+	if len(productIDs) == 0 {
+		jsonError(w, "Agregue al menos un producto", 400)
+		return
+	}
+
+	renglones := make([]ajusteRenglón, 0, len(productIDs))
+	for i, pid := range productIDs {
+		rg := ajusteRenglón{PID: pid, Type: "add"}
+		if i < len(quantities) {
+			rg.Qty = parseMoney(quantities[i])
+		}
+		if i < len(types) && types[i] != "" {
+			rg.Type = types[i]
+		}
+		if i < len(batchIDs) {
+			rg.Batch = batchIDs[i]
+		}
+		if i < len(expiryDates) {
+			rg.Expiry = expiryDates[i]
+		}
+		if i < len(reasons) {
+			rg.Reason = reasons[i]
+		}
+		renglones = append(renglones, rg)
+	}
+
+	reference := strings.TrimSpace(r.FormValue("reference"))
+	note := strings.TrimSpace(r.FormValue("note"))
+	warehouse := strings.TrimSpace(r.FormValue("warehouse_id"))
+	date := orDefault(r.FormValue("adjustment_date"), today())
+
+	tx, err := s.dbFor(r).Begin()
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	nextID, adjNo, err := reservarAjusteNoTx(tx)
+	if err != nil {
+		jsonError(w, "no se pudo reservar el número de ajuste: "+err.Error(), 500)
+		return
+	}
+
+	if !s.ajustar(w, r, tx, createBy, nextID, adjNo, date, warehouse, reference, note, renglones) {
+		return
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -362,26 +434,143 @@ func (s *Server) adjustmentSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Autoapprove vouchers
-	st := s.settingsFor(r)
-	if st.Web.IsAutoapprove == 1 {
-		rows, _ := s.dbFor(r).Query(`SELECT VNo FROM acc_vaucher WHERE referenceNo = ? AND status = 0`, adjNo)
-		var vnos []string
-		if rows != nil {
-			for rows.Next() {
-				var v string
-				_ = rows.Scan(&v)
-				vnos = append(vnos, v)
-			}
-			rows.Close()
-		}
-		for _, v := range vnos {
-			_ = s.approveVoucher(r, v, createBy)
-		}
-	}
+	s.aprobarVouchersDeAjuste(r, adjNo, createBy)
 
 	writeJSON(w, map[string]interface{}{
 		"status": 1, "msg": "Ajuste registrado", "adjustment_no": adjNo,
 	})
+}
+
+// adjustmentRevert corrige un ajuste con su REVERSO (D-4, auditoría
+// atómica 2026-11-22). El /adjustment/delete que existía hacía DELETEs en
+// acc_transaction, acc_vaucher, stock_movement y detalles —destruyendo
+// histórico contable, aunque el período estuviera cerrado, y contradiciendo
+// la política del README—; además arrastraba un DELETE muerto a
+// product_purchase_details con un número de ajuste en la columna de compra.
+// Ahora: el ajuste original queda intacto y se registra un ajuste nuevo,
+// en la fecha de HOY (el mes cerrado no se toca), con los tipos invertidos
+// y su asiento, enlazado por reference = REVERTIR:<adjNo original>, que es
+// además la guarda anti-doble-reversión.
+func (s *Server) adjustmentRevert(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionFromRequest(r)
+	if sess == nil {
+		jsonError(w, "Sesión requerida", 401)
+		return
+	}
+	createBy := sessUserID(sess)
+
+	id := r.PathValue("id")
+
+	tx, err := s.dbFor(r).Begin()
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var adjOrig, warehouseOrig sql.NullString
+	if err := tx.QueryRow(`SELECT adjustment_no, IFNULL(warehouse_id,'') FROM store_adjustment WHERE id = ? AND status = 1`, id).
+		Scan(&adjOrig, &warehouseOrig); err != nil {
+		jsonError(w, "Ajuste no encontrado (o ya está inactivo)", http.StatusNotFound)
+		return
+	}
+
+	// Guarda anti-doble-reversión: si ya existe el reverso activo de este
+	// ajuste, no se crea un segundo.
+	var yaRevertido int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM store_adjustment WHERE status = 1 AND reference = CONCAT('REVERTIR:', ?)`,
+		adjOrig.String).Scan(&yaRevertido); err != nil {
+		jsonError(w, "no se pudo comprobar la reversión previa: "+err.Error(), 500)
+		return
+	}
+	if yaRevertido > 0 {
+		jsonError(w, "El ajuste "+adjOrig.String+" ya fue revertido", http.StatusConflict)
+		return
+	}
+
+	rows, err := tx.Query(`SELECT product_id, IFNULL(batch_id,''), IFNULL(expiry_date,''), quantity, type
+		FROM store_adjustment_details WHERE adjustment_no = ?`, adjOrig.String)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	var renglones []ajusteRenglón
+	for rows.Next() {
+		var pid, batch, expiry, tipo string
+		var qty float64
+		if err := rows.Scan(&pid, &batch, &expiry, &qty, &tipo); err != nil {
+			continue
+		}
+		invertido := "remove"
+		if tipo == "remove" {
+			invertido = "add"
+		}
+		renglones = append(renglones, ajusteRenglón{
+			PID: pid, Type: invertido, Qty: qty, Batch: batch, Expiry: expiry,
+			Reason: "Reversión de " + adjOrig.String,
+		})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		jsonError(w, "leyendo el detalle original: "+err.Error(), 500)
+		return
+	}
+	if len(renglones) == 0 {
+		jsonError(w, "El ajuste "+adjOrig.String+" no tiene renglones que revertir", http.StatusConflict)
+		return
+	}
+
+	nextID, adjNo, err := reservarAjusteNoTx(tx)
+	if err != nil {
+		jsonError(w, "no se pudo reservar el número del reverso: "+err.Error(), 500)
+		return
+	}
+
+	note := "Reversión del ajuste " + adjOrig.String
+	if !s.ajustar(w, r, tx, createBy, nextID, adjNo, today(), warehouseOrig.String,
+		"REVERTIR:"+adjOrig.String, note, renglones) {
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	s.aprobarVouchersDeAjuste(r, adjNo, createBy)
+
+	// El original NO se marca inactivo: dos documentos visibles (ajuste y
+	// reverso) es lo que deja el rastro contable íntegro; "ocultar" el
+	// original era la mitad del borrado viejo que quedaba disfrazada.
+	writeJSON(w, map[string]interface{}{
+		"status": 1, "msg": "Ajuste revertido con " + adjNo, "adjustment_no": adjNo,
+		"redirect": saveRedirect(r, "/adjustment/list"),
+	})
+}
+
+// aprobarVouchersDeAjuste autoaprueba los vouchers recién creados cuando la
+// empresa tiene autoaprobación. Compartido por alta y reversión; el error de
+// cada aprobación se loguea (un asiento que no se aprobó es visible en el
+// cierre como pendiente, no invisible).
+func (s *Server) aprobarVouchersDeAjuste(r *http.Request, adjNo, createBy string) {
+	st := s.settingsFor(r)
+	if st.Web.IsAutoapprove != 1 {
+		return
+	}
+	rows, _ := s.dbFor(r).Query(`SELECT VNo FROM acc_vaucher WHERE referenceNo = ? AND status = 0`, adjNo)
+	var vnos []string
+	if rows != nil {
+		for rows.Next() {
+			var v string
+			_ = rows.Scan(&v)
+			vnos = append(vnos, v)
+		}
+		rows.Close()
+	}
+	for _, v := range vnos {
+		if err := s.approveVoucher(r, v, createBy); err != nil {
+			log.Printf("ajuste %s: voucher %s no se pudo autoaprobar: %v", adjNo, v, err)
+		}
+	}
 }
 
 func (s *Server) adjustmentDetails(w http.ResponseWriter, r *http.Request) {
@@ -432,61 +621,6 @@ func (s *Server) adjustmentDetails(w http.ResponseWriter, r *http.Request) {
 		"Currency":    st.Web.Currency,
 		"CompanyName": st.Company.CompanyName,
 	})
-}
-
-func (s *Server) adjustmentDelete(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	var adjNo sql.NullString
-	err := s.dbFor(r).QueryRow(`SELECT adjustment_no FROM store_adjustment WHERE id = ? AND status = 1`, id).Scan(&adjNo)
-	if err != nil {
-		jsonError(w, "Ajuste no encontrado", 404)
-		return
-	}
-
-	tx, err := s.dbFor(r).Begin()
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Remove stock adjustments. Los movimientos viven en stock_movement desde
-	// que el stock se calcula de ahí: sin borrarlos, el ajuste desaparecería del
-	// listado pero seguiría sumando (o restando) en el inventario.
-	for _, q := range []string{
-		`DELETE FROM acc_transaction WHERE referenceNo = ?`,
-		`DELETE FROM acc_vaucher WHERE referenceNo = ?`,
-		`DELETE FROM product_purchase_details WHERE purchase_id = ?`,
-		`DELETE FROM store_adjustment_details WHERE adjustment_no = ?`,
-	} {
-		if _, err := tx.Exec(q, adjNo.String); err != nil {
-			jsonError(w, fmt.Sprintf("limpiar ajuste: %v", err), 500)
-			return
-		}
-	}
-	// Los movimientos de stock se identifican por el id del ajuste, no por su
-	// número: el número es texto y reference_id es numérico.
-	if _, err := tx.Exec(`DELETE FROM stock_movement WHERE reference_type = 'adjustment' AND reference_id = ?`, id); err != nil {
-		jsonError(w, fmt.Sprintf("limpiar movimientos del ajuste: %v", err), 500)
-		return
-	}
-
-	// Soft delete header
-	res, err := tx.Exec(`UPDATE store_adjustment SET status=0 WHERE id = ?`, id)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		jsonError(w, "Ajuste no encontrado", 404)
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Ajuste eliminado", "redirect": saveRedirect(r, "/adjustment/list")})
+	// (ajustmentDelete fue eliminado de este archivo: ver adjustmentRevert y el
+	// comentario de la ruta en registerAdjustmentRoutes — D-4, auditoría 2026-11-22.)
 }
