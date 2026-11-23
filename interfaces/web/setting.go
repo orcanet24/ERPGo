@@ -1,4 +1,4 @@
-﻿package web
+package web
 
 import (
 	"database/sql"
@@ -324,17 +324,41 @@ func (s *Server) backupForm(w http.ResponseWriter, r *http.Request) {
 }
 
 // backupRun dumps all tables to a .sql file (pure Go, no mysqldump needed).
+//
+// S-6 (auditoría 2026-11-22), tres verdades nuevas:
+//  1. El archivo lleva el CÓDIGO DE LA EMPRESA en el nombre. Antes
+//     `backup_<fecha>.sql` era idéntico para todas las empresas de la
+//     máquina: indistinguible al listar y adivinable al descargar. La
+//     ruta ya es solo-master (permissions.go), pero el nombre propio es lo
+//     que permite BORRAR con criterio y no cruzar empresas por accidente.
+//  2. Un volcado con filas que no se pudieron leer NO se reporta como
+//     éxito: antes `continue` sobre errores de Scan/Query dejaba un .sql
+//     incompleto respondiendo status:1 —restaurar eso era perder datos
+//     creyendo que había respaldo—. Ahora el error aborta, se borra el
+//     archivo parcial y se dice qué tabla falló.
+//  3. El cierre del archivo se comprueba: un disco lleno ya no finge un
+//     backup que no existe.
 func (s *Server) backupRun(w http.ResponseWriter, r *http.Request) {
 	os.MkdirAll("data/backup", 0755)
-	fname := fmt.Sprintf("backup_%s.sql", strings.ReplaceAll(strings.ReplaceAll(now(), ":", "-"), " ", "_"))
-	f, err := os.Create(filepath.Join("data", "backup", fname))
+	tenant := s.empresaDe(r)
+	if tenant == "" {
+		tenant = defaultTenantCode
+	}
+	fname := fmt.Sprintf("backup_%s_%s.sql", slugifyTenant(tenant), strings.ReplaceAll(strings.ReplaceAll(now(), ":", "-"), " ", "_"))
+	ruta := filepath.Join("data", "backup", fname)
+	f, err := os.Create(ruta)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
 	defer f.Close()
 
-	f.WriteString("-- ERPGo backup " + now() + "\nSET FOREIGN_KEY_CHECKS=0;\n")
+	if _, err := f.WriteString("-- ERPGo backup " + now() + " empresa " + tenant + "\nSET FOREIGN_KEY_CHECKS=0;\n"); err != nil {
+		_ = f.Close()
+		_ = os.Remove(ruta)
+		jsonError(w, "no se pudo escribir el respaldo: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	tables, err := s.dbFor(r).Query(s.sqlShowTables())
 	if err != nil {
@@ -344,16 +368,30 @@ func (s *Server) backupRun(w http.ResponseWriter, r *http.Request) {
 	var tnames []string
 	for tables.Next() {
 		var t string
-		_ = tables.Scan(&t)
+		if err := tables.Scan(&t); err != nil {
+			continue
+		}
 		tnames = append(tnames, t)
 	}
 	tables.Close()
+	if err := tables.Err(); err != nil {
+		jsonError(w, "listando tablas: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	for _, t := range tnames {
-		f.WriteString("\n-- Table " + t + "\n")
+		if _, err := f.WriteString("\n-- Table " + t + "\n"); err != nil {
+			_ = f.Close()
+			_ = os.Remove(ruta)
+			jsonError(w, "escribiendo el respaldo: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		rows, err := s.dbFor(r).Query("SELECT * FROM `" + t + "`")
 		if err != nil {
-			continue
+			_ = f.Close()
+			_ = os.Remove(ruta)
+			jsonError(w, "la tabla "+t+" no se pudo leer: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
 		cols, _ := rows.Columns()
 		for rows.Next() {
@@ -363,7 +401,11 @@ func (s *Server) backupRun(w http.ResponseWriter, r *http.Request) {
 				ptrs[i] = &vals[i]
 			}
 			if err := rows.Scan(ptrs...); err != nil {
-				continue
+				rows.Close()
+				_ = f.Close()
+				_ = os.Remove(ruta)
+				jsonError(w, "respaldo abortado: la fila de "+t+" no se pudo leer ("+err.Error()+"). Un .sql incompleto restaurado a ciegas pierde datos; prefiero fallar ahora.", http.StatusInternalServerError)
+				return
 			}
 			var sb strings.Builder
 			sb.WriteString("INSERT INTO `" + t + "` (`" + strings.Join(cols, "`,`") + "`) VALUES (")
@@ -387,11 +429,34 @@ func (s *Server) backupRun(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			sb.WriteString(");\n")
-			f.WriteString(sb.String())
+			if _, err := f.WriteString(sb.String()); err != nil {
+				rows.Close()
+				_ = f.Close()
+				_ = os.Remove(ruta)
+				jsonError(w, "escribiendo el respaldo: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			_ = f.Close()
+			_ = os.Remove(ruta)
+			jsonError(w, "respaldo abortado en "+t+": "+err.Error(), http.StatusInternalServerError)
+			return
 		}
 		rows.Close()
 	}
-	f.WriteString("\nSET FOREIGN_KEY_CHECKS=1;\n")
+	if _, err := f.WriteString("\nSET FOREIGN_KEY_CHECKS=1;\n"); err != nil {
+		_ = f.Close()
+		_ = os.Remove(ruta)
+		jsonError(w, "cerrando el respaldo: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(ruta)
+		jsonError(w, "el disco no terminó de escribir el respaldo: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	writeJSON(w, map[string]interface{}{
 		"status": 1, "msg": "Backup generado", "file": fname,

@@ -176,6 +176,20 @@ func (s *Server) tenantOfSession(sess *SessionData) string {
 	return s.activeTenantCode()
 }
 
+// empresaDe devuelve el código de empresa DE ESTA PETICIÓN (el scope que
+// attachScope resolvió por sesión), o el código activo si la petición no
+// llevó scope (pruebas, llamadas internas). Es el accesor que les faltaba
+// a los handlers que escribían datos dependientes de la empresa sin poder
+// preguntar cuál: backupRun nombraba sus archivos con el código global, y
+// un login en otra empresa entre el click y la escritura lo hacía mentir
+// (S-6, auditoría 2026-11-22).
+func (s *Server) empresaDe(r *http.Request) string {
+	if sc := scopeOf(r); sc != nil && sc.tenant != "" {
+		return sc.tenant
+	}
+	return s.tenantCodeOrDefault()
+}
+
 // dbForTenant devuelve la base de una empresa concreta, o nil si esa empresa
 // no está disponible.
 //
