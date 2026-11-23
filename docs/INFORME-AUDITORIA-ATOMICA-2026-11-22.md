@@ -193,8 +193,8 @@ dÓNDE está la prueba y QUÉ NO se verificó. Nada aquí afirma lo que no corri
 | 5 | Las tres pantallas | **HECHO** | `81d38d9f`, `27e93883` + recálculo servidor en `1b9ff38c` | webcheck 167 plantillas 0 errores; recarga_blanda_test.go; candado doble clic en factura/producto/NC/POSGo2; 401 JSON con returnTo en expirada |
 | 6 | Semillas canónicas y cadena | **HECHO** | `27e93883`, `1b9ff38c`, `519ef578` | arranques reales: base nueva 64 archivos 0 avisos → sellada; con 1 archivo nuevo, el ledger repasó y aplicó SOLO ese (D-1 demostrado); ledger ya no es TEXT-ilegal-en-MySQL (Error 1101 corregido) |
 | 7 | Frontera de informes IA | **HECHO, con límite declarado** | `e089bf9f` (parte IA: ai_sql_scope/validarSQLInformes), `40f0954e` (motor clásico) | ai_frontera_informes_test.go (6: tablas sensibles, STRAIGHT_JOIN, /*!*/, run_preview, crítica pendiente sin efecto, corrida registrada); EN VIVO por MCP: user_login → blocked. LÍMITE: IT/master no exige catálogo blanco (rompía informes clásicos legítimos); la raíz del todo es vistas de reporting con usuario restringido — tarea de esquema pendiente |
-| 8 | Higiene | **HECHA, purga pendiente de aviso** | ERPGo `21f52172` (13 944 archivos .freebuff fuera del índice); POSGo2 `d726c0f` (400: bases con PII, *.key, configs con API key, MySQL de pruebas) | git ls-files 15 022→1 078 y 448→55; discos intactos. **LA PURGA DE HISTORIAL NO SE EJECUTÓ** — el dueño pidió aviso previo; procedimiento y rotación de la clave `erpgo-pos-main-key-2026` listos en POSGo2 `docs/PURGA-HISTORIAL.md`. La rotación debe ir PRIMERO: la clave ya está filtrada en la historia |
-| 9 | MCP | **HECHO (v1)** | `519ef578` | mcp_bridge_test.go (5 grupos sobre MySQL real, con skip honesto sin servidor); EN VIVO: initialize/tools/list (10 herramientas, filtradas por operador)/tools/call (3 facturas reales)/401/blocked/405. V1 = transporte streamable simple: sin SSE, sin lotes, sin Resources/Prompts; pantalla de tokens aún por endpoint (documentado en README) |
+| 8 | Higiene | **HECHA — PURGA EJECUTADA** | ERPGo `21f52172` (13 944 archivos .freebuff fuera del índice); POSGo2 `d726c0f` + purga `2499d36`/`e067a11` (force-push) | filter-repo: **0 caminos sensibles en toda la historia** de POSGo2, .git 108,6→6,9 MB, disco intacto; ERPGo 15 022→1 078 rastreados. Respaldo espejo local `POSGo2-ORIGEN-RESPALDO.git` (destruir tras rotar). QUEDAN DEL DUEÑO: rotar la API key `erpgo-pos-main-key-2026` (urgente —la purga no des-venena lo ya copiado—), borrar el PR #1 de GitHub (su ref conserva los commits viejos) y re-clonar en cada máquina. `POSGo2/docs/PURGA-HISTORIAL.md` |
+| 9 | MCP | **HECHO (v1 + pantalla)** | `519ef578`, `aa1aa63b` | mcp_bridge_test.go (5 grupos sobre MySQL real, con skip honesto sin servidor); EN VIVO: initialize/tools/list (10 herramientas, filtradas por operador)/tools/call (3 facturas reales)/401/blocked/405. Pantalla de tokens en IA → Agentes (generar con snippet, revocar, último uso). V1 = transporte streamable simple: sin SSE, sin lotes, sin Resources/Prompts |
 
 ## Hallazgos nuevos destapados DURANTE la reparación (no estaban en la auditoría)
 
@@ -211,9 +211,9 @@ Y corregidos con su prueba, porque la política era causa-raíz:
 ## Lo que NO se tocó (decisión documentada, no olvido)
 
 - N+1 de stock en listados y dashboard con escaneo completo (rendimiento; no corrompe datos; requiere diseño de índices por-tenant medido en producción).
-- `checkVouchers` sin índice tenant_id, CSRF exenta en /api/, HMAC de bloques de sellado, `Touch` de sesión, endpoint estático por documento de upload, preaprobación UX de RiskCritical (la UI de revisión existe vía endpoint; falta pantalla), pantalla de gestión de tokens MCP.
+- `checkVouchers` sin índice tenant_id, CSRF exenta en /api/, HMAC de bloques de sellado, endpoint estático por documento de upload.
 - El puente MCP v1 no implementa Resources/Prompts ni streaming SSE.
-- La historia de ambos remotos conserva los archivos sensibles hasta que el dueño apruebe la purga (ver §8).
+- (Resueltos en la ronda del 2026-11-23 mañana: `Touch` de sesión → `TouchSliding` con prueba; `walkingCustomer` GET→POST con tx honesta; pantalla de tokens MCP; panel de aprobación de propuestas —incluido retirar el botón «marcar revisada» cuando hay pendientes, porque ese POST ejecuta—. La historia de POSGo2 ya está purgada —ver §8 y PURGA-HISTORIAL.md: rotación de clave, PR #1 y re-clonados quedan en manos del dueño—.)
 
 ## Baterías finales (las mismas que cada commit)
 
