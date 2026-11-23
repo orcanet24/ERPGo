@@ -5,19 +5,26 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
 // AuditFunc define la firma para logging de auditoría del sync server.
 type AuditFunc func(action, module, table, recordID string, oldVal, newVal interface{})
 
-// SyncServer maneja la sincronización de ventas desde terminales POS.
-// Recibe ventas de las cajas, las guarda en MySQL central y responde con
-// el ID remoto de la factura creada.
+// SyncServer maneja la sincronización de CATÁLOGOS y estado con los
+// terminales POS.
+//
+// LA VENTA YA NO VIVE AQUÍ (F-2/F-3/F-12/F-14, auditoría atómica
+// 2026-11-22): registrar una venta necesita el contador fiscal con bloqueo,
+// el plan de cuentas de LA EMPRESA, el libro mayor y el régimen IGTF, y todo
+// dentro de una transacción. Ese motor está en interfaces/web/venta_terminal.go
+// (registrarVentaTerminal), único para HTTP-sync y gRPC. El SyncServer de
+// antes hacía MAX(invoice)+1 sin transacción, sin asiento y sin pagos: la
+// venta quedaba fuera del libro mayor y, si un inserto intermedio fallaba,
+// la factura nacía coja. Lo que queda aquí es lo que sí le corresponde:
+// delivery de productos/clientes y validación de keys.
 type SyncServer struct {
 	db          *sql.DB
-	mu          sync.Mutex
 	auditLogger AuditFunc
 }
 
@@ -30,10 +37,15 @@ func NewSyncServer(db *sql.DB, audit AuditFunc) *SyncServer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Request / Response structs (JSON over HTTP ahora, gRPC proto después)
+// Request / Response structs (JSON over HTTP)
 // ─────────────────────────────────────────────────────────────────────────────
 
 // SyncSaleRequest representa una venta enviada desde el terminal POS.
+//
+// currency/exchange_rate/igtf_amount llegaron con la reparación del terminal
+// (fase 4): la caja conoce la tasa y el IGTF con los que COBRÓ; el ERP los
+// guarda en vez de inventar 1.0/'VES'. payments ya existía en el payload y
+// se tiraba a la basura: es el desglose que hace posible el arqueo central.
 type SyncSaleRequest struct {
 	TerminalID   string          `json:"terminal_id"`
 	BranchID     int             `json:"branch_id"`
@@ -46,15 +58,23 @@ type SyncSaleRequest struct {
 	Tax          float64         `json:"tax"`
 	Total        float64         `json:"total"`
 	FiscalNumber string          `json:"fiscal_number"`
+	Currency     string          `json:"currency"`
+	ExchangeRate float64         `json:"exchange_rate"`
+	IgtfAmount   float64         `json:"igtf_amount"`
 }
 
 // SyncSaleResponse es la respuesta al sincronizar una venta.
+//
+// Advertencias: el registro offline NUNCA se rechaza por huecos de
+// configuración (el dinero ya se cobró); lo que no se pudo hacer perfecto
+// viaja aquí, visible, para que el panel lo repare.
 type SyncSaleResponse struct {
-	Success      bool   `json:"success"`
-	RemoteID     string `json:"remote_id"`
-	Status       string `json:"status"`
-	FiscalNumber string `json:"fiscal_number"`
-	Error        string `json:"error,omitempty"`
+	Success      bool     `json:"success"`
+	RemoteID     string   `json:"remote_id"`
+	Status       string   `json:"status"`
+	FiscalNumber string   `json:"fiscal_number"`
+	Error        string   `json:"error,omitempty"`
+	Advertencias []string `json:"advertencias,omitempty"`
 }
 
 // SaleItem y PaymentMethod están definidos en server.go para evitar duplicados.
@@ -94,187 +114,8 @@ type SyncStatusResponse struct {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Endpoints de negocio (llamados por los HTTP handlers en interfaces/web/)
+// Endpoints de catálogo (llamados por los HTTP handlers de interfaces/web)
 // ─────────────────────────────────────────────────────────────────────────────
-
-// SyncSale procesa una venta desde el terminal POS y la guarda en MySQL.
-// Idempotente: si el número fiscal ya existe, retorna la factura existente.
-func (s *SyncServer) SyncSale(req *SyncSaleRequest) (*SyncSaleResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// La venta llega SIN RED: el número de control fiscal todavía no existe (lo
-	// asigna la imprenta digital), así que el documento se registra como
-	// contingencia con referencia propia por caja. Ver contingenciaRef.
-	controlNo, offlineNo := contingenciaRef(req.TerminalID, req.FiscalNumber, req.SaleLocalID)
-
-	// 1. Verificar si la venta ya existe (idempotencia).
-	//
-	// Dos caminos, porque ninguno basta solo:
-	//   - El libro pos_sale_sync por (terminal_id, sale_local_id) es exacto y no
-	//     depende de que exista número fiscal. Es el camino normal de la cola.
-	//   - control_no cubre las ventas que llegaron antes de existir ese libro.
-	//
-	// Antes esto solo se comprobaba si req.FiscalNumber != "": una caja SIN
-	// impresora fiscal (lo habitual en contingencia) duplicaba la factura en
-	// cada reintento tras una respuesta perdida.
-	if existing := s.lookupSaleSync(req.TerminalID, req.SaleLocalID); existing != nil {
-		return existing, nil
-	}
-	var existingID int64
-	if err := s.db.QueryRow(`
-		SELECT invoice_id FROM invoice
-		WHERE control_no = ? AND series = 'CONT'`,
-		controlNo).Scan(&existingID); err == nil {
-		s.recordSaleSync(req, existingID, controlNo)
-		return &SyncSaleResponse{
-			Success:      true,
-			RemoteID:     fmt.Sprintf("%d", existingID),
-			Status:       "already_exists",
-			FiscalNumber: req.FiscalNumber,
-		}, nil
-	}
-
-	// 2. Buscar o crear cliente.
-	customerID, err := s.findOrCreateCustomer(req.CustomerRIF, req.CustomerName)
-	if err != nil {
-		return &SyncSaleResponse{
-			Status: "error",
-			Error:  fmt.Sprintf("error con cliente: %v", err),
-		}, err
-	}
-
-	// 3. Generar número de factura.
-	var invoiceNo int64
-	err = s.db.QueryRow(`SELECT IFNULL(MAX(invoice),999)+1 FROM invoice`).Scan(&invoiceNo)
-	if err != nil {
-		return &SyncSaleResponse{
-			Status: "error",
-			Error:  fmt.Sprintf("error generando número de factura: %v", err),
-		}, err
-	}
-
-	// 4. Insertar cabecera de factura.
-	now := time.Now().Format("2006-01-02")
-
-	_, err = s.db.Exec(`
-		INSERT INTO invoice (invoice_id, customer_id, date, total_amount, paid_amount, due_amount,
-			invoice, invoice_details, status, payment_type, control_no, customer_rif, series,
-			total_vat_amnt, warehouse_id, is_online, sales_by, currency_code, exchange_rate, total_amount_usd, exchange_rate_source,
-			offline_invoice_no)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'VES',?,?,'BCV',?)`,
-		invoiceNo, customerID, now, req.Total, req.Total, 0,
-		invoiceNo, "Venta POS sincronizada (contingencia)", 1, 1, controlNo, req.CustomerRIF, "CONT",
-		req.Tax, "WH-MAIN", 2, "POS-SYSTEM",
-		1.0, 0.0, offlineNo)
-	if err != nil {
-		return &SyncSaleResponse{
-			Status: "error",
-			Error:  fmt.Sprintf("error insertando factura: %v", err),
-		}, err
-	}
-
-	// 5. Insertar detalles de factura + stock_movement.
-	for _, item := range req.Items {
-		productID := item.ProductCode
-		if productID == "" {
-			productID = fmt.Sprintf("POS-AUTO-%d", time.Now().UnixNano())
-		}
-
-		if _, err := s.findOrCreateProduct(productID, item.Description, item.UnitPrice, item.TaxRate); err != nil {
-			continue
-		}
-
-		itemTotal := item.UnitPrice * item.Quantity
-		itemTax := itemTotal * item.TaxRate / 100
-
-		if _, err := s.db.Exec(`
-			INSERT INTO invoice_details (invoice_details_id, invoice_id, product_id, description,
-				quantity, rate, total_price, vat_amnt, status)
-			VALUES (?,?,?,?,?,?,?,?,?)`,
-			fmt.Sprintf("POS-%d-%s", invoiceNo, productID),
-			fmt.Sprintf("%d", invoiceNo), productID, item.Description,
-			item.Quantity, item.UnitPrice, itemTotal, itemTax, 1); err != nil {
-			return &SyncSaleResponse{Status: "error", Error: fmt.Sprintf("detalle de factura POS: %v", err)}, err
-		}
-
-		// Stock movement: POS siempre descuenta al facturar (modo invoice).
-		// El tipo se lee de `product_information.item_type`, que es la columna
-		// real. Antes se consultaba `product_inventory_config.product_type`, una
-		// tabla que ninguna migración crea: la consulta fallaba, el tipo quedaba
-		// vacío y TODOS los servicios descontaban stock en el POS.
-		var productType string
-		_ = s.db.QueryRow(`SELECT COALESCE(NULLIF(pi.item_type,''), 'venta')
-			FROM product_information pi WHERE pi.product_id = ?`, productID).Scan(&productType)
-
-		if productType != "servicio" && productType != "consumo" {
-			if _, err := s.db.Exec(`
-				INSERT INTO stock_movement (movement_type, product_id, warehouse_id, quantity, unit_cost,
-					reference_type, reference_id, reference_no, date, is_posted, posted_at, created_at)
-				VALUES ('sale', ?, 'WH-MAIN', ?, ?, 'invoice', ?, ?, ?, 1, NOW(), NOW())`,
-				productID, item.Quantity, item.UnitPrice, invoiceNo, fmt.Sprintf("INV-%d", invoiceNo), now); err != nil {
-				return &SyncSaleResponse{Status: "error", Error: fmt.Sprintf("inventario POS: %v", err)}, err
-			}
-		}
-	}
-
-	// 6. Auditoría.
-	if s.auditLogger != nil {
-		s.auditLogger("pos_sync_sale", "pos", "invoice", fmt.Sprintf("%d", invoiceNo), nil, req)
-	}
-
-	// 7. Dejar constancia en el libro de idempotencia de la cola offline.
-	s.recordSaleSync(req, invoiceNo, controlNo)
-
-	return &SyncSaleResponse{
-		Success:      true,
-		RemoteID:     fmt.Sprintf("%d", invoiceNo),
-		Status:       "synced",
-		FiscalNumber: req.FiscalNumber,
-	}, nil
-}
-
-// lookupSaleSync devuelve la respuesta ya registrada para (terminal, venta
-// local), o nil si es la primera vez que se ve. Un error de BD se trata como
-// "no existe": el camino de control_no sigue cubriendo el duplicado.
-func (s *SyncServer) lookupSaleSync(terminalID, saleLocalID string) *SyncSaleResponse {
-	terminalID = strings.TrimSpace(terminalID)
-	saleLocalID = strings.TrimSpace(saleLocalID)
-	if terminalID == "" || saleLocalID == "" {
-		return nil
-	}
-	var invoiceID int64
-	var controlNo sql.NullString
-	err := s.db.QueryRow(`
-		SELECT invoice_id, control_no FROM pos_sale_sync
-		WHERE terminal_id = ? AND sale_local_id = ? LIMIT 1`,
-		terminalID, saleLocalID).Scan(&invoiceID, &controlNo)
-	if err != nil || invoiceID <= 0 {
-		return nil
-	}
-	return &SyncSaleResponse{
-		Success:  true,
-		RemoteID: fmt.Sprintf("%d", invoiceID),
-		Status:   "already_exists",
-	}
-}
-
-// recordSaleSync apunta la venta en pos_sale_sync. Best-effort: si la tabla no
-// existe (base antigua) o hay carrera, no se rompe la sincronización porque el
-// chequeo por control_no sigue vigente.
-func (s *SyncServer) recordSaleSync(req *SyncSaleRequest, invoiceID int64, controlNo string) {
-	terminalID := strings.TrimSpace(req.TerminalID)
-	saleLocalID := strings.TrimSpace(req.SaleLocalID)
-	if terminalID == "" || saleLocalID == "" {
-		return
-	}
-	_, _ = s.db.Exec(`
-		INSERT INTO pos_sale_sync
-			(terminal_id, sale_local_id, invoice_id, invoice_no, control_no, fiscal_number, status)
-		VALUES (?,?,?,?,?,?, 'synced')
-		ON DUPLICATE KEY UPDATE invoice_id = VALUES(invoice_id), control_no = VALUES(control_no)`,
-		terminalID, saleLocalID, invoiceID, invoiceID, controlNo, req.FiscalNumber)
-}
 
 // GetProducts retorna todos los productos activos para sincronización POS.
 func (s *SyncServer) GetProducts() ([]ProductSyncResponse, error) {
@@ -374,73 +215,26 @@ func (s *SyncServer) GetSyncStatus(terminalID string) (*SyncStatusResponse, erro
 		lastInvoiceID = fmt.Sprintf("%d", lastID.Int64)
 	}
 
+	var pending int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM pos_sale_sync WHERE status <> 'synced'`).Scan(&pending)
+
 	return &SyncStatusResponse{
 		TerminalID:    terminalID,
 		LastSync:      time.Now(),
 		TotalSales:    totalSales,
-		PendingSales:  0,
+		PendingSales:  pending,
 		LastInvoiceID: lastInvoiceID,
 	}, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers de resolución de conflictos
+// Referencia de contingencia
 // ─────────────────────────────────────────────────────────────────────────────
 
-// findOrCreateCustomer busca un cliente por RIF o crea uno mínimo.
-func (s *SyncServer) findOrCreateCustomer(rif, name string) (int64, error) {
-	if rif == "" {
-		rif = "V000000000"
-	}
-	if name == "" {
-		name = "Cliente POS"
-	}
-
-	// Buscar por RIF.
-	var existingID int64
-	err := s.db.QueryRow(`SELECT customer_id FROM customer_information WHERE rif = ?`, rif).Scan(&existingID)
-	if err == nil {
-		return existingID, nil
-	}
-
-	// Crear cliente mínimo.
-	res, err := s.db.Exec(`
-		INSERT INTO customer_information (customer_name, rif, address2, status, customer_type)
-		VALUES (?, ?, '', 1, 1)`,
-		name, rif)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
-}
-
-// findOrCreateProduct busca un producto por código o crea un placeholder.
-func (s *SyncServer) findOrCreateProduct(code, name string, price, taxRate float64) (string, error) {
-	if code == "" {
-		code = fmt.Sprintf("POS-AUTO-%d", time.Now().UnixNano())
-	}
-
-	// Verificar si existe.
-	var existing string
-	err := s.db.QueryRow(`SELECT product_id FROM product_information WHERE product_id = ?`, code).Scan(&existing)
-	if err == nil {
-		return existing, nil
-	}
-
-	// Crear producto placeholder.
-	priceStr := fmt.Sprintf("%.2f", price)
-	_, err = s.db.Exec(`
-		INSERT INTO product_information (product_id, product_name, price, tax, status, cost)
-		VALUES (?, ?, ?, ?, 1, 0)`,
-		code, name, priceStr, taxRate)
-	if err != nil {
-		return code, err
-	}
-	return code, nil
-}
-
-// contingenciaRef construye la referencia del documento que la caja emitió sin
-// red, y devuelve también el correlativo local de la caja.
+// ContingenciaRef construye la referencia del documento que la caja emitió
+// sin red, y devuelve también el correlativo local de la caja. Exportada
+// porque quien registra la venta (interfaces/web/venta_terminal.go) la
+// necesita, y la regla no puede estar escrita dos veces.
 //
 // POR QUÉ NO SE INVENTA UN NÚMERO DE CONTROL.
 //
@@ -460,7 +254,7 @@ func (s *SyncServer) findOrCreateProduct(code, name string, price, taxRate float
 //
 // El formato cabe en control_no (varchar 20): "CONT-" + 6 del terminal + "-" +
 // correlativo de hasta 8 dígitos.
-func contingenciaRef(terminalID, fiscalNumber, saleLocalID string) (control string, offlineNo int64) {
+func ContingenciaRef(terminalID, fiscalNumber, saleLocalID string) (control string, offlineNo int64) {
 	term := soloAlfanumerico(terminalID)
 	if len(term) > 6 {
 		term = term[len(term)-6:]
@@ -476,6 +270,10 @@ func contingenciaRef(terminalID, fiscalNumber, saleLocalID string) (control stri
 	if n == "" {
 		n = "0"
 	}
+	// El correlativo local puede venir como UUID (terminal reparado, fase 4
+	// ULID/sale_local_id): se derivan deterministicamente los últimos 8
+	// alfanuméricos, que es lo que cabe en el varchar y lo que el ticket
+	// mostraba por cola.
 	if len(n) > 8 {
 		n = n[len(n)-8:]
 	}

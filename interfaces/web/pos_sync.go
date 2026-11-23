@@ -161,9 +161,14 @@ func (s *Server) posSyncKeyMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // handlePOSSyncSale recibe una venta desde el terminal POS y la sincroniza.
+//
+// El registro vivo es registrarVentaTerminal (venta_terminal.go): transacción
+// única con contador fiscal bloqueado, asiento doble publicado, pagos, IGTF
+// e idempotencia por reclamo. Este handler solo traduce HTTP: valida lo
+// mínimo del payload, resuelve la base de la empresa por la API key y
+// reporta. Nunca se rechaza una venta offline por huecos de configuración —
+// el dinero ya se cobró; los huecos viajan como advertencias visibles—.
 func (s *Server) handlePOSSyncSale(w http.ResponseWriter, r *http.Request) {
-	srv := s.syncFor(r)
-
 	var req pos.SyncSaleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "JSON inválido: "+err.Error(), http.StatusBadRequest)
@@ -180,19 +185,31 @@ func (s *Server) handlePOSSyncSale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	dbSync, err := s.posSyncDB(r)
+	if err != nil || dbSync == nil {
+		jsonError(w, "empresa del terminal no disponible", http.StatusServiceUnavailable)
+		return
+	}
+
 	// Aquí NO se evalúa el guard de addons: esta ruta es la cola OFFLINE del
 	// terminal. Esas ventas ya se cobraron sin red; bloquearlas al sincronizar
 	// dejaría la cola atascada con un cobro que el cliente ya pagó. Lo que se
 	// valida en línea es el checkout (/api/pos/checkout) y el gRPC sin offline.
-	resp, err := srv.SyncSale(&req)
+	resp, err := s.registrarVentaTerminal(dbSync, &req)
 	if err != nil {
-		// Si ya existe (idempotente), no es error.
-		if resp != nil && resp.Status == "already_exists" {
-			writeJSON(w, resp)
-			return
-		}
+		// El terminal trata 5xx como transitorio y reintenta; la clave
+		// idempotente (sale_local_id) hace el reintento inofensivo.
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Auditoría de la sincronización (el sync antiguo auditaba desde el
+	// SyncServer con una función inyectada; el registro vivo audita aquí,
+	// donde existe la petición).
+	if resp != nil && resp.Success && resp.Status == "synced" {
+		s.appendAudit(r, "POS-SYSTEM", "", "pos_sync_sale", "pos", "invoice", resp.RemoteID, nil,
+			map[string]interface{}{"terminal": req.TerminalID, "sale_local_id": req.SaleLocalID,
+				"total": req.Total, "advertencias": resp.Advertencias})
 	}
 
 	// La venta sincronizada se apunta a la cola de facturación digital: el
@@ -200,9 +217,8 @@ func (s *Server) handlePOSSyncSale(w http.ResponseWriter, r *http.Request) {
 	// a propósito: si Unidigital está caído o sin conexión, el ERP igual
 	// confirma la sincronización a la caja y la cola reintenta sola.
 	if resp != nil && resp.Success && resp.RemoteID != "" {
-		dbSync, _ := s.posSyncDB(r)
 		tenant, _ := r.Context().Value(posSyncTenantKey{}).(string)
-		if dbSync != nil && tenant != "" {
+		if tenant != "" {
 			go s.diEnqueueVenta(dbSync, tenant, resp.RemoteID)
 		}
 	}

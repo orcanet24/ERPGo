@@ -106,6 +106,10 @@ type GRPCServer struct {
 
 	auditLogger   AuditFunc
 	fiscalDocFunc FiscalDocFunc
+	// saleRegistrar: el motor único de registro de ventas terminal
+	// (interfaces/web/venta_terminal.go). Obligatorio para facturar por
+	// gRPC: sin él, processSale se niega en vez de duplicar la lógica vieja.
+	saleRegistrarFunc RegistrarVentaFunc
 	// verifyCredentials: ver usuario/contraseña. Sin él, Login rechaza en vez
 	// de inventarse una sesión.
 	verifyCredentials CredentialVerifier
@@ -681,121 +685,81 @@ func (s *GRPCServer) processSale(db *sql.DB, terminalID string, sale *pb.SaleTra
 		}
 	}
 
-	tx, err := db.Begin()
-	if err != nil {
-		return res, fmt.Errorf("iniciando transaccion: %w", err)
+	// EL REGISTRO VIVO es UN SOLO motor para los dos transportes (F-2,
+	// auditoría 2026-11-22): registrarVentaTerminal, en
+	// interfaces/web/venta_terminal.go, inyectado como cierre desde
+	// cmd/server porque este paquete no puede importar web. El cuerpo
+	// anterior duplicaba aquí una versión parcial de esa venta —sin asiento
+	// contable, sin inventario, sin pagos—: dos caminos, dos semánticas
+	// fiscales, y una revisión del SENIAT no distingue transportes.
+	reg := s.saleRegistrar()
+	if reg == nil {
+		return res, fmt.Errorf("el servidor gRPC no tiene motor de ventas inyectado: así las cajas no pueden facturar (error de despliegue, no del terminal)")
 	}
-	defer func() { _ = tx.Rollback() }()
 
-	// La reclamación va PRIMERO, antes de consumir numeración: si dos
-	// reintentos llegan a la vez, el segundo choca con la UNIQUE y espera a que
-	// el primero confirme, en vez de emitir otra factura.
+	req := &SyncSaleRequest{
+		TerminalID:   terminalID,
+		SaleLocalID:  offlineID,
+		CustomerRIF:  sale.GetCustomer().GetRif(),
+		CustomerName: sale.GetCustomer().GetName(),
+		Subtotal:     sale.GetSubtotal(),
+		Tax:          sale.GetTax(),
+		Total:        sale.GetTotal(),
+		FiscalNumber: sale.GetOfflineControlNo(),
+	}
+	for _, it := range sale.GetItems() {
+		req.Items = append(req.Items, SaleItem{
+			ProductCode: it.GetProductCode(),
+			SKU:         it.GetSku(),
+			Quantity:    it.GetQuantity(),
+			UnitPrice:   it.GetUnitPrice(),
+			DiscountPct: it.GetDiscountPct(),
+			Description: it.GetDescription(),
+			TaxRate:     it.GetTaxRate(),
+		})
+	}
+	for _, p := range sale.GetPayments() {
+		req.Payments = append(req.Payments, PaymentMethod{
+			Method:    p.GetType(),
+			Amount:    p.GetAmount(),
+			Reference: p.GetReference(),
+			Bank:      p.GetBank(),
+		})
+	}
+
+	resp, err := reg(db, req)
+	if err != nil {
+		return res, err
+	}
+	if resp == nil {
+		return res, fmt.Errorf("respuesta vacía del motor de ventas")
+	}
+	if resp.Status == "in_progress" {
+		// El motor ya detectó la carrera; se reporta como antes para que el
+		// terminal reintente sin duplicar.
+		return res, fmt.Errorf("la venta %s ya se está registrando en otra petición", offlineID)
+	}
+	invoiceNo, err := strconv.ParseInt(resp.RemoteID, 10, 64)
+	if err != nil {
+		return res, fmt.Errorf("el motor de ventas devolvió un identificador ilegible: %q", resp.RemoteID)
+	}
+
+	// Tabla de ACK del gRPC (pos_sale_idempotency): se escribe DESPUÉS del
+	// commit del motor. La deduplicación real vive en pos_sale_sync (reclamo
+	// dentro de la transacción); esta fila existe solo para que el reintento
+	// con el mismo offline_id lea su documento sin volver a pasar por el
+	// motor. Se ignora el duplicado: otra petición del mismo batch la escribió.
 	if offlineID != "" {
-		_, err := tx.Exec(`INSERT INTO pos_sale_idempotency (terminal_id, offline_id, created_at) VALUES (?, ?, NOW())`, terminalID, offlineID)
-		if err != nil {
-			// 1062: otra petición se adelantó con la misma clave. 1213: la
-			// carrera hizo que InnoDB deshiciera una de las dos transacciones;
-			// en los dos casos lo que corresponde es leer el documento del
-			// ganador, no emitir otro.
-			if !esClaveDuplicada(err) && !esBloqueoDeCarrera(err) {
-				return res, fmt.Errorf("registrando la venta para idempotencia: %w", err)
+		if _, err := db.Exec(`INSERT INTO pos_sale_idempotency (terminal_id, offline_id, invoice_no, control_no, created_at)
+			VALUES (?,?,?,?,NOW())
+			ON DUPLICATE KEY UPDATE invoice_no = VALUES(invoice_no), control_no = VALUES(control_no)`,
+			terminalID, offlineID, invoiceNo, resp.FiscalNumber); err != nil {
+			// No es fatal: la venta YA está registrada; fallaría el reintento
+			// rápido pero el motor idempotente lo resuelve igual. Se avisa.
+			if s.auditLogger != nil {
+				s.auditLogger("pos_ack_write_failed", "pos", "pos_sale_idempotency", offlineID, nil, err.Error())
 			}
-			_ = tx.Rollback()
-			previa, errLeer := s.esperarVentaRegistrada(db, terminalID, offlineID)
-			if errLeer != nil {
-				return res, errLeer
-			}
-			previa.SaleID = res.SaleID
-			return previa, nil
 		}
-	}
-
-	var customerID int64
-	if rif := sale.GetCustomer().GetRif(); rif != "" {
-		err := tx.QueryRow("SELECT customer_id FROM customer_information WHERE rif = ?", rif).Scan(&customerID)
-		if err != nil {
-			ins, errIns := tx.Exec("INSERT INTO customer_information (customer_name, rif, address2, status, customer_type) VALUES (?, ?, '', 1, 1)", sale.GetCustomer().GetName(), rif)
-			if errIns != nil {
-				return resultadoVenta{}, fmt.Errorf("creando cliente: %w", errIns)
-			}
-			id, errID := ins.LastInsertId()
-			if errID != nil {
-				return resultadoVenta{}, fmt.Errorf("leyendo el id del cliente creado: %w", errID)
-			}
-			customerID = id
-		}
-	}
-
-	invoiceNo, err := reservarNumeroFactura(tx)
-	if err != nil {
-		return resultadoVenta{}, err
-	}
-
-	// Número de control fiscal: serie CENTRAL, única, consecutiva.
-	// Antes se hacia "POS-" + offlineId: 48 facturas compartían el mismo número.
-	// Ahora se consume nextFiscalDoc(tx, "FACT") dentro de la MISMA transacción.
-	var controlNo string
-	var docNo string
-
-	if fiscalFn := s.fiscalDoc(); fiscalFn != nil {
-		var fiscalNumber int64
-		var fDocNo, fControlNo string
-		fiscalNumber, fDocNo, fControlNo, err = fiscalFn(tx, "FACT")
-		if err != nil {
-			return resultadoVenta{}, fmt.Errorf("asignando numero de control fiscal: %w", err)
-		}
-		docNo = fDocNo
-		controlNo = fControlNo
-		// El número interno de factura sigue a la serie fiscal cuando esta va
-		// por delante: la columna `invoice` no puede quedar por debajo de un
-		// documento ya emitido, o el listado saltaría hacia atrás.
-		if fiscalNumber > invoiceNo {
-			invoiceNo = fiscalNumber
-		}
-	} else {
-		// MODO DEGRADADO: solo si no se inyectó la función fiscal.
-		// Se marca con prefijo OFFLINE para que sea visible en auditoría que
-		// esta factura NO pasó por la serie fiscal central y requiere
-		// regularización.
-		controlNo = "OFFLINE-" + offlineID
-	}
-
-	now := time.Now().Format("2006-01-02")
-	_, err = tx.Exec(`INSERT INTO invoice (invoice_id, customer_id, date, total_amount, paid_amount, due_amount, invoice, invoice_details, status, payment_type, control_no, customer_rif, series, total_vat_amnt, warehouse_id, is_online, sales_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		invoiceNo, customerID, now, sale.GetTotal(), sale.GetTotal(), 0,
-		invoiceNo, "Venta POS gRPC", 1, 1, controlNo, sale.GetCustomer().GetRif(), "POS",
-		sale.GetTax(), "WH-MAIN", 2, terminalID)
-	if err != nil {
-		return resultadoVenta{}, fmt.Errorf("insertando factura: %w", err)
-	}
-
-	// Los renglones se escriben uno a uno y el error NO se descarta: un
-	// detalle que no entra es una factura incompleta, y antes se confirmaba la
-	// cabecera igual (y el terminal recibía un ACK de una venta a la que le
-	// faltaban productos).
-	for _, item := range sale.GetItems() {
-		itemTotal := item.GetUnitPrice() * item.GetQuantity()
-		itemTax := itemTotal * item.GetTaxRate() / 100
-
-		if _, err := tx.Exec(`INSERT INTO invoice_details (invoice_details_id, invoice_id, product_id, description, quantity, rate, total_price, vat_amnt, status) VALUES (?,?,?,?,?,?,?,?,?)`,
-			fmt.Sprintf("POS-%d-%s", invoiceNo, item.GetProductCode()),
-			fmt.Sprintf("%d", invoiceNo), item.GetProductCode(), item.GetDescription(),
-			item.GetQuantity(), item.GetUnitPrice(), itemTotal, itemTax, 1); err != nil {
-			return resultadoVenta{}, fmt.Errorf("insertando el renglon del producto %s: %w", item.GetProductCode(), err)
-		}
-	}
-
-	// Se guarda el documento en la MISMA transacción que la factura: cuando
-	// esta fila se ve, ya hay número. Nunca se ve una reclamación sin factura.
-	if offlineID != "" {
-		if _, err := tx.Exec(`UPDATE pos_sale_idempotency SET invoice_no = ?, control_no = ? WHERE terminal_id = ? AND offline_id = ?`,
-			invoiceNo, controlNo, terminalID, offlineID); err != nil {
-			return resultadoVenta{}, fmt.Errorf("guardando el documento de la venta: %w", err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return resultadoVenta{}, fmt.Errorf("confirmando factura: %w", err)
 	}
 
 	if s.auditLogger != nil {
@@ -805,9 +769,33 @@ func (s *GRPCServer) processSale(db *sql.DB, terminalID string, sale *pb.SaleTra
 	return resultadoVenta{
 		SaleID:    res.SaleID,
 		InvoiceNo: invoiceNo,
-		DocNo:     docNo,
-		ControlNo: controlNo,
+		DocNo:     resp.FiscalNumber,
+		ControlNo: resp.FiscalNumber,
+		Duplicada: resp.Status == "already_exists",
 	}, nil
+}
+
+// RegistrarVentaFunc inyecta el motor único de registro de ventas terminal
+// (interfaces/web/venta_terminal.go). Firma en tipos de este paquete para
+// que la inyección no obligue a importar web.
+type RegistrarVentaFunc func(db *sql.DB, req *SyncSaleRequest) (*SyncSaleResponse, error)
+
+// SetSaleRegistrar inyecta el motor. Debe llamarse antes de servir (igual
+// que SetFiscalDocFunc); sin él, processSale se niega en vez de reproducir
+// el camino viejo sin asiento —dos semánticas fiscales para la misma caja
+// es peor que una negativa ruidosa—.
+func (s *GRPCServer) SetSaleRegistrar(fn RegistrarVentaFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.saleRegistrarFunc = fn
+}
+
+// saleRegistrar lectura corta bajo el candado (misma RLock que fiscalDoc:
+// es configuración de arranque, se lee en cada venta).
+func (s *GRPCServer) saleRegistrar() RegistrarVentaFunc {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.saleRegistrarFunc
 }
 
 // errVentaNoRegistrada separa "no había una venta previa" de "no se pudo
@@ -824,7 +812,7 @@ var errVentaNoRegistrada = errors.New("venta no registrada antes")
 func (s *GRPCServer) ventaRegistrada(db *sql.DB, terminalID, offlineID string) (resultadoVenta, error) {
 	var res resultadoVenta
 	err := db.QueryRow(`SELECT invoice_no, control_no FROM pos_sale_idempotency
-		WHERE terminal_id = ? AND offline_id = ?`, terminalID, offlineID).
+		WHERE terminal_id = ? AND offline_id = ? AND invoice_no > 0`, terminalID, offlineID).
 		Scan(&res.InvoiceNo, &res.ControlNo)
 	switch {
 	case err == nil:
@@ -861,73 +849,7 @@ func (s *GRPCServer) esperarVentaRegistrada(db *sql.DB, terminalID, offlineID st
 	}
 }
 
-// reservarNumeroFactura toma el siguiente número interno de factura con un
-// bloqueo real.
-//
-// ANTES: `SELECT IFNULL(MAX(invoice),999)+1`. Un máximo no reserva nada: dos
-// ventas simultáneas leen el mismo y las dos se quedan con el mismo número.
-//
-// AHORA: el número sale de una sola fila de pos_counters y el UPDATE se queda
-// con su bloqueo exclusivo hasta que la transacción termina, así que la segunda
-// venta espera y recibe el siguiente. Es el correlativo transaccional con
-// bloqueo que MySQL documenta (UPDATE ... LAST_INSERT_ID), sin necesidad de una
-// tabla de bloqueo aparte.
-//
-// El contador se pone al día con MAX(invoice) en cada reserva (GREATEST): en una
-// base con facturas heredadas empezaría por debajo de ellas, y así se
-// autocorrige sin sembrarlo a mano.
-//
-// LAST_INSERT_ID() es por conexión y aquí se lee dentro de la MISMA transacción
-// (misma conexión), que es lo que hace que el valor sea el que acaba de
-// calcular el UPDATE y no el de otra venta.
-func reservarNumeroFactura(tx *sql.Tx) (int64, error) {
-	const contador = "invoice"
-
-	// El máximo se lee aparte, en una lectura normal (sin bloqueos), y viaja
-	// como parámetro. Metido dentro del UPDATE como subconsulta, MySQL puede
-	// tomar bloqueos compartidos sobre `invoice`, y dos ventas simultáneas
-	// acabarían esperándose la una a la otra.
-	var maximo int64
-	if err := tx.QueryRow(`SELECT IFNULL(MAX(invoice), 999) FROM invoice`).Scan(&maximo); err != nil {
-		return 0, fmt.Errorf("leyendo el ultimo numero de factura: %w", err)
-	}
-
-	// UNA sola sentencia sobre la fila del contador: es la que serializa. El
-	// bloqueo exclusivo de esa fila dura hasta que la transacción termina, así
-	// que dos ventas simultáneas se ordenan en vez de escoger el mismo número.
-	reservado := func() (sql.Result, error) {
-		return tx.Exec(`UPDATE pos_counters
-			SET value = LAST_INSERT_ID(GREATEST(value, ?) + 1), updated_at = NOW()
-			WHERE name = ?`, maximo, contador)
-	}
-
-	res, err := reservado()
-	if err != nil {
-		return 0, fmt.Errorf("reservando el numero de factura: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("comprobando la reserva del numero de factura: %w", err)
-	}
-	if n == 0 {
-		// La fila del contador no está: base migrada antes de que existiera
-		// pos_counters, o alguien la borró. Se crea al día con el máximo actual
-		// y se reserva otra vez. Es el camino frío: en régimen normal la fila
-		// la siembra la migración y esto no se ejecuta.
-		if _, err := tx.Exec(`INSERT IGNORE INTO pos_counters (name, value, updated_at) VALUES (?, ?, NOW())`, contador, maximo); err != nil {
-			return 0, fmt.Errorf("creando el contador de facturas: %w", err)
-		}
-		if _, err := reservado(); err != nil {
-			return 0, fmt.Errorf("reservando el numero de factura: %w", err)
-		}
-	}
-
-	var numero int64
-	if err := tx.QueryRow(`SELECT LAST_INSERT_ID()`).Scan(&numero); err != nil {
-		return 0, fmt.Errorf("leyendo el numero de factura reservado: %w", err)
-	}
-	return numero, nil
-}
+// LA NUMERACIÓN DE VENTAS VIVE EN UN SOLO SITIO: interfaces/web/fiscal.go (nextFiscalDoc / reservarNumeroFacturaTx),// usado por registrarVentaTerminal para ambos transportes. Este paquete ya no reserva números: el gRPC delega el registro completo en ese motor (SetSaleRegistrar), y duplicar aquí el contador fue como F-3 (MAX+1 sin bloqueo) sobrevivió en un camino mientras el otro ya estaba arregrado.// (Antes existía en este archivo una copia llamada reservarNumeroFactura: eliminada con la delegación, no se conserva "por si acaso".)
 
 // validateAPIKey verifica que la API key sea valida contra la tabla api_keys
 // DE LA EMPRESA resuelta para esa key.

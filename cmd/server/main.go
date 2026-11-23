@@ -286,6 +286,15 @@ func main() {
 		return doc.Number, doc.DocNo, doc.ControlNo, nil
 	})
 
+	// El motor único de registro de ventas (interfaces/web/venta_terminal.go)
+	// se inyecta también en gRPC (F-2, auditoría 2026-11-22): el proto no
+	// viaja pagos ni tasa porque el camino vivo del terminal es HTTP, y aun
+	// así ambas semánticas quedan idénticas —asiento, inventario,
+	// idempotencia por reclamo— porque es LA MISMA función. Sin registrar
+	// inyectado, gRPC se niega a facturar: dos implementaciones parciales
+	// para el mismo cobro fue el origen del libro sin cajas.
+	grpcServer.SetSaleRegistrar(server.RegistrarVentaTerminal)
+
 	// Verificador de usuario y contraseña del POS (Login gRPC).
 	//
 	// Se inyecta la verificación del servidor web en vez de reimplementarla

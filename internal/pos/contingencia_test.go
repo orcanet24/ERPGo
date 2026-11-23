@@ -15,9 +15,9 @@ func TestContingenciaRef(t *testing.T) {
 		{"TERM-01", "", "", "CONT-TERM01-0"},
 	}
 	for _, c := range casos {
-		got, _ := contingenciaRef(c.terminal, c.fiscal, c.local)
+		got, _ := ContingenciaRef(c.terminal, c.fiscal, c.local)
 		if got != c.want {
-			t.Errorf("contingenciaRef(%q,%q,%q) = %q, esperado %q",
+			t.Errorf("ContingenciaRef(%q,%q,%q) = %q, esperado %q",
 				c.terminal, c.fiscal, c.local, got, c.want)
 		}
 		// control_no es varchar(20): si esto crece, la inserción falla y la
@@ -29,17 +29,17 @@ func TestContingenciaRef(t *testing.T) {
 
 	// Idempotencia: la misma venta reintentada debe producir la misma
 	// referencia, o la sincronización duplicaría facturas.
-	a, _ := contingenciaRef("TERM-01", "7", "")
-	b, _ := contingenciaRef("TERM-01", "7", "")
+	a, _ := ContingenciaRef("TERM-01", "7", "")
+	b, _ := ContingenciaRef("TERM-01", "7", "")
 	if a != b {
 		t.Fatalf("referencia no determinista: %q vs %q", a, b)
 	}
 
 	// Correlativo local de la caja: se guarda en offline_invoice_no.
-	if _, n := contingenciaRef("T", "000123", ""); n != 123 {
+	if _, n := ContingenciaRef("T", "000123", ""); n != 123 {
 		t.Errorf("correlativo local = %d, esperado 123", n)
 	}
-	if _, n := contingenciaRef("T", "", ""); n != 0 {
+	if _, n := ContingenciaRef("T", "", ""); n != 0 {
 		t.Errorf("sin número fiscal el correlativo debe ser 0, fue %d", n)
 	}
 }

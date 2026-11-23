@@ -15,17 +15,30 @@ var (
 	reCreateTableHead = regexp.MustCompile(`(?i)^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?` + "`" + `?(\w+)` + "`" + `?`)
 	reAlterTableHead  = regexp.MustCompile(`(?i)^\s*ALTER\s+TABLE\s+` + "`" + `?(\w+)` + "`" + `?`)
 	reAddPKClause     = regexp.MustCompile(`(?i)ADD\s+PRIMARY\s+KEY\s*\(([^)]*)\)`)
-	reInlinePK        = regexp.MustCompile(`(?i)^\s*PRIMARY\s+KEY\s*\(([^)]*)\)\s*,?\s*$`)
-	reInlineKeyLine   = regexp.MustCompile(`(?i)^\s*(UNIQUE\s+)?(?:KEY|INDEX)\s+` + "`" + `?(\w+)` + "`" + `?\s*\(([^)]*)\)\s*,?\s*$`)
-	reAddKeyClause    = regexp.MustCompile(`(?i)ADD\s+(UNIQUE\s+)?(?:KEY|INDEX)\s+` + "`" + `?(\w+)` + "`" + `?\s*\(([^)]*)\)`)
-	reOnUpdate        = regexp.MustCompile(`(?i)\s+ON\s+UPDATE\s+CURRENT_TIMESTAMP`)
-	reAutoIncrWord    = regexp.MustCompile(`(?i)\s+AUTO_INCREMENT\b`)
-	reInlineCollation = regexp.MustCompile(`(?i)\s+CHARACTER\s+SET\s+\w+(\s+COLLATE\s+\w+)?`)
-	reCommentClause   = regexp.MustCompile(`(?si)\s+COMMENT\s+'(?:[^']|'')*'`)
-	reMySQLOnlyStmt   = regexp.MustCompile(`(?i)^\s*(SET\s|START\s+TRANSACTION\b|COMMIT\b|LOCK\s+TABLES\b|UNLOCK\s+TABLES\b|USE\s|FLUSH\b|DROP\s+PROCEDURE\b)`)
-	reNowFunc         = regexp.MustCompile(`(?i)\bNOW\s*\(\s*\)`)
-	reFromDual        = regexp.MustCompile(`(?i)\s+FROM\s+DUAL\b`)
-	reIntBase         = regexp.MustCompile(`(?i)^(INT|INTEGER|BIGINT|MEDIUMINT|SMALLINT|TINYINT|SERIAL)$`)
+	// reAlterModifyAutoInc: ALTER TABLE t MODIFY `ID` int NOT NULL
+	// AUTO_INCREMENT — la forma en que el dump declara la clave autonumerada
+	// de las tablas heredadas sin PRIMARY KEY.
+	reAlterModifyAutoInc = regexp.MustCompile("(?i)^ALTER\\s+TABLE\\s+\\S+\\s+(?:MODIFY|CHANGE)\\s+`?(\\w+)`?[^;]*\\bAUTO_INCREMENT\\b")
+	reInlinePK           = regexp.MustCompile(`(?i)^\s*PRIMARY\s+KEY\s*\(([^)]*)\)\s*,?\s*$`)
+	reInlineKeyLine      = regexp.MustCompile(`(?i)^\s*(UNIQUE\s+)?(?:KEY|INDEX)\s+` + "`" + `?(\w+)` + "`" + `?\s*\(([^)]*)\)\s*,?\s*$`)
+	reAddKeyClause       = regexp.MustCompile(`(?i)ADD\s+(UNIQUE\s+)?(?:KEY|INDEX)\s+` + "`" + `?(\w+)` + "`" + `?\s*\(([^)]*)\)`)
+	reOnUpdate           = regexp.MustCompile(`(?i)\s+ON\s+UPDATE\s+CURRENT_TIMESTAMP`)
+	reAutoIncrWord       = regexp.MustCompile(`(?i)\s+AUTO_INCREMENT\b`)
+	reInlineCollation    = regexp.MustCompile(`(?i)\s+CHARACTER\s+SET\s+\w+(\s+COLLATE\s+\w+)?`)
+	// reBareCollate: COLLATE sin CHARACTER SET delante (forma suelta de los
+	// dumps de MySQL 8; sin quitarla el CREATE moría en "no such collation
+	// sequence", que es como pos_sale_sync no nacía en SQLite).
+	reBareCollate   = regexp.MustCompile(`(?i)\s+COLLATE\s+\w+`)
+	reCommentClause = regexp.MustCompile(`(?si)\s+COMMENT\s+'(?:[^']|'')*'`)
+	// reEnumType/reSetType: los dominios ENUM/SET de MySQL con sus valores
+	// citados ('sale','purchase',…) — la alternativa con paréntesis anidados
+	// no se da en los dumps que consume este paquete.
+	reEnumType      = regexp.MustCompile(`(?i)\benum\s*\((?:'(?:[^']|'')*'|[^)])*\)`)
+	reSetType       = regexp.MustCompile(`(?i)\bset\s*\((?:'(?:[^']|'')*'|[^)])*\)`)
+	reMySQLOnlyStmt = regexp.MustCompile(`(?i)^\s*(SET\s|START\s+TRANSACTION\b|COMMIT\b|LOCK\s+TABLES\b|UNLOCK\s+TABLES\b|USE\s|FLUSH\b|DROP\s+PROCEDURE\b)`)
+	reNowFunc       = regexp.MustCompile(`(?i)\bNOW\s*\(\s*\)`)
+	reFromDual      = regexp.MustCompile(`(?i)\s+FROM\s+DUAL\b`)
+	reIntBase       = regexp.MustCompile(`(?i)^(INT|INTEGER|BIGINT|MEDIUMINT|SMALLINT|TINYINT|SERIAL)$`)
 )
 
 // cleanIdent strips backticks from a column/table identifier.
@@ -36,6 +49,16 @@ func cleanIdent(s string) string {
 // collectMySQLPrimaryKeys returns table -> PK column list (raw, comma
 // separated as declared) for every "ALTER TABLE t ADD PRIMARY KEY (...)" in
 // the given migration files.
+//
+// También registra la segunda forma con la que el dump heredado declara su
+// clave: `ALTER TABLE t MODIFY `ID` int NOT NULL AUTO_INCREMENT` sin
+// PRIMARY KEY (acc_transaction, acc_vaucher… —en MySQL el AUTO_INCREMENT
+// arrastra su propio uniqueness implícito—). Tratar esa columna como clave
+// de una columna hace que convertCreateTableForSQLite la repliegue a
+// `INTEGER PRIMARY KEY AUTOINCREMENT`, que es SEMÁNTICAMENTE lo mismo en
+// SQLite: inserción sin id, numeración garantizada. Sin esto, el INSERT del
+// asiento del POS moría en "NOT NULL constraint failed: ID" y la vida de
+// SQLite mentía sobre la vida de MySQL (D-10, auditoría 2026-11-22).
 func collectMySQLPrimaryKeys(migs []migFile) map[string]string {
 	pkOf := map[string]string{}
 	for _, m := range migs {
@@ -54,6 +77,15 @@ func collectMySQLPrimaryKeys(migs []migFile) map[string]string {
 				if cols != "" {
 					if _, ok := pkOf[tm[1]]; !ok {
 						pkOf[tm[1]] = cols
+					}
+				}
+				continue
+			}
+			if am := reAlterModifyAutoInc.FindStringSubmatch(s); am != nil {
+				col := strings.TrimSpace(am[1])
+				if col != "" {
+					if _, ok := pkOf[tm[1]]; !ok {
+						pkOf[tm[1]] = col
 					}
 				}
 			}
@@ -105,6 +137,16 @@ func unescapeMySQLLiterals(s string) string {
 // SQLite-compatible statements. An empty result means "skip".
 func convertForSQLite(s string, pkOf map[string]string) []string {
 	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	// Los comentarios van FUERA, antes de clasificar: una sentencia que
+	// empieza con su bloque de cabecera ("-- Migración: …") no casa con el
+	// prefijo CREATE TABLE y caía al default sin traducir —así nació el
+	// `near "AUTO_INCREMENT"` que dejó pos_sale_sync y otras tablas sin
+	// crear en SQLite, la deuda D-10 que la auditoría 2026-11-22 puso en
+	// evidencia al intentar probar el motor de ventas offline sobre SQLite—.
+	s = strings.TrimSpace(stripSQLComments(s))
 	if s == "" {
 		return nil
 	}
@@ -188,8 +230,26 @@ func convertCreateTableForSQLite(s string, pkOf map[string]string) []string {
 			continue
 		}
 		cleaned := reInlineCollation.ReplaceAllString(trimmed, "")
+		// COLLATE suelto (los dumps de MySQL 8 escriben `varchar(64)
+		// COLLATE utf8mb4_unicode_ci NOT NULL` sin CHARACTER SET delante):
+		// reInlineCollation solo conocía la forma acompañada y el token
+		// sobrevivía, con lo que SQLite abortaba el CREATE entero con
+		// "no such collation sequence" —así se perdió pos_sale_sync y el
+		// motor de ventas offline no tenía dónde reclamar (D-10, auditoría
+		// 2026-11-22)—. En SQLite la comparación ya es la que usan las
+		// pruebas; quitar el COLLATE no cambia ningún resultado.
+		cleaned = reBareCollate.ReplaceAllString(cleaned, "")
 		cleaned = reOnUpdate.ReplaceAllString(cleaned, "")
 		cleaned = reCommentClause.ReplaceAllString(cleaned, "")
+		// ENUM(...) no existe en SQLite. Se traduce a TEXT conservando las
+		// demás palabras de la columna (NOT NULL, DEFAULT 'sale'): los
+		// valores escritos por la aplicación son exactamente los mismos,
+		// y el CONSTRAINT de dominio del enum no la aplicaba nadie ni en
+		// MySQL con sql_mode relajado. Sin esta traducción,
+		// stock_movement —la tabla del kardex— no se creaba en SQLite
+		// y toda prueba del inventario era humo (D-10, auditoría).
+		cleaned = reEnumType.ReplaceAllString(cleaned, "text")
+		cleaned = reSetType.ReplaceAllString(cleaned, "text")
 		if reAutoIncrWord.MatchString(cleaned) {
 			fields := strings.Fields(cleaned)
 			if len(fields) > 0 {
@@ -339,6 +399,16 @@ func convertAlterTableForSQLite(s string) []string {
 		uc := strings.ToUpper(c)
 		switch {
 		case strings.HasPrefix(uc, "ADD COLUMN"):
+			// SQLite no admite la cláusula IF NOT EXISTS (que MySQL 8
+			// tampoco: la recorta SinSintaxisDeMariaDB, pero aquí las
+			// sentencias llegan ya partidas por cláusula y vuelven a
+			// aparecer). Sin quitarla, el ALTER moría en error de
+			// sintaxis y la columna no se creaba NUNCA en las bases de
+			// prueba —customer_information.rif, D-2 de la auditoría
+			// 2026-11-22—. Quitarla es neutro: el "si falta" lo decide
+			// quien ejecuta tolerando el error de columna duplicada. El
+			// COMMENT de la definición ya lo quitó reCommentClause arriba.
+			c = strings.TrimSpace(reIfNotExists.ReplaceAllString(c, ""))
 			if !seen[c] {
 				seen[c] = true
 				out = append(out, "ALTER TABLE "+table+" "+c)

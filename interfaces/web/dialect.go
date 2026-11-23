@@ -3,14 +3,22 @@ package web
 import (
 	"database/sql"
 	"log"
+	"strings"
 )
 
-// ---------- SQL (SQLite único) ----------
-// ERPGo corre sobre SQLite en las dos ediciones (PyME y Enterprise): una
-// base por empresa, con WAL. El SQL se escribe una sola vez, en dialecto
-// SQLite; no hay ramificación por motor ni condiciones "if MySQL" esparcidas por
-// los handlers. Por eso las consultas de este archivo son SQLite nativo y no
-// ranuras entre dos dialectos.
+// ---------- SQL compartido entre motores ----------
+//
+// LA VERDAD DE LOS MOTORES (D-10, auditoría 2026-11-22; el comentario de
+// este archivo afirmaba lo contrario): en PRODUCCIÓN el motor es MySQL —el
+// README lo declara obligatorio y el arranque lo exige (cmd/server
+// main.go)—; SQLite es el motor de PRUEBAS, y llega a él vía el traductor
+// de migraciones (infrastructure/persistence/sqlite_convert.go). Por eso
+// este archivo no puede escribir "dialecto SQLite" a secas: el runtime
+// corre sobre ambos. La regla de estos helpers es una sola —nada de
+// sintaxis exclusiva de un motor (INSERT IGNORE, ON DUPLICATE)— cuando el
+// mismo camino se prueba en el otro; donde queda sintaxis MySQL (los
+// upserts de abajo, heredados) está marcado y tolera fallo, y su
+// traducción real es tarea abierta, no un secreto del comentario.
 
 const nowLayout = "2006-01-02 15:04:05"
 
@@ -60,10 +68,25 @@ func (s *Server) upsertExchangeRate(db *sql.DB, date, currency string, rate floa
 }
 
 // ensureFiscalSeries asegura que exista la serie fiscal (upsert no-op).
+//
+// Sin `INSERT IGNORE`: esa sintaxis es solo de MySQL y este helper corre
+// dentro de transacciones que también se prueban en SQLite (el motor de
+// ventas offline la invierte en cada número). Se comprueba y se inserta;
+// el duplicado de una carrera es un no-op legítimo, no un error.
 func (s *Server) ensureFiscalSeries(tx *sql.Tx, series string) error {
-	_, err := tx.Exec(`INSERT IGNORE INTO fiscal_series (code, name, prefix, next_no, control_prefix, control_next, created_at)
-		VALUES (?,?,?,?,?,?,?)`, series, series, "", 1, "00", 1, now())
-	return err
+	var existe int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM fiscal_series WHERE code = ?`, series).Scan(&existe); err == nil && existe > 0 {
+		return nil
+	}
+	if _, err := tx.Exec(`INSERT INTO fiscal_series (code, name, prefix, next_no, control_prefix, control_next, created_at)
+		VALUES (?,?,?,?,?,?,?)`, series, series, "", 1, "00", 1, now()); err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "duplicate") || strings.Contains(msg, "unique") {
+			return nil // otra transacción ganó la carrera: la serie ya existe
+		}
+		return err
+	}
+	return nil
 }
 
 // upsertPaymentSummary recalcula el resumen de pagos de una factura.
