@@ -111,15 +111,22 @@ func aiSystemPrompt(roleName, schemaMap, reglas string) string {
 }
 
 // aiDefaultVendor es el vendor por defecto para instalaciones nuevas.
-const aiDefaultVendor = "orc24"
+// aiDefaultVendor es el proveedor genérico: cualquier API compatible con
+// OpenAI (URL, clave y modelo los pone el usuario). ORC24 —la IA propia de
+// Orcanet— quedó FUERA del listado de la pantalla (decisión del proyecto
+// libre, 2026-11-24): si algún día se ofrece, lo será como un proveedor más
+// desde la web del proyecto, no como valor por defecto ni como marca fija.
+// Se mantiene su etiqueta y modelo solo para que las instalaciones que ya
+// tienen filas con vendor=orc24 sigan funcionando sin tocar su configuración.
+const aiDefaultVendor = "personalizado"
 
 // aiVendorLabel es el nombre legible de un vendor (etiqueta, no determinante).
 // La URL base SIEMPRE viene de la BD (columna base_url), nunca del binario.
 var aiVendorLabel = map[string]string{
-	"openai":       "OpenAI",
-	"anthropic":    "Anthropic",
-	"orc24":        "ORC24",
-	"personalizado": "Personalizado",
+	"personalizado": "Personalizado (compatible con OpenAI)",
+	"openai":        "OpenAI",
+	"anthropic":     "Anthropic",
+	"orc24":         "ORC24 (heredado)",
 }
 
 // aiValidVendor indica si un valor es un vendor conocido (solo para label).
@@ -194,7 +201,8 @@ func aiModelsDeVendor(vendor string) []string {
 }
 
 // aiModelPorDefecto devuelve el modelo por defecto del vendor. Un vendor
-// desconocido ya quedó normalizado a ORC24 por aiNormalizeVendor.
+// vacío o desconocido ya quedó normalizado a «personalizado», cuyo valor
+// inicial es el mismo que usan OpenAI y las APIs compatibles.
 func aiModelPorDefecto(vendor string) string {
 	v := aiNormalizeVendor(vendor)
 	if m := strings.TrimSpace(aiVendorModelPorDefecto[v]); m != "" {

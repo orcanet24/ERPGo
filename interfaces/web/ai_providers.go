@@ -21,9 +21,9 @@ const (
 	// aiOpenAIBaseURL is the endpoint used by the legacy single-row ai_setting.
 	aiOpenAIBaseURL = "https://api.openai.com/v1"
 	// aiDefaultModel was the fallback for a row with no model; per-vendor
-	// defaults now live in ai_rules.go (aiModelPorDefecto), because ORC24's
-	// default is `orc24` and an OpenAI default of gpt-4o-mini would contradict
-	// the curated catalog (small models are not offered).
+	// defaults now live in ai_rules.go (aiModelPorDefecto): el proveedor
+	// genérico («personalizado») hereda el modelo inicial de las APIs
+	// compatibles con OpenAI, y cada etiqueta mantiene su catálogo curado.
 	// aiTimeout es el plazo máximo de UNA llamada al proveedor de IA. 600 s en
 	// vez de 60/180: los modelos que razonan (LongCat-2.0) pueden tardar varios
 	// minutos en escribir la respuesta cuando el informe es complejo; el cliente

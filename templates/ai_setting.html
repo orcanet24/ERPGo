@@ -116,7 +116,9 @@
             Cada proveedor tiene su <strong>URL base</strong>, <strong>API Key</strong> y <strong>modelo</strong>.
             <strong>Solo uno puede estar activo a la vez</strong> &mdash; es el que usan todas las pantallas, los agentes
             y las tareas. La URL se guarda en la base de datos y puede apuntar a cualquier API compatible con OpenAI
-            (ORC24, OpenAI, LM Studio, Ollama, etc.).
+            (OpenAI, OpenRouter, Groq, DeepSeek, Together, Ollama, LM Studio, vLLM, etc.). Los servidores locales
+            (Ollama, LM Studio) no necesitan API Key. Para que los <strong>agentes</strong> puedan operar, el modelo
+            debe soportar <em>tool calling</em>; para chatear e informes simples no hace falta.
         </p>
     </div>
 
@@ -136,12 +138,11 @@
             <div class="input_label">
                 <label class="label_name" for="provider_vendor">Proveedor *</label>
                 <select name="vendor" id="provider_vendor" class="input_section" style="width:100%">
-                    <option value="orc24" selected>ORC24 — inferencia propia de Orcanet</option>
+                    <option value="personalizado" selected>Personalizado — cualquier API compatible con OpenAI</option>
                     <option value="openai">OpenAI</option>
                     <option value="anthropic">Anthropic</option>
-                    <option value="personalizado">Personalizado (API OpenAI-compatible)</option>
                 </select>
-                <small class="erp-caption" id="vendorHint">Marca o etiqueta informativa: la URL base decide a qué API se le habla.</small>
+                <small class="erp-caption" id="vendorHint">Etiqueta informativa: la URL base decide a qué API se le habla. Elegí «Personalizado» para OpenRouter, Groq, DeepSeek, Together, Ollama, LM Studio, vLLM o cualquier servicio con forma OpenAI.</small>
             </div>
 
             <!-- URL base: SIEMPRE visible y SIEMPRE se guarda en la BD. -->
@@ -167,7 +168,7 @@
                 <label class="label_name" for="model">Modelo</label>
                 <div style="display:flex;gap:6px">
                     <input type="text" name="model" id="model"
-                        placeholder="gpt-4o-mini, llama3.2, orc24..." class="input_section"
+                        placeholder="gpt-4o-mini, llama3.2, qwen2.5, deepseek-chat..." class="input_section"
                         style="flex:1" autocomplete="off">
                     <button type="button" class="btn btn-sm btn-default" id="btnConsultarModelos">Consultar</button>
                 </div>
@@ -222,6 +223,18 @@ $(function () {
         $('#model').val('');
         $('#modelSugerencias').remove();
         actualizarBaseUrlVisibility();
+    }
+
+    // Si el proveedor guardado tiene un vendor que ya no se ofrece en el
+    // select (p. ej. «orc24» de instalaciones anteriores, retirado del
+    // listado), se añade su opción solo para esa fila: editar un proveedor
+    // existente no debe cambiarle la configuración sin que el usuario lo pida.
+    function asegurarVendorEnSelect(vendor, label) {
+        var v = (vendor || '').trim();
+        if (!v) return;
+        if ($('#provider_vendor option[value="' + v + '"]').length === 0) {
+            $('#provider_vendor').append($('<option></option>').val(v).text((label || v) + ' (heredado)'));
+        }
     }
 
     // Consultar modelos directamente de la API del proveedor (GET {base_url}/models).
@@ -351,6 +364,8 @@ $(function () {
         if (!id || id === '0') {
             // Proveedor pendiente: formulario limpio con datos de la fila.
             resetProviderForm($row.attr('data-vendor') || 'personalizado', $row.attr('data-model'));
+            asegurarVendorEnSelect($row.attr('data-vendor'), $row.attr('data-vendorlabel'));
+            $('#provider_vendor').val($row.attr('data-vendor') || 'personalizado');
             $('#providerFormTitle').text('Configurar proveedor');
             $('#api_key').focus();
             $('html, body').animate({ scrollTop: $('#providerForm').offset().top }, 300);
@@ -358,6 +373,7 @@ $(function () {
         }
         $('#provider_id').val(id);
         $('#provider_name').val($row.attr('data-name'));
+        asegurarVendorEnSelect($row.attr('data-vendor'), $row.attr('data-vendorlabel'));
         $('#provider_vendor').val($row.attr('data-vendor') || 'personalizado');
         $('#api_key').val($row.attr('data-api-key'));
         $('#base_url').val($row.attr('data-base-url') || '');
@@ -455,7 +471,7 @@ $(function () {
             });
             $prov.append($table);
             $prov.append($('<p class="ai_usage_note"></p>').text(
-                'El coste estimado solo aplica a OpenAI (tarifas de referencia por token). ORC24 se factura por plan: ajústalo a tu tarifa real.'));
+                'El coste estimado es una referencia por token (tarifas de OpenAI). Si usás otro proveedor o un modelo local, ajustalo a tu tarifa real: los modelos locales no cuestan por token.'));
         }).fail(function () {
             $('#aiUsageSummary').text('No se pudo leer el consumo de inferencia.');
         });
