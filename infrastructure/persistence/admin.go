@@ -213,27 +213,57 @@ func InitializeAdminUser(db *sql.DB, dialect, username, password string) error {
 		}
 	}
 
-	// roles
-	if _, err := tx.Exec(`INSERT INTO sec_role (id, type) VALUES (1,'admin'),(2,'usuario')`); err != nil {
-		return fmt.Errorf("failed to insert roles: %w", err)
+	// ROLES CANÓNICOS, ANTES DE ATAR AL ADMINISTRADOR.
+	//
+	// El id es parte del contrato del catálogo: 1 master, 2 admin, 3 manager,
+	// 4 employee. La siembra los deja en esa forma aunque la migración de
+	// arranque (schema_z_admin_master.sql) ya haya creado un rol master con
+	// otro id: en ese momento NO hay usuarios a los que atar, así que
+	// reescribirlos no degrada a nadie.
+	//
+	// POR QUÉ NO SE INSERTAN A CIEGAS. Antes esta función hacía
+	// `INSERT INTO sec_role (id,type) VALUES (1,'admin'),(2,'usuario')` y
+	// añadía un master nuevo sin comprobar si ya existía. En una instalación
+	// limpia el master de la migración nacía con id 3 (AUTO_INCREMENT=3 de
+	// schema.sql), y el asistente reutilizaba después ese id como «Manager»
+	// —con el administrador ya atado a él—: el dueño entraba como manager,
+	// sin matriz de permisos, y solo veía el menú público (Dashboard y Gestion
+	// Inventario). Sembrar aquí, idempotente y en el mismo orden que el resto
+	// del catálogo, elimina esa carrera entre sembradores.
+	rolesBase := []struct {
+		id    int
+		tipo  string
+		nivel string
+		desc  string
+	}{
+		{1, "Super Admin", "master", "Acceso total al sistema"},
+		{2, "Admin", "admin", "Administrador de empresa"},
+		{3, "Manager", "manager", "Gerente"},
+		{4, "Employee", "employee", "Empleado"},
 	}
+	for _, r := range rolesBase {
+		var existe int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM sec_role WHERE id = ?`, r.id).Scan(&existe); err != nil {
+			return fmt.Errorf("comprobando el rol %q: %w", r.tipo, err)
+		}
+		if existe == 0 {
+			if _, err := tx.Exec(`INSERT INTO sec_role (id, type, level, description, is_system)
+				VALUES (?, ?, ?, ?, 1)`, r.id, r.tipo, r.nivel, r.desc); err != nil {
+				return fmt.Errorf("sembrando el rol %q: %w", r.tipo, err)
+			}
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE sec_role SET type = ?, level = ?, description = ?, is_system = 1
+			WHERE id = ?`, r.tipo, r.nivel, r.desc, r.id); err != nil {
+			return fmt.Errorf("normalizando el rol %q: %w", r.tipo, err)
+		}
+	}
+
 	// EL ADMIN INICIAL NACE CON PODER DE VERDAD (bootstrap, auditoría
 	// 2026-11-23): las rutas de sistema (/ai, /users, /tenants) exigen nivel
-	// 'master', y la siembra vieja dejaba al administrador sin fila en
-	// sec_userrole y a los roles con el default 'employee' —el dueño de una
-	// instalación recién creada quedaba fuera de las pantallas que necesita
-	// para asignárselo (medido en arranque limpio: /ai/agents devolvía 403
-	// con la pantalla de tokens MCP vacía al otro lado). Se siembra el rol
-	// maestro y se ata al usuario 1 en la MISMA transacción: semilla y
+	// 'master'. Se ata al rol canónico 1 en la MISMA transacción: semilla y
 	// autoridad no pueden quedar a mitades.
-	if _, err := tx.Exec(`INSERT INTO sec_role (type, level, description, is_system)
-		VALUES ('super', 'master', 'Super Administrador del sistema', 1)`); err != nil {
-		return fmt.Errorf("no se pudo sembrar el rol maestro: %w", err)
-	}
-	var masterRoleID int64
-	if err := tx.QueryRow(`SELECT id FROM sec_role WHERE level = 'master' ORDER BY id LIMIT 1`).Scan(&masterRoleID); err != nil {
-		return fmt.Errorf("no se encontró el rol maestro recién sembrado: %w", err)
-	}
+	const masterRoleID = 1
 	if _, err := tx.Exec(`INSERT INTO sec_userrole (user_id, roleid, createby, createdate)
 		VALUES ('1', ?, 'bootstrap', ?)`, masterRoleID, time.Now().Format("2006-01-02 15:04:05")); err != nil {
 		return fmt.Errorf("no se pudo atar el rol maestro al administrador: %w", err)

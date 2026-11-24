@@ -239,6 +239,25 @@ func normalizarSuperAdmin(ctl *sql.DB) error {
 		log.Printf("AVISO: %q tenía el rol de super administrador y se le retiró: "+
 			"el super administrador de la instalación es uno solo (%q)", extra.username, keep.username)
 	}
+
+	// EL SUPERADMINISTRADOR NO NECESITA —NI DEBE TENER— OTRO ROL.
+	//
+	// Una instalación sembrada por el asistente anterior quedó con dos filas:
+	// la del master (id 1) y otra de menor nivel (id 3, convertida en manager
+	// después de atar al dueño). El login resolvía el nivel con un LIMIT 1 y
+	// devolvía la de menor nivel, así que el dueño entraba sin matriz de
+	// permisos y solo veía el menú público. Se deja SOLO el master: cualquier
+	// otro rol es ruido que puede volver a taparlo.
+	if _, err := ctl.Exec(`DELETE FROM sec_userrole WHERE user_id = ? AND roleid <> ?`,
+		keep.userID, rolMaster); err != nil {
+		return fmt.Errorf("retirando roles ajenos al super administrador: %w", err)
+	}
+	// Las sesiones ya abiertas guardaron el nivel viejo (manager). Sin esto, el
+	// arreglo no se ve hasta que caduque la sesión o el usuario vuelva a entrar.
+	// No se borran: se corrige el nivel de la única identidad que acaba de quedar
+	// como master, que es exactamente lo que un login nuevo resolvería.
+	_, _ = ctl.Exec(`UPDATE web_sessions SET user_level = ? WHERE user_id = ?`,
+		nivelSuperAdmin, keep.userID)
 	return nil
 }
 

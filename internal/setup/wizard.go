@@ -383,41 +383,12 @@ func (w *Wizard) runFreshInstall() error {
 		return fmt.Errorf("registrando propietario de empresa maestra: %w", err)
 	}
 
-	// Crear roles base del sistema
-	roles := []struct {
-		id     int
-		typ    string
-		level  string
-		desc   string
-		system int
-	}{
-		{1, "Super Admin", "master", "Acceso total al sistema", 1},
-		{2, "Admin", "admin", "Administrador de empresa", 1},
-		{3, "Manager", "manager", "Gerente", 1},
-		{4, "Employee", "employee", "Empleado", 1},
-	}
-	for _, r := range roles {
-		if _, err := controlDB.Exec(`INSERT INTO sec_role (id, type, level, description, is_system) VALUES (?, ?, ?, ?, ?)
-			 ON DUPLICATE KEY UPDATE type=VALUES(type), level=VALUES(level), description=VALUES(description), is_system=VALUES(is_system)`,
-			r.id, r.typ, r.level, r.desc, r.system,
-		); err != nil {
-			return fmt.Errorf("insertando rol base: %w", err)
-		}
-	}
-	var masterUserID string
-	if err := controlDB.QueryRow(`SELECT user_id FROM user_login WHERE username=? AND status=1 LIMIT 1`, superUser).Scan(&masterUserID); err != nil {
-		return fmt.Errorf("buscando el super administrador %q: %w", superUser, err)
-	}
-	var masterRole int
-	if err := controlDB.QueryRow(`SELECT COUNT(*) FROM sec_userrole WHERE user_id=? AND roleid=1`, masterUserID).Scan(&masterRole); err != nil {
-		return fmt.Errorf("comprobando rol master: %w", err)
-	}
-	if masterRole == 0 {
-		if _, err := controlDB.Exec(`INSERT INTO sec_userrole (user_id, roleid, createby, createdate)
-			VALUES (?, 1, 'system', NOW())`, masterUserID); err != nil {
-			return fmt.Errorf("asignando rol master: %w", err)
-		}
-	}
+	// Los roles canónicos (1 master, 2 admin, 3 manager, 4 employee) los siembra
+	// InitializeAdminUser EN LA MISMA transacción en la que ata al dueño al
+	// master. Antes se sembraban aquí, después de la siembra, y el upsert del
+	// id 3 convertía en «Manager» el rol master al que la siembra ya había
+	// atado al administrador: el dueño entraba sin permisos y solo veía el menú
+	// público. Un solo sembrador y un solo orden evitan esa carrera.
 
 	if err := (&configs.Config{
 		DBDriver: "mysql", DBHost: dbHost, DBPort: dbPort, DBUser: dbUser, DBPassword: dbPass,

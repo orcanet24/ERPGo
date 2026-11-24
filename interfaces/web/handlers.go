@@ -361,6 +361,18 @@ func (s *Server) authenticateUser(r *http.Request, username, password string) (*
 			level = "employee"
 		}
 	}
+	// EL ROL MASTER ES GLOBAL. Si el catálogo de control lo concede, ninguna
+	// asignación de empresa puede rebajarlo: el dueño del sistema abre todas
+	// las empresas por nivel (canAccessTenant/esUsuarioMaster). Entrar como
+	// manager en una de ellas era una contradicción que, además, lo dejaba sin
+	// matriz de permisos y con el menú en blanco —el síntoma exacto de una
+	// instalación donde un sembrador anterior le ató un segundo rol de menor
+	// nivel—. Se comprueba después del fallback para cubrir las dos bases.
+	if level != nivelSuperAdmin {
+		if ctl, cerr := s.controlStore(); cerr == nil && usuarioTieneRolSuperAdmin(ctl, uid) {
+			level = nivelSuperAdmin
+		}
+	}
 
 	fullname := strings.TrimSpace(first.String + " " + last.String)
 	if fullname == "" {

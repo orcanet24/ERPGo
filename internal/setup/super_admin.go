@@ -125,6 +125,13 @@ func RestablecerCredencialSuperAdmin(db *sql.DB, empresa, usuario, clave string)
 		if _, err := db.Exec(`UPDATE sec_userrole SET roleid = ? WHERE id = ?`, rolMaster, asignadas[0].fila); err != nil {
 			return "", fmt.Errorf("normalizando el rol del super administrador: %w", err)
 		}
+		// El dueño del sistema no necesita otro rol: si una siembra anterior le
+		// dejó uno de menor nivel, el login podía resolver ese y dejarlo sin
+		// permisos. Se deja solo el master (mismo criterio que el arranque).
+		if _, err := db.Exec(`DELETE FROM sec_userrole WHERE user_id = ? AND roleid <> ?`,
+			userID, rolMaster); err != nil {
+			return "", fmt.Errorf("retirando roles ajenos al super administrador: %w", err)
+		}
 	}
 
 	creando := false
