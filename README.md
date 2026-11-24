@@ -1,7 +1,7 @@
 # ERPGo — ERP Fiscal para PYMEs Venezolanas
 
 **Un ERP completo, fiscalmente defendible ante el SENIAT, libre y auditable (GPLv3).**
-Distribuido por **Orcanet1724 C.A** como aporte al comercio venezolano. Parte de **Venezuela Libre**.
+Distribuido por **Orcanet1724 C.A** como aporte al comercio venezolano: **soberanía tecnológica** para quien lo necesite.
 
 > Solo ejecuta el binario y ya tienes: facturación POS, contabilidad con asientos
 > automáticos, libros fiscales, caja por turnos, notas de crédito, IGTF,
@@ -33,9 +33,10 @@ puede aportar: reportar un fallo, corregirlo, traducir, crear un addon o
 adaptarlo a su rubro. La regla es una sola: quien construya sobre ERPGo, lo hace
 tan público como el proyecto.
 
-> **Venezuela Libre** no es un eslogan: es la decisión de que la herramienta que
-> factura, cobra y contabiliza en tu negocio pueda ser revisada, compartida y
-> mejorada por la gente que la usa.
+> **Soberanía tecnológica** no es un eslogan: es la decisión de que la
+> herramienta que factura, cobra y contabiliza en tu negocio pueda ser revisada,
+> compartida y mejorada por la gente que la usa, sin depender de licencias ni de
+> un proveedor que un día desaparece.
 
 ## Capturas
 
