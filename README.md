@@ -1,8 +1,7 @@
-[README.md](https://github.com/user-attachments/files/33939877/README.md)
 # ERPGo — ERP Fiscal para PYMEs Venezolanas
 
-**Un ERP completo, fiscalmente defendible ante el SENIAT, gratis como binario.**
-Distribuido por **Orcanet1724 C.A** como aporte al comercio venezolano.
+**Un ERP completo, fiscalmente defendible ante el SENIAT, libre y auditable (GPLv3).**
+Distribuido por **Orcanet1724 C.A** como aporte al comercio venezolano. Parte de **Venezuela Libre**.
 
 > Solo ejecuta el binario y ya tienes: facturación POS, contabilidad con asientos
 > automáticos, libros fiscales, caja por turnos, notas de crédito, IGTF,
@@ -123,31 +122,42 @@ momento desde la misma pantalla (o `POST /ai/agents/mcp/revoke`).
 
 ## Licencia
 
-ERPGo es **freeware**: el binario es gratuito para uso, no open source.
-Distribuido por Orcanet1724 C.A.
-El **código fuente es propietario** — no se redistribuye.
+ERPGo es **software libre** bajo la **GNU General Public License v3 (GPLv3)** — la
+misma licencia del núcleo de Linux. Puedes usarlo, estudiarlo, modificarlo y
+redistribuirlo; si distribuyes el binario o un derivado, **el código va contigo y
+bajo la misma licencia**. Esa es la regla del proyecto: quien construya sobre
+ERPGo, lo hace tan público como él.
 
-El SDK para crear addons (ERPGo-SDK) tiene su propia licencia (gratuita para usar,
-no para revender).
+- Texto completo: [`LICENSE`](LICENSE)
+- Código fuente: <https://github.com/orcanet24/ERPGo>
+- El **SDK para crear addons (ERPGo-SDK)** tiene su propia licencia (gratuita
+  para usar, no para revender).
+- La licencia cubre el **código**, no el **nombre ni la marca ERPGo**, que son
+  de Orcanet1724 C.A.
 
 ## Modelo de Soporte
 
-Cada cliente es un cliente. No hay foros de comunidad, no es open source.
+ERPGo es libre y la comunidad puede usarlo sin pagar nada. Lo que se contrata
+son los servicios que hacen falta para operarlo en serio:
 
-Orcanet1724 C.A. ofrece soporte por niveles según el tipo de cuenta:
+- **Comunidad** (sin coste, sin SLA): issues y preguntas en GitHub.
+- **Soporte comercial** (Orcanet1724 C.A.): instalación, migraciones,
+  actualizaciones fiscales (SENIAT, IGTF, tasas), terminales POS e impresoras
+  fiscales, formación y desarrollo a medida.
 
-| Nivel | Binario ERPGo | Soporte |
+| Nivel | ERPGo | Soporte |
 |---|---|---|
-| **Gratuito** | ✅ Gratis | 50 tickets/mes vía sistema de tickets |
-| **De pago** | ✅ Gratis | Tickets ilimitados + soporte remoto |
+| **Comunitario** | ✅ Gratis, GPLv3 | Issues en GitHub |
+| **De pago** | ✅ Gratis, GPLv3 | Tickets ilimitados + soporte remoto |
 
 Adicionalmente, Orcanet1724 C.A. ofrece por separado:
 
 - **Hosting** — alojamiento del ERP en servidor administrado
-- **Servicios de IA** — proveedores de inferencia, agentes, configuración personalizada
+- **Servicios de IA** — configuración de proveedores (cualquier API compatible
+  con OpenAI: propia, en la nube o local), agentes y despliegue
 
-> El ERP siempre es gratis. Lo que se contrata es el soporte, el hosting y los
-> servicios profesionales alrededor de la herramienta.
+> El ERP es gratis y libre. Lo que se contrata son los servicios profesionales
+> alrededor de la herramienta: soporte, hosting y IA.
 
 ---
 
