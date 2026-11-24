@@ -47,6 +47,20 @@ Así se ve ERPGo funcionando (capturas reales, no maquetas):
 | ![Productos](docs/img/productos.png)<br>**Productos e inventario** | ![Clientes](docs/img/clientes.png)<br>**Clientes y cuentas por cobrar** |
 | ![Plan de cuentas](docs/img/plan-cuentas.png)<br>**Plan de cuentas venezolano** | ![Configuración IA](docs/img/ia-proveedor.png)<br>**IA con tu propio proveedor** |
 
+## Terminal POS (POSGo2) — también libre
+
+El terminal de venta es un proyecto **libre (GPLv3)** aparte que se vincula al
+ERP por gRPC/HTTP: factura aunque el internet se caiga (las ventas esperan en
+cola y se sincronizan al reconectar), imprime en impresoras fiscales
+(Hasar/Epson/Bixolon/TFHKA o simulador), maneja turnos de caja y descarga
+catálogo y clientes desde el ERP.
+
+![Terminal POSGo2](docs/img/pos-venta.png)
+
+*Caja en línea con el ERP: catálogo sincronizado, carrito con IVA y turno de caja.*
+
+Repositorio del terminal: <https://github.com/orcanet24/POSGo2>
+
 ## Política de Orden y Crecimiento (NO NEGOCIABLE)
 
 > **Esta política rige todo desarrollo futuro. Violarla rompe la promesa de estabilidad.**
