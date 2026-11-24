@@ -10,6 +10,33 @@ Distribuido por **Orcanet1724 C.A** como aporte al comercio venezolano. Parte de
 
 ---
 
+---
+
+## Qué es ERPGo y por qué es libre
+
+**Misión.** Que cualquier comercio venezolano —una carnicería, una tienda de
+telas, un taller de servicios— tenga facturación fiscal, contabilidad con
+asientos automáticos e inventario sin pagar licencias en dólares y sin quedar
+atado a un proveedor que un día desaparece. El código es público y auditable:
+la información fiscal de un país no debería ser una caja negra.
+
+**Visión.** Un ecosistema de comercio venezolano soberano: el ERP, el terminal
+POS ([POSGo2](https://github.com/orcanet24/POSGo2), también libre), los addons y
+los reportes hablando una API abierta, con la comunidad aportando lo que cada
+rubro necesita y nadie reinventando la factura fiscal.
+
+**¿Por qué sigue vivo?** Porque lo usamos a diario en nuestros propios negocios
+—**cárnicos, textil y servicios tecnológicos**—. El sistema se mejora porque lo
+necesitamos funcionando en el mostrador, no porque alguien pagó una licencia.
+Esa es la garantía de mantenimiento real; y al ser libre (GPLv3), cualquiera
+puede aportar: reportar un fallo, corregirlo, traducir, crear un addon o
+adaptarlo a su rubro. La regla es una sola: quien construya sobre ERPGo, lo hace
+tan público como el proyecto.
+
+> **Venezuela Libre** no es un eslogan: es la decisión de que la herramienta que
+> factura, cobra y contabiliza en tu negocio pueda ser revisada, compartida y
+> mejorada por la gente que la usa.
+
 ## Política de Orden y Crecimiento (NO NEGOCIABLE)
 
 > **Esta política rige todo desarrollo futuro. Violarla rompe la promesa de estabilidad.**
@@ -158,6 +185,18 @@ Adicionalmente, Orcanet1724 C.A. ofrece por separado:
 
 > El ERP es gratis y libre. Lo que se contrata son los servicios profesionales
 > alrededor de la herramienta: soporte, hosting y IA.
+
+## Contacto
+
+¿Te interesa **instalación, migración, capacitación o un desarrollo a medida**?
+Con gusto te atendemos:
+
+- **Marcos Espinoza** — representante de **Orcanet1724 C.A.**
+- Celular / WhatsApp: **0412-935-5997**
+- Correo: **orcanet1724@gmail.com**
+
+La comunidad es gratis (issues en GitHub). Lo que se contrata es el
+acompañamiento: instalación, soporte, actualizaciones fiscales y desarrollos.
 
 ---
 
