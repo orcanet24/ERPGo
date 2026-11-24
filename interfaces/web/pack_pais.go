@@ -34,7 +34,13 @@ type packPais struct {
 	CertificadoPor  string     `json:"certificado_por"`
 	AmbientePruebas string     `json:"ambiente_pruebas"`
 	Pendientes      []string   `json:"pendientes"`
-	Impuestos       []string   `json:"impuestos"`
+	// SeedVersion: versión de las semillas del país. 0 = todavía no hay datos
+	// aplicables; un pack «validado» exige >= 1 (sin semillas no hay país).
+	SeedVersion int `json:"seed_version"`
+	// Fuentes: de dónde salió cada dato (norma, resolución, PUC oficial). La
+	// trazabilidad de la norma es lo que permite revisar cuando cambie.
+	Fuentes   []string `json:"fuentes"`
+	Impuestos []string `json:"impuestos"`
 	// Documentos: tipos y series obligatorios del país (FACT, NC, ND,
 	// RET-IVA...). Va en la ficha y no en el registro porque es dato del país,
 	// no comportamiento del core.
@@ -94,6 +100,9 @@ func validarPackPais(p packPais) error {
 	case paisValidado:
 		if strings.TrimSpace(p.ValidadoPor) == "" {
 			return fmt.Errorf("%s: un pack validado tiene que declarar quién lo revisó (validado_por)", p.Codigo)
+		}
+		if p.SeedVersion < 1 {
+			return fmt.Errorf("%s: un pack validado necesita semillas aplicables (seed_version >= 1)", p.Codigo)
 		}
 	case paisCertificado:
 		if strings.TrimSpace(p.CertificadoPor) == "" || strings.TrimSpace(p.AmbientePruebas) == "" {

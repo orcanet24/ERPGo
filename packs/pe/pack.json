@@ -4,12 +4,19 @@
   "currency": "PEN",
   "estado": "borrador",
   "legacy_embebido": false,
+  "seed_version": 0,
+  "fuentes": [
+    "Texto Único Ordenado de la Ley del IGV (18 %)",
+    "Plan Contable General Empresarial (PCGE) vigente",
+    "SUNAT: comprobantes de pago electrónicos (CPE)",
+    "Retenciones y percepciones del IGV"
+  ],
   "validado_por": "",
   "certificado_por": "",
   "ambiente_pruebas": "",
   "pendientes": [
     "Plan Contable General Empresarial (PCGE) y cuentas por defecto",
-    "IGV 18% e impuesto selectivo al consumo cuando aplique",
+    "IGV 18 % e impuesto selectivo al consumo cuando aplique",
     "Retenciones y percepciones: cálculo y numeración",
     "Validación firmada por un contador peruano",
     "Comprobantes electrónicos SUNAT (CPE) sobre el contrato digitalinvoice"

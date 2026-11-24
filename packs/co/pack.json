@@ -4,20 +4,32 @@
   "currency": "COP",
   "estado": "borrador",
   "legacy_embebido": false,
+  "seed_version": 0,
+  "fuentes": [
+    "Estatuto Tributario (IVA 19 % general, 5 % y exentos)",
+    "Plan Único de Cuentas (PUC) oficial para comerciantes",
+    "Resolución DIAN de facturación electrónica vigente (por proveedor tecnológico)",
+    "Retenciones en la fuente, ICA e IVA: tabla y conceptos del Estatuto Tributario"
+  ],
   "validado_por": "",
   "certificado_por": "",
   "ambiente_pruebas": "",
   "pendientes": [
     "Plan Único de Cuentas (PUC) con jerarquía y cuentas por defecto",
-    "IVA 19%, 5% y exentos (con precio de lista con impuesto incluido)",
+    "IVA 19 %, 5 % y exentos (con precio de lista con impuesto incluido)",
     "Retenciones en la fuente, ICA e IVA: cálculo y numeración",
     "Cuentas por defecto de cliente y proveedor (cartera)",
     "Validación firmada por un contador colombiano",
     "Emisión electrónica DIAN (por proveedor tecnológico) sobre el contrato digitalinvoice"
   ],
   "impuestos": [],
-  "documentos": [],
+  "documentos": [
+    "Factura electrónica de venta (DIAN)",
+    "Nota crédito electrónica",
+    "Nota débito electrónica",
+    "Documento soporte en adquisiciones"
+  ],
   "plan_de_cuentas": "",
   "factura_electronica": "",
-  "notas": "Registro inicial. NO es seleccionable: sin pack de datos, elegir Colombia dejaría un plan de cuentas venezolano con nombre colombiano."
+  "notas": "Registro inicial con el esqueleto de semillas en packs/co/seed.sql (todo comentado: nada se aplica hasta que un contador valide). NO es seleccionable: sin pack de datos, elegir Colombia dejaría un plan de cuentas venezolano con nombre colombiano."
 }

@@ -4,6 +4,14 @@
   "currency": "VES",
   "estado": "validado",
   "legacy_embebido": true,
+  "seed_version": 1,
+  "fuentes": [
+    "Ley de IVA y su reglamento (tasas general 16 % y reducida 8 %)",
+    "Providencia SNAT/2024/000102 (facturación digital / imprenta autorizada)",
+    "Providencia de IGTF (3 % sobre pagos en divisa) y su configuración en fiscal_setting",
+    "Plan de cuentas CONASEV (migrations/schema_ve_fiscal.sql)",
+    "Retenciones de IVA e ISLR: comprobantes y numeración de series RET-IVA / RET-ISLR"
+  ],
   "validado_por": "Contabilidad del proyecto (revisión interna sobre la normativa SENIAT vigente)",
   "certificado_por": "",
   "ambiente_pruebas": "",
@@ -24,5 +32,5 @@
   ],
   "plan_de_cuentas": "CONASEV (migrations/schema_ve_fiscal.sql) con cuentas por defecto del core: ventas, IVA débito (5020701), IGTF por pagar (5020702), inventario, COGS, cartera, retenciones",
   "factura_electronica": "digitalinvoice (imprenta digital autorizada / Providencia SNAT/2024/000102); el terminal POS imprime o emite contingencia y sincroniza",
-  "notas": "País de origen. Este pack vive embebido en las migraciones históricas (legacy_embebido=true). Validado en lo fiscal y contable: IVA/IGTF como pasivo, cierre de período contra el libro mayor, retenciones IVA/ISLR, libros legales, numeración con series y control, y factura de contingencia del POS. Gaps conocidos y declarados: los formatos exactos de libros legales y de la declaración se ajustan por Providencia y no se certifican contra un ambiente SENIAT (no hay sandbox público); se mantienen en la revisión periódica del pack."
+  "notas": "País de origen. Este pack vive embebido en las migraciones históricas (legacy_embebido=true, seed_version=1). Validado en lo fiscal y contable: IVA/IGTF como pasivo, cierre de período contra el libro mayor, retenciones IVA/ISLR, libros legales, numeración con series y control, y factura de contingencia del POS. Gaps conocidos y declarados: los formatos exactos de libros legales y de la declaración se ajustan por Providencia y no se certifican contra un ambiente SENIAT (no hay sandbox público); se mantienen en la revisión periódica del pack."
 }

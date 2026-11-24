@@ -9,7 +9,13 @@ package web
 //  3. Lo que se OFRECE (PackDisponible) coincide con lo que se puede sostener:
 //     solo se ofrece lo que ya no está en borrador.
 
-import "testing"
+import (
+	"io/fs"
+	"strings"
+	"testing"
+
+	"erpgo"
+)
 
 func TestTodasLasFichasDePaisSonValidas(t *testing.T) {
 	packs, err := cargarPacksPais()
@@ -103,4 +109,45 @@ func codigoLower(codigo string) string {
 		salida = append(salida, c)
 	}
 	return string(salida)
+}
+
+// TestPackValidadoExigeSemillas: un pack no puede declararse «validado» sin
+// datos aplicables. Sin semillas no hay país, solo una ficha bonita.
+func TestPackValidadoExigeSemillas(t *testing.T) {
+	caso := packPais{Codigo: "CO", Nombre: "Colombia", Moneda: "COP", Estado: paisValidado, ValidadoPor: "contador"}
+	if err := validarPackPais(caso); err == nil {
+		t.Error("un pack validado con seed_version 0 debe rechazarse")
+	}
+	caso.SeedVersion = 1
+	if err := validarPackPais(caso); err != nil {
+		t.Errorf("con semillas declaradas no debía fallar: %v", err)
+	}
+}
+
+// TestPackEnBorradorNoAplicaNada: el seed de un país en borrador es una lista
+// de trabajo, no código. Si alguien «activa» una sentencia por accidente, esta
+// prueba lo delata antes de que se facture con datos a medias.
+func TestPackEnBorradorNoAplicaNada(t *testing.T) {
+	packs, err := cargarPacksPais()
+	if err != nil {
+		t.Fatalf("cargando packs: %v", err)
+	}
+	raiz := erpgo.Packs()
+	for codigo, p := range packs {
+		if p.LegacyEmbebido || p.Estado != paisBorrador {
+			continue
+		}
+		dir := "packs/" + codigoLower(codigo) + "/seed.sql"
+		data, err := fs.ReadFile(raiz, dir)
+		if err != nil {
+			continue // un borrador puede no tener seed todavía
+		}
+		for i, linea := range strings.Split(string(data), "\n") {
+			l := strings.TrimSpace(linea)
+			if l == "" || strings.HasPrefix(l, "--") {
+				continue
+			}
+			t.Errorf("%s:%d tiene una sentencia ejecutable en un pack en borrador: %q", dir, i+1, l)
+		}
+	}
 }

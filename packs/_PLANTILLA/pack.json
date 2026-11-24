@@ -5,6 +5,10 @@
   "currency": "",
   "estado": "borrador",
   "legacy_embebido": false,
+  "seed_version": 0,
+  "fuentes": [
+    "Norma oficial del país (ley, estatuto, resolución del regulador)"
+  ],
   "validado_por": "",
   "certificado_por": "",
   "ambiente_pruebas": "",
@@ -17,7 +21,7 @@
     "Facturación electrónica (proveedor/regulador) sobre el contrato digitalinvoice"
   ],
   "impuestos": [],
-  "documentos": ["Factura de venta", "Nota de crédito", "Nota de débito"],
+  "documentos": [],
   "plan_de_cuentas": "",
   "factura_electronica": "",
   "notas": "Completar sin inventar: si un dato no está verificado contra la norma, va en pendientes."

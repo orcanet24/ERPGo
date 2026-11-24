@@ -146,24 +146,33 @@ Brasil.
   se ofrece**; un código desconocido no inventa país; invariantes del registro;
   la columna nace con default y se lee bien sobre la cadena real de migraciones.
 - **Kit del colaborador** (`packs/`): contrato del pack, plantilla
-  (`packs/_PLANTILLA/pack.json`), fichas de Venezuela (legado), Colombia y Perú
-  en borrador, y validador (`interfaces/web/pack_pais.go` + prueba) que no deja
-  que un pack en borrador se ofrezca ni que un «validado» no diga quién lo
-  firmó. `packs/README.md` es la guía de 7 pasos para contribuir un país.
+  (`packs/_PLANTILLA/pack.json`), fichas de Venezuela (legado, `seed_version=1`),
+  Colombia y Perú en borrador, y validador (`interfaces/web/pack_pais.go` +
+  pruebas) que no deja que un pack en borrador se ofrezca, que un «validado» no
+  diga quién lo firmó ni que un borrador tenga sentencias ejecutables.
+  `packs/README.md` es la guía de 7 pasos para contribuir un país.
+- **Esqueleto del pack Colombia** (`packs/co/seed.sql` + `packs/co/README.md`):
+  la lista de trabajo del colaborador —PUC, cuentas por defecto, impuestos,
+  series, retenciones, DIAN— con todo comentado: nada se aplica hasta que un
+  contador lo valide y suba `seed_version` a 1.
 - Nada más se toca: el default `VE` garantiza que toda la base existente sigue
   igual.
 
 ## 9. Siguientes pasos concretos
 
-1. **Selección de país en el asistente de instalación y en la empresa**
+1. **Runner de pack POR EMPRESA** (antes de cualquier semilla real): las
+   semillas de un país NO pueden vivir en `migrations/` global, porque se
+   aplicarían a todas las empresas y una empresa venezolana terminaría con el
+   PUC colombiano. Hace falta una tabla `country_pack_migrations` por empresa y
+   un aplicador al crear/abrir la empresa según su `country_code`.
+2. **Selección de país en el asistente de instalación y en la empresa**
    (solo `paisesDisponibles()`).
-2. **Pack Colombia v1 en `borrador`**: PUC, IVA 19/5, cuentas por defecto,
-   series y retenciones básicas — con la lista de lo que falta validar.
-3. **Contrato formal del addon de facturación electrónica** (documentado sobre
+3. **Pack Colombia v1 en `borrador`**: el esqueleto ya está; falta que un
+   contador complete PUC, retenciones y cuentas por defecto y lo valide.
+4. **Contrato formal del addon de facturación electrónica** (documentado sobre
    `digitalinvoice`) para que cada proveedor/país lo implemente.
-4. **Primer contador aliado** (Colombia) que valide el pack: sin él, el pack se
-   queda en borrador y así se mostrará.
-5. Perú después, reutilizando el molde.
+5. **Primer contador aliado** (Colombia) que valide el pack: sin él, el pack se
+   queda en borrador y así se mostrará. Perú después, reutilizando el molde.
 
 ---
 

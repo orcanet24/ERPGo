@@ -1,0 +1,68 @@
+-- ============================================================================
+-- Pack Colombia — ESQUELETO (seed_version 0) — NADA SE APLICA TODAVÍA
+-- ============================================================================
+-- Todas las sentencias están comentadas a propósito. Un pack entra en vigor
+-- cuando su ficha (packs/co/pack.json) pasa a seed_version >= 1 con un
+-- contador que lo valide; hasta entonces este archivo es la lista de trabajo.
+--
+-- REGLAS DEL PACK (packs/README.md):
+--  · Idempotente: UPDATE antes de INSERT, o INSERT ... WHERE NOT EXISTS. El
+--    proyecto prohíbe borrar o sobrescribir datos existentes.
+--  · Nada inventado: cada bloque cita su fuente (Estatuto Tributario, PUC,
+--    DIAN). Si falta confirmación, queda como TODO.
+--  · Códigos de cuenta del PUC oficial, no de memoria.
+
+-- ---------------------------------------------------------------------------
+-- 1. PLAN DE CUENTAS (PUC) — TODO
+-- ---------------------------------------------------------------------------
+-- Pegar aquí el PUC oficial (clases 1–9) con su jerarquía, y al menos las
+-- cuentas que usa el ERP: caja, bancos, cartera de clientes y proveedores,
+-- IVA descontable, IVA generado, inventarios, costo de ventas, ingresos y
+-- retenciones. Forma esperada (sin valores inventados):
+-- INSERT INTO acc_coa (HeadCode, HeadName, PHeadName, HeadLevel, IsActive, IsTransaction, IsGL, HeadType, IsBudget, IsDepreciation, DepreciationRate, CreateBy, CreateDate, UpdateBy, UpdateDate, isSubType, subType)
+-- SELECT '0000', 'Nombre PUC', 'Padre', 2, 1, 1, 0, 'A', 0, 0, 0, 'pack', NOW(), 'pack', NOW(), 0, 1
+-- WHERE NOT EXISTS (SELECT 1 FROM acc_coa WHERE HeadCode = '0000');
+
+-- ---------------------------------------------------------------------------
+-- 2. CUENTAS POR DEFECTO (acc_predefine_account) — TODO
+-- ---------------------------------------------------------------------------
+-- Columnas reales del mapa: cashCode, bankCode, purchaseCode, salesCode,
+-- customerCode, supplierCode, inventoryCode, costs_of_good_solds, vat,
+-- purchase_vat_code, fixedAsset, advance, CPLCode, LPLCode, salary_code,
+-- igtf_code, supplies_inventory_code, supplies_expense_code.
+-- Forma esperada (sin valores inventados):
+-- UPDATE acc_predefine_account SET cashCode = 0000, bankCode = 0000,
+--   customerCode = 0000, supplierCode = 0000, inventoryCode = 0000,
+--   costs_of_good_solds = 0000, salesCode = 0000, vat = 0000,
+--   purchase_vat_code = 0000
+-- WHERE id = (SELECT id FROM (SELECT MIN(id) AS id FROM acc_predefine_account) x);
+
+-- ---------------------------------------------------------------------------
+-- 3. IMPUESTOS — TODO
+-- ---------------------------------------------------------------------------
+-- El ERP cobra el impuesto POR RENGLÓN (producto), no por un catálogo global.
+-- A definir en la ficha y el onboarding: IVA 19 % general, IVA 5 % y
+-- excluido/exento. Si Colombia exige precio de lista con impuesto incluido,
+-- se activa en pais.go (PrecioIncluyeImpuesto=true) y se ajusta el formulario
+-- — eso es cambio de core, no semilla.
+
+-- ---------------------------------------------------------------------------
+-- 4. DOCUMENTOS Y SERIES (fiscal_series) — TODO
+-- ---------------------------------------------------------------------------
+-- Confirmar prefijo y rango autorizado por la DIAN antes de insertar. Forma:
+-- INSERT INTO fiscal_series (code, name, prefix, next_no, control_prefix, control_next, is_active, created_at)
+-- SELECT 'FV', 'Factura electrónica de venta', 'FV', 1, 'FV', 1, 1, NOW()
+-- WHERE NOT EXISTS (SELECT 1 FROM fiscal_series WHERE code = 'FV');
+
+-- ---------------------------------------------------------------------------
+-- 5. RETENCIONES — TODO
+-- ---------------------------------------------------------------------------
+-- Conceptos, tarifas y numeración según resolución DIAN. El núcleo trae
+-- retenciones venezolanas; un régimen distinto requiere su hook y su modelo
+-- (no se escribe SQL hasta definirlo en el plan).
+
+-- ---------------------------------------------------------------------------
+-- 6. FACTURA ELECTRÓNICA — TODO
+-- ---------------------------------------------------------------------------
+-- Implementar el contrato digitalinvoice con un proveedor tecnológico
+-- autorizado (lo habitual en Colombia). Se configura como addon por empresa.
