@@ -25,19 +25,23 @@ import (
 
 // packPais es la ficha declarativa de un país (packs/<cc>/pack.json).
 type packPais struct {
-	Codigo             string     `json:"code"`
-	Nombre             string     `json:"name"`
-	Moneda             string     `json:"currency"`
-	Estado             estadoPais `json:"estado"`
-	LegacyEmbebido     bool       `json:"legacy_embebido"`
-	ValidadoPor        string     `json:"validado_por"`
-	CertificadoPor     string     `json:"certificado_por"`
-	AmbientePruebas    string     `json:"ambiente_pruebas"`
-	Pendientes         []string   `json:"pendientes"`
-	Impuestos          []string   `json:"impuestos"`
-	PlanDeCuentas      string     `json:"plan_de_cuentas"`
-	FacturaElectronica string     `json:"factura_electronica"`
-	Notas              string     `json:"notas"`
+	Codigo          string     `json:"code"`
+	Nombre          string     `json:"name"`
+	Moneda          string     `json:"currency"`
+	Estado          estadoPais `json:"estado"`
+	LegacyEmbebido  bool       `json:"legacy_embebido"`
+	ValidadoPor     string     `json:"validado_por"`
+	CertificadoPor  string     `json:"certificado_por"`
+	AmbientePruebas string     `json:"ambiente_pruebas"`
+	Pendientes      []string   `json:"pendientes"`
+	Impuestos       []string   `json:"impuestos"`
+	// Documentos: tipos y series obligatorios del país (FACT, NC, ND,
+	// RET-IVA...). Va en la ficha y no en el registro porque es dato del país,
+	// no comportamiento del core.
+	Documentos         []string `json:"documentos"`
+	PlanDeCuentas      string   `json:"plan_de_cuentas"`
+	FacturaElectronica string   `json:"factura_electronica"`
+	Notas              string   `json:"notas"`
 }
 
 // cargarPacksPais lee todas las fichas de packs/<cc>/pack.json. Las carpetas que

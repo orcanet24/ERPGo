@@ -8,8 +8,21 @@
   "certificado_por": "",
   "ambiente_pruebas": "",
   "pendientes": [],
-  "impuestos": ["IVA general", "IVA reducido", "Exento", "IGTF 3% sobre divisas"],
-  "plan_de_cuentas": "CONASEV (migrations/schema_ve_fiscal.sql y catálogo)",
-  "factura_electronica": "digitalinvoice (imprenta digital autorizada / Providencia SNAT/2024/000102)",
-  "notas": "País de origen del proyecto. Su pack vive embebido en las migraciones históricas (legacy_embebido=true): no hay carpeta de SQL propia porque ya está en la cadena."
+  "impuestos": [
+    "IVA general 16 %",
+    "IVA reducido 8 %",
+    "Exento / no gravado",
+    "IGTF 3 % sobre pagos en divisa (configurable en fiscal_setting, por defecto 3)"
+  ],
+  "documentos": [
+    "FACT — factura de venta",
+    "NC — nota de crédito",
+    "ND — nota de débito",
+    "RET-IVA — comprobante de retención de IVA",
+    "RET-ISLR — comprobante de retención de ISLR",
+    "CONT — factura de contingencia (terminal offline)"
+  ],
+  "plan_de_cuentas": "CONASEV (migrations/schema_ve_fiscal.sql) con cuentas por defecto del core: ventas, IVA débito (5020701), IGTF por pagar (5020702), inventario, COGS, cartera, retenciones",
+  "factura_electronica": "digitalinvoice (imprenta digital autorizada / Providencia SNAT/2024/000102); el terminal POS imprime o emite contingencia y sincroniza",
+  "notas": "País de origen. Este pack vive embebido en las migraciones históricas (legacy_embebido=true). Validado en lo fiscal y contable: IVA/IGTF como pasivo, cierre de período contra el libro mayor, retenciones IVA/ISLR, libros legales, numeración con series y control, y factura de contingencia del POS. Gaps conocidos y declarados: los formatos exactos de libros legales y de la declaración se ajustan por Providencia y no se certifican contra un ambiente SENIAT (no hay sandbox público); se mantienen en la revisión periódica del pack."
 }

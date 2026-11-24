@@ -69,16 +69,41 @@ Lo que **hoy ata a Venezuela**:
 | Chile | IVA 19 | DTE/SII (XML + firma + certificación) | **Alta** | Certificación de documentos |
 | Brasil | ICMS estatal + ISS municipal + federal | NF-e/CT-e/NFS-e, SPED | **Muy alta** | Tres niveles de gobierno y formatos distintos; requiere equipo |
 
-## 4. Olas de trabajo
+## 4. Secuencia decidida (2026-11-24)
 
-- **Ola 1 (ahora): Colombia y Perú.** Mercado grande, impuesto simple y
-  facturación electrónica delegable a proveedor tecnológico. Sirven de molde
-  para los demás packs.
+**Venezuela primero; después un país cada 1–2 meses.** La decisión del dueño es
+la correcta por una razón de arquitectura: el **core operativo es el mismo** en
+todos los países (facturación, kardex, contabilidad, caja, POS, auditoría,
+multimoneda, migraciones). Lo que cambia por país es la **capa fiscal**: tasas,
+retenciones, plan de cuentas, documentos/series, libros legales, fuente de tasa
+de cambio y facturación electrónica. Por eso el esfuerzo de cada país se
+concentra donde está el riesgo (leyes y normas), no en reescribir el ERP.
+
+| Compartido (no se toca por país) | Capa país (lo que se investiga y valida) |
+|---|---|
+| Facturación, kardex, asientos, cierre, caja, POS, auditoría, multitenant, migraciones, seguridad | Impuestos y tasas; retenciones; plan de cuentas y cuentas por defecto; documentos y series; libros legales; tasa de cambio; facturación electrónica |
+
+**Cadencia objetivo:** un país cada 1–2 meses, con esta condición: el pack no
+sale de `borrador` sin la firma de un contador del país. Si no hay validador, el
+país espera: se prefiere el calendario honesto a once banderas.
+
+**Orden:** Venezuela (consolidación) → Colombia → Perú → Ecuador → Panamá →
+El Salvador → Guatemala → Honduras → Bolivia → (equipo/socio) México, Chile,
+Brasil.
+
+## 5. Olas de trabajo
+
+- **Ola 0 (ahora): Venezuela.** Consolidar el pack de origen: cerrar los
+  formatos de libros legales y la revisión periódica de providencias. Es la
+  base que ya opera y la que da el molde de “pack validado”.
+- **Ola 1: Colombia y Perú.** Mercado grande, impuesto simple y facturación
+  electrónica delegable a proveedor tecnológico. Sirven de molde para los
+  demás packs.
 - **Ola 2:** Ecuador, Panamá, El Salvador, Guatemala, Honduras, Bolivia.
 - **Ola 3:** México, Chile y Brasil. Estos no se abordan sin equipo o socio
   certificado; hacerlo a medias es el mayor riesgo reputacional del proyecto.
 
-## 5. Checklist para abrir un país (proceso, no suerte)
+## 6. Checklist para abrir un país (proceso, no suerte)
 
 1. **Norma escrita por un contador local:** impuestos y tasas, reglas de
    redondeo, retenciones, documentos obligatorios, moneda y decimales.
@@ -96,7 +121,7 @@ Lo que **hoy ata a Venezuela**:
 7. **Mantenimiento:** las normas cambian; cada pack tiene versión y ficha de
    cambios, como las migraciones.
 
-## 6. Riesgos y límites (honestos)
+## 7. Riesgos y límites (honestos)
 
 - **No se puede prometer «cumplimiento» sin certificación.** Cada país tiene su
   regulador y sus formatos; el pack declara su estado.
@@ -108,7 +133,7 @@ Lo que **hoy ata a Venezuela**:
 - **Soporte local**: sin un contador/socio por país, el pack se pudre con el
   primer cambio de tasa. El modelo GPL permite que ese socio viva del soporte.
 
-## 7. Lo ya hecho (primer corte)
+## 8. Lo ya hecho (primer corte)
 
 - `migrations/schema_z_pais_empresa.sql`: `company_information.country_code`
   (default `VE`, instalaciones existentes intactas).
@@ -128,7 +153,7 @@ Lo que **hoy ata a Venezuela**:
 - Nada más se toca: el default `VE` garantiza que toda la base existente sigue
   igual.
 
-## 8. Siguientes pasos concretos
+## 9. Siguientes pasos concretos
 
 1. **Selección de país en el asistente de instalación y en la empresa**
    (solo `paisesDisponibles()`).

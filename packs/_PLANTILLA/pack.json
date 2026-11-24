@@ -17,6 +17,7 @@
     "Facturación electrónica (proveedor/regulador) sobre el contrato digitalinvoice"
   ],
   "impuestos": [],
+  "documentos": ["Factura de venta", "Nota de crédito", "Nota de débito"],
   "plan_de_cuentas": "",
   "factura_electronica": "",
   "notas": "Completar sin inventar: si un dato no está verificado contra la norma, va en pendientes."

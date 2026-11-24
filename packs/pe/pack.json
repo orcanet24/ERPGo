@@ -15,6 +15,7 @@
     "Comprobantes electrónicos SUNAT (CPE) sobre el contrato digitalinvoice"
   ],
   "impuestos": [],
+  "documentos": [],
   "plan_de_cuentas": "",
   "factura_electronica": "",
   "notas": "Registro inicial para el plan de internacionalización; no seleccionable hasta completar y validar el pack."

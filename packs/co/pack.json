@@ -16,6 +16,7 @@
     "Emisión electrónica DIAN (por proveedor tecnológico) sobre el contrato digitalinvoice"
   ],
   "impuestos": [],
+  "documentos": [],
   "plan_de_cuentas": "",
   "factura_electronica": "",
   "notas": "Registro inicial. NO es seleccionable: sin pack de datos, elegir Colombia dejaría un plan de cuentas venezolano con nombre colombiano."
