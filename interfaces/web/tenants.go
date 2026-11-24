@@ -460,7 +460,8 @@ var controlSchema = []string{
 		db_password_enc VARBINARY(512) DEFAULT '',
 		max_users INTEGER NOT NULL DEFAULT 0,
 		created_by VARCHAR(128) NOT NULL DEFAULT '',
-		db_size_mb INTEGER NOT NULL DEFAULT 0
+		db_size_mb INTEGER NOT NULL DEFAULT 0,
+		country_code VARCHAR(2) NOT NULL DEFAULT 'VE'
 	)`,
 	// OJO: nada de "IF NOT EXISTS" aquí. `CREATE INDEX IF NOT EXISTS` y
 	// `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` son sintaxis de MariaDB: MySQL
@@ -482,6 +483,10 @@ var controlSchema = []string{
 	`ALTER TABLE tenants ADD COLUMN max_users INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE tenants ADD COLUMN created_by VARCHAR(128) NOT NULL DEFAULT ''`,
 	`ALTER TABLE tenants ADD COLUMN db_size_mb INTEGER NOT NULL DEFAULT 0`,
+	// País de la empresa (plan de internacionalización): el catálogo lo lleva
+	// para saber qué pack fiscal aplica antes de abrir su base. Las empresas
+	// existentes quedan en Venezuela sin que nadie toque nada.
+	`ALTER TABLE tenants ADD COLUMN country_code VARCHAR(2) NOT NULL DEFAULT 'VE'`,
 	`CREATE TABLE IF NOT EXISTS tenant_users (
 		tenant_code VARCHAR(64) NOT NULL,
 		username VARCHAR(128) NOT NULL,

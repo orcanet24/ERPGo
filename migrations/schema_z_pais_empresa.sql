@@ -1,0 +1,21 @@
+-- ============================================================================
+-- El ERP aprende a decir en qué PAÍS está la empresa
+-- ============================================================================
+-- Plan de internacionalización (2026-11-24). Hasta hoy ERPGo asumía Venezuela
+-- en todo: IGTF, retenciones IVA/ISLR, CONASEV, libros legales y textos al
+-- SENIAT. Para abrir un país hace falta primero una dimensión que hoy no
+-- existe: country_code en la empresa. Las normas de cada país viajan en su
+-- PACK (plan de cuentas, impuestos, cuentas por defecto, series, retenciones)
+-- y unos pocos comportamientos en código (redondeo, precio con impuesto
+-- incluido, tasa de cambio, numeración y facturación electrónica).
+--
+-- El DEFAULT 'VE' no es un detalle: una instalación existente sigue siendo
+-- venezolana sin que nadie toque nada. Un país nuevo solo se ofrece cuando su
+-- pack existe y su estado (borrador/validado/certificado) está declarado en
+-- interfaces/web/pais.go — un pack a medio validar jamás se presenta como
+-- "cumple".
+--
+-- Idempotente: el reconciliador canónico tolera la columna ya existente
+-- (Error 1060) y este ALTER es una sola cláusula (regla D-2).
+
+ALTER TABLE `company_information` ADD COLUMN `country_code` CHAR(2) NOT NULL DEFAULT 'VE';

@@ -817,7 +817,8 @@ CREATE TABLE `company_information` (
   `invoice_series` varchar(10) COLLATE utf8mb4_unicode_ci DEFAULT 'FACT' COMMENT 'Serie de factura activa',
   `ai_plan` tinyint NOT NULL DEFAULT '1',
   `ai_plan_ops_monthly` int NOT NULL DEFAULT '50',
-  `ai_plan_ops_daily` int NOT NULL DEFAULT '20'
+  `ai_plan_ops_daily` int NOT NULL DEFAULT '20',
+  `country_code` char(2) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'VE' COMMENT 'País fiscal de la empresa (ISO 3166-1 alfa-2)'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `cost_center` (
