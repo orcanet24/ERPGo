@@ -120,6 +120,11 @@ Lo que **hoy ata a Venezuela**:
 - `interfaces/web/pais_test.go`: Venezuela es el origen; un país sin pack **no
   se ofrece**; un código desconocido no inventa país; invariantes del registro;
   la columna nace con default y se lee bien sobre la cadena real de migraciones.
+- **Kit del colaborador** (`packs/`): contrato del pack, plantilla
+  (`packs/_PLANTILLA/pack.json`), fichas de Venezuela (legado), Colombia y Perú
+  en borrador, y validador (`interfaces/web/pack_pais.go` + prueba) que no deja
+  que un pack en borrador se ofrezca ni que un «validado» no diga quién lo
+  firmó. `packs/README.md` es la guía de 7 pasos para contribuir un país.
 - Nada más se toca: el default `VE` garantiza que toda la base existente sigue
   igual.
 

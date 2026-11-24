@@ -1,0 +1,15 @@
+{
+  "code": "VE",
+  "name": "Venezuela",
+  "currency": "VES",
+  "estado": "validado",
+  "legacy_embebido": true,
+  "validado_por": "Contabilidad del proyecto (revisión interna sobre la normativa SENIAT vigente)",
+  "certificado_por": "",
+  "ambiente_pruebas": "",
+  "pendientes": [],
+  "impuestos": ["IVA general", "IVA reducido", "Exento", "IGTF 3% sobre divisas"],
+  "plan_de_cuentas": "CONASEV (migrations/schema_ve_fiscal.sql y catálogo)",
+  "factura_electronica": "digitalinvoice (imprenta digital autorizada / Providencia SNAT/2024/000102)",
+  "notas": "País de origen del proyecto. Su pack vive embebido en las migraciones históricas (legacy_embebido=true): no hay carpeta de SQL propia porque ya está en la cadena."
+}

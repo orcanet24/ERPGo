@@ -29,6 +29,9 @@ var migrationsFS embed.FS
 //go:embed schema
 var schemaFS embed.FS
 
+//go:embed packs
+var packsFS embed.FS
+
 // Templates returns the templates/ tree.
 //
 // Busca en este orden: las raíces del núcleo, después las de cada módulo
@@ -89,6 +92,12 @@ func Migrations() fs.FS { return coreFS{embedded: migrationsFS} }
 // runner aplica todos los .sql de migrations/, y el canónico dentro de esa
 // carpeta se aplicaría a sí mismo.
 func Schema() fs.FS { return coreFS{embedded: schemaFS} }
+
+// Packs returns the packs/ tree: la ficha declarativa de cada país (estado del
+// pack, quién lo validó, qué falta). No lleva SQL: las semillas del país son
+// migraciones normales (migrations/packs_<cc>_*.sql) y pasan por el ledger.
+// Disco primero, embebido después, igual que el resto de los activos.
+func Packs() fs.FS { return coreFS{embedded: packsFS} }
 
 // GlobalTemplate lee una plantilla SOLO del núcleo, ignorando los directorios de
 // los módulos.

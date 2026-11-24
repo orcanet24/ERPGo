@@ -1,0 +1,21 @@
+{
+  "code": "PE",
+  "name": "Perú",
+  "currency": "PEN",
+  "estado": "borrador",
+  "legacy_embebido": false,
+  "validado_por": "",
+  "certificado_por": "",
+  "ambiente_pruebas": "",
+  "pendientes": [
+    "Plan Contable General Empresarial (PCGE) y cuentas por defecto",
+    "IGV 18% e impuesto selectivo al consumo cuando aplique",
+    "Retenciones y percepciones: cálculo y numeración",
+    "Validación firmada por un contador peruano",
+    "Comprobantes electrónicos SUNAT (CPE) sobre el contrato digitalinvoice"
+  ],
+  "impuestos": [],
+  "plan_de_cuentas": "",
+  "factura_electronica": "",
+  "notas": "Registro inicial para el plan de internacionalización; no seleccionable hasta completar y validar el pack."
+}

@@ -1,0 +1,23 @@
+{
+  "_leeme": "Plantilla de un pack de país. Copiá esta carpeta a packs/<cc>/ (código ISO en minúsculas) y completá la ficha. Todo campo vacío queda como deuda visible: el validador de packs no deja que un país con pendientes figure como validado.",
+  "code": "",
+  "name": "",
+  "currency": "",
+  "estado": "borrador",
+  "legacy_embebido": false,
+  "validado_por": "",
+  "certificado_por": "",
+  "ambiente_pruebas": "",
+  "pendientes": [
+    "Plan de cuentas del país y cuentas por defecto",
+    "Impuestos (tasas, categorías y si el precio incluye impuesto)",
+    "Retenciones y su numeración",
+    "Documentos y series obligatorios",
+    "Validación firmada por un contador del país",
+    "Facturación electrónica (proveedor/regulador) sobre el contrato digitalinvoice"
+  ],
+  "impuestos": [],
+  "plan_de_cuentas": "",
+  "factura_electronica": "",
+  "notas": "Completar sin inventar: si un dato no está verificado contra la norma, va en pendientes."
+}
