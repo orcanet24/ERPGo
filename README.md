@@ -37,6 +37,16 @@ tan público como el proyecto.
 > factura, cobra y contabiliza en tu negocio pueda ser revisada, compartida y
 > mejorada por la gente que la usa.
 
+## Capturas
+
+Así se ve ERPGo funcionando (capturas reales, no maquetas):
+
+| | |
+|---|---|
+| ![Panel de control](docs/img/panel.png)<br>**Panel de control** | ![Nueva factura](docs/img/factura.png)<br>**Facturación fiscal con IVA/IGTF** |
+| ![Productos](docs/img/productos.png)<br>**Productos e inventario** | ![Clientes](docs/img/clientes.png)<br>**Clientes y cuentas por cobrar** |
+| ![Plan de cuentas](docs/img/plan-cuentas.png)<br>**Plan de cuentas venezolano** | ![Configuración IA](docs/img/ia-proveedor.png)<br>**IA con tu propio proveedor** |
+
 ## Política de Orden y Crecimiento (NO NEGOCIABLE)
 
 > **Esta política rige todo desarrollo futuro. Violarla rompe la promesa de estabilidad.**
@@ -136,6 +146,8 @@ interfaz, con sus mismos permisos de rol, su departamento y su límite de
 filas. Todo `tools/call` queda en la cadena de auditoría (`mcp_call`).
 Sin token o con token revocado: 401. Los tokens se revocan en cualquier
 momento desde la misma pantalla (o `POST /ai/agents/mcp/revoke`).
+
+![Acceso MCP para IA externas](docs/img/agentes-ia.png)
 
 ---
 
