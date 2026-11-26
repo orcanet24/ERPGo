@@ -53,6 +53,135 @@
         </table>
     </div>
 </div>
+
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4><i class="fa fa-magic"></i> Crear un addon <small class="text-muted">(guía + generador)</small></h4></div>
+    </div>
+    <div class="panel-body">
+        <p class="text-muted">
+            Un addon es un <strong>binario independiente</strong> con su
+            <code>manifest.json</code>. El núcleo no se recompila: lo lanza, le
+            entrega un token por loopback y sirve su pantalla en
+            <code>/mod/&lt;id&gt;</code>. Este formulario crea la carpeta, los
+            archivos y, si el servidor tiene Go, el binario.
+        </p>
+        <div class="row">
+            <div class="col-md-7">
+                <form id="form-addon" class="form-horizontal">
+                    <div class="form-group">
+                        <label class="col-sm-3 control-label" for="addon-id">ID *</label>
+                        <div class="col-sm-9">
+                            <input class="form-control" id="addon-id" name="id" required maxlength="39"
+                                   pattern="[a-z0-9][a-z0-9_-]{1,38}" placeholder="notas">
+                            <span class="help-block">Minúsculas, dígitos, guion y guion bajo; 2 a 39 caracteres. Será la carpeta y el prefijo de tablas y permisos.</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-3 control-label" for="addon-nombre">Nombre *</label>
+                        <div class="col-sm-9">
+                            <input class="form-control" id="addon-nombre" name="nombre" required maxlength="120" placeholder="Notas rápidas">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-3 control-label" for="addon-version">Versión</label>
+                        <div class="col-sm-9">
+                            <input class="form-control" id="addon-version" name="version" placeholder="1.0.0">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-3 control-label" for="addon-autor">Autor</label>
+                        <div class="col-sm-9">
+                            <input class="form-control" id="addon-autor" name="autor" placeholder="ERPGo">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-3 control-label" for="addon-descripcion">Descripción</label>
+                        <div class="col-sm-9">
+                            <textarea class="form-control" id="addon-descripcion" name="descripcion" rows="2" maxlength="400" placeholder="Qué resuelve este addon, en una frase."></textarea>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-3 control-label" for="addon-ruta">Ruta</label>
+                        <div class="col-sm-9">
+                            <input class="form-control" id="addon-ruta" name="ruta" placeholder="/&lt;id&gt;">
+                            <span class="help-block">Vacío = <code>/&lt;id&gt;</code>. No puede usar prefijos del núcleo (<code>/module</code>, <code>/reports</code>, <code>/accounting</code>…).</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-3 control-label" for="addon-menu">Etiqueta del menú</label>
+                        <div class="col-sm-9">
+                            <input class="form-control" id="addon-menu" name="menu_label" placeholder="Vacío = el nombre">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-3 control-label" for="addon-icono">Icono</label>
+                        <div class="col-sm-9">
+                            <input class="form-control" id="addon-icono" name="icono" placeholder="fa-puzzle-piece">
+                            <span class="help-block">Clase de Font Awesome, por ejemplo <code>fa-sticky-note-o</code>.</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-3 control-label" for="addon-permiso">Permiso</label>
+                        <div class="col-sm-9">
+                            <input class="form-control" id="addon-permiso" name="permiso" placeholder="&lt;id&gt;_ver">
+                            <span class="help-block">Vacío = <code>&lt;id&gt;_ver</code>. Se concede en Configuración → Roles.</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-3 control-label" for="addon-tabla">Tabla propia</label>
+                        <div class="col-sm-9">
+                            <input class="form-control" id="addon-tabla" name="tabla" placeholder="&lt;id&gt;_registros">
+                            <span class="help-block">Opcional. Debe empezar por <code>&lt;id&gt;_</code>; genera un <code>schema.sql</code> con <code>CREATE TABLE IF NOT EXISTS</code> (sin DROP ni ALTER).</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-3 control-label" for="addon-dbread">Tablas de lectura</label>
+                        <div class="col-sm-9">
+                            <input class="form-control" id="addon-dbread" name="db_read" placeholder="customer_information, products">
+                            <span class="help-block">Opcional, separadas por comas. El núcleo crea un usuario MySQL de solo <code>SELECT</code> sobre estas tablas.</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="col-sm-3 control-label">Hooks de salida</label>
+                        <div class="col-sm-9">
+                            <label class="checkbox-inline"><input type="checkbox" name="hooks_out" value="factura.emitida"> factura.emitida</label>
+                            <label class="checkbox-inline"><input type="checkbox" name="hooks_out" value="compra.registrada"> compra.registrada</label>
+                            <label class="checkbox-inline"><input type="checkbox" name="hooks_out" value="retencion.emitida"> retencion.emitida</label>
+                            <span class="help-block">Opcional. El addon recibirá el aviso en <code>/hooks/&lt;evento&gt;</code> con el token de su sesión.</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="col-sm-offset-3 col-sm-9">
+                            <button type="submit" class="btn btn-primary" id="btn-crear-addon"><i class="fa fa-magic"></i> Crear addon</button>
+                            <span class="help-block" style="display:inline-block;margin-left:10px">No sobrescribe addons existentes.</span>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="col-md-5">
+                <div class="well well-sm">
+                    <h5><i class="fa fa-list-ol"></i> Paso a paso</h5>
+                    <ol style="padding-left:18px">
+                        <li><strong>Elija un id</strong>: será la carpeta, el prefijo de sus tablas y el de sus permisos.</li>
+                        <li><strong>Genere</strong>: se escriben <code>manifest.json</code>, <code>main.go</code> y, si pidió tabla, <code>schema.sql</code>.</li>
+                        <li><strong>Compile</strong>: el ERP intenta <code>go build</code>. Si no hay Go en el servidor, el resultado trae el comando exacto.</li>
+                        <li><strong>Abra y asigne el permiso</strong>: la pantalla se sirve en <code>/mod/&lt;id&gt;</code>; el permiso <code>&lt;id&gt;_ver</code> se concede en Configuración → Roles. El menú aparece al recargar.</li>
+                        <li><strong>Lea datos</strong>: declare tablas en <code>db_read</code>; el núcleo entrega <code>ERP_DB_READ_DSN</code> y la base activa en <code>X-ERP-DB</code>.</li>
+                        <li><strong>Escriba datos</strong>: no hay SQL libre. Cada verbo de <code>db_write</code> exige un handler en el núcleo (<code>addonVerboRegistrar</code>).</li>
+                        <li><strong>Hooks</strong>: <code>hooks_out</code> solo acepta eventos que el núcleo emite.</li>
+                        <li><strong>Firma</strong>: si existe <code>addons/pubkey.ed25519</code>, firme con <code>tools/firmaraddon</code>; en desarrollo, <code>ADDONS_UNSIGNED=1</code>.</li>
+                    </ol>
+                    <p class="text-muted" style="margin-bottom:0">
+                        Contrato completo: <code>docs/PLAN-ADDONS.md</code>.
+                        Ejemplo real: <code>addons/hola/</code>.
+                    </p>
+                </div>
+            </div>
+        </div>
+        <div id="addon-resultado"></div>
+    </div>
+</div>
 {{end}}
 
 {{define "pagejs"}}
@@ -154,6 +283,52 @@ $(function () {
         }).fail(function (xhr) {
             var e = (xhr.responseJSON && xhr.responseJSON.error) || 'Error al relanzar el addon';
             alert(e);
+        });
+    });
+
+    // Generador (fases A+B): crea la carpeta, los archivos y compila si puede.
+    // El servidor valida con los mismos candados del escáner; aquí solo se
+    // pinta el resultado, sin inventar éxito cuando la compilación falló.
+    function escAddon(s) {
+        return $('<div>').text(s == null ? '' : String(s)).html();
+    }
+
+    $('#form-addon').on('submit', function (e) {
+        e.preventDefault();
+        var $btn = $('#btn-crear-addon').prop('disabled', true);
+        $('#addon-resultado').empty();
+        $.post('/module/addons/scaffold', $(this).serialize(), function (res) {
+            $btn.prop('disabled', false);
+            if (!res || res.status !== 1) {
+                alert((res && (res.msg || res.error)) || 'No se pudo crear el addon');
+                return;
+            }
+            var r = res.resultado || {};
+            var html = '<div class="alert alert-success"><i class="fa fa-check"></i> ' + escAddon(res.msg) + '</div>';
+            html += '<p><strong>Carpeta:</strong> <code>' + escAddon(r.dir) + '</code><br>' +
+                    '<strong>Archivos:</strong> ' + escAddon((r.archivos || []).join(', ')) + '</p>';
+            if (r.compilado) {
+                html += '<div class="alert alert-info"><i class="fa fa-cogs"></i> Binario compilado.</div>';
+            } else {
+                html += '<div class="alert alert-warning"><i class="fa fa-exclamation-triangle"></i> Sin binario todavía: el addon queda «sin binario» hasta que se compile.</div>';
+            }
+            if (r.compilacion) {
+                html += '<pre style="max-height:220px;overflow:auto">' + escAddon(r.compilacion) + '</pre>';
+            }
+            if (r.aviso) {
+                html += '<div class="alert alert-warning">' + escAddon(r.aviso) + '</div>';
+            }
+            if (r.compilado) {
+                html += '<p><a class="btn btn-primary btn-sm" target="_blank" href="/mod/' + encodeURIComponent(r.id) + '">' +
+                        '<i class="fa fa-external-link"></i> Abrir el addon</a> ' +
+                        '<span class="text-muted">La entrada del menú aparece al recargar la página.</span></p>';
+            }
+            $('#addon-resultado').html(html);
+            refrescar();
+        }).fail(function (xhr) {
+            $btn.prop('disabled', false);
+            var e = (xhr.responseJSON && (xhr.responseJSON.error || xhr.responseJSON.msg)) || 'Error al crear el addon';
+            $('#addon-resultado').html('<div class="alert alert-danger"><i class="fa fa-times"></i> ' + escAddon(e) + '</div>');
         });
     });
 

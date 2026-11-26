@@ -1231,7 +1231,15 @@ func addonMigracionesDeCarpeta(dir string, m *addonManifest) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("declara tables_own pero la carpeta no trae schema.sql: %w", err)
 	}
-	sentencias := addonPartirSQL(string(contenido))
+	return addonValidarSchema(string(contenido), m)
+}
+
+// addonValidarSchema aplica el mismo candado sobre el TEXTO de un schema.sql.
+// Se separa de addonMigracionesDeCarpeta para que el generador del panel pueda
+// validar lo que va a escribir ANTES de tocar el disco: un schema inválido no
+// debe dejar una carpeta a medio crear.
+func addonValidarSchema(contenido string, m *addonManifest) ([]string, error) {
+	sentencias := addonPartirSQL(contenido)
 	if len(sentencias) == 0 {
 		return nil, fmt.Errorf("declara tables_own pero schema.sql está vacío o sin sentencias")
 	}

@@ -19,6 +19,7 @@ func (s *Server) registerAddonAdminRoutes() {
 	s.mux.HandleFunc("GET /module/addons", s.addonPanel)
 	s.mux.HandleFunc("GET /module/addons/data", s.addonPanelData)
 	s.mux.HandleFunc("POST /module/addons/rescan", s.addonPanelReescanear)
+	s.mux.HandleFunc("POST /module/addons/scaffold", s.addonPanelScaffold)
 	s.mux.HandleFunc("POST /module/addons/{id}/restart", s.addonPanelReiniciar)
 	s.mux.HandleFunc("POST /module/addons/puertos", s.addonPanelPuertos)
 }

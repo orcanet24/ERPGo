@@ -1,0 +1,314 @@
+// addons/[[.ID]]/main.go — generado por el RAD de addons del ERPGo.
+//
+// Este programa es un addon de la frontera de docs/PLAN-ADDONS.md:
+//
+//   - Es un binario INDEPENDIENTE: el núcleo no se recompila para instalarlo.
+//   - El núcleo lo lanza y le entrega ERP_ADDON_TOKEN / ERP_ADDON_PORT.
+//   - Su pantalla se sirve por /mod/[[.ID]] con la sesión ya autenticada.
+//   - No recibe las cookies del ERP: recibe las cabeceras X-ERP-*.
+//
+// Para compilarlo a mano:
+//
+//	go build -o addons/[[.ID]]/erp-addon-[[.ID]] ./addons/[[.ID]]
+package main
+
+import (
+	"context"
+[[if .Hooks]]	"encoding/json"
+[[end]]	"fmt"
+	"html/template"
+[[if .Hooks]]	"io"
+[[end]]	"log"
+	"net/http"
+	"os"
+	"os/signal"
+[[if .TablasLectura]]	"database/sql"
+[[end]]	"time"
+[[if .TablasLectura]]
+
+	_ "github.com/go-sql-driver/mysql"
+[[end]]
+)
+
+const (
+	idAddon     = [[goq .ID]]
+	nombreAddon = [[goq .Nombre]]
+	rutaAddon   = [[goq .Ruta]]
+)
+
+var token string
+
+// hooksDeclarados es la lista que el manifiesto declara en hooks_out. Se pinta
+// en la pantalla para que el addon diga de frente a qué avisos se suscribió.
+var hooksDeclarados = []string{[[range .Hooks]][[goq .]], [[end]]}
+
+[[if .TablasLectura]]
+// tablasLectura es lo que el manifiesto declara en db_read. El núcleo crea un
+// usuario MySQL de solo SELECT y entrega su DSN por ERP_DB_READ_DSN; la base
+// de la empresa activa llega en la cabecera X-ERP-DB.
+var tablasLectura = []string{[[range .TablasLectura]][[goq .]], [[end]]}
+[[end]]
+
+func main() {
+	token = os.Getenv("ERP_ADDON_TOKEN")
+	puerto := os.Getenv("ERP_ADDON_PORT")
+	if puerto == "" || token == "" {
+		fmt.Fprintln(os.Stderr, idAddon+": sin ERP_ADDON_PORT o ERP_ADDON_TOKEN: este binario lo lanza el ERP, no un humano.")
+		os.Exit(2)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write([]byte(`{"status":"ok","addon":"` + idAddon + `"}`))
+	})
+	mux.HandleFunc("/shutdown", apagar)
+	mux.HandleFunc(rutaAddon, pantalla)
+[[range .Hooks]]
+	mux.HandleFunc("/hooks/[[.]]", func(w http.ResponseWriter, r *http.Request) { hook(w, r, [[goq .]]) })
+[[end]]
+
+	srv := &http.Server{Addr: "127.0.0.1:" + puerto, Handler: mux}
+	log.Printf("%s: addon activo en 127.0.0.1:%s", idAddon, puerto)
+
+	parar := make(chan os.Signal, 1)
+	signal.Notify(parar, os.Interrupt)
+	go func() {
+		<-parar
+		_ = srv.Shutdown(context.Background())
+		os.Exit(0)
+	}()
+
+	if err := srv.ListenAndServe(); err != nil {
+		log.Printf("%s: servidor terminado: %v", idAddon, err)
+	}
+}
+
+// apagar es el apagado ordenado que pide el núcleo: solo con el token de esta
+// sesión, porque el puerto es loopback pero no es público.
+func apagar(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-ERP-Addon-Token") != token {
+		http.Error(w, "Sin el token de esta sesión no hay apagado.", http.StatusForbidden)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"apagando"}`))
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		os.Exit(0)
+	}()
+}
+
+// pantalla es la vista del addon. El núcleo la proxya con la sesión ya
+// autenticada y le entrega el contexto X-ERP-*; el addon no inventa usuario ni
+// empresa.
+func pantalla(w http.ResponseWriter, r *http.Request) {
+	v := vista{
+		Nombre:      nombreAddon,
+		Descripcion: [[goq .Descripcion]],
+		Ruta:        rutaAddon,
+		Usuario:     r.Header.Get("X-ERP-User"),
+		Empresa:     r.Header.Get("X-ERP-Tenant"),
+		Permisos:    r.Header.Get("X-ERP-Perms"),
+		Hooks:       hooksDeclarados,
+	}
+	if r.Header.Get("Cookie") != "" {
+		v.Cookies = "⚠ HAY COOKIES: la frontera no está limpiando"
+	} else {
+		v.Cookies = "ninguna (el núcleo las retiró, como exige el contrato)"
+	}
+[[if .TablasLectura]]
+	for _, tabla := range tablasLectura {
+		columnas, filas, err := leerTabla(r, tabla)
+		tv := tablaVista{Nombre: tabla, Columnas: columnas, Filas: filas}
+		if err != nil {
+			tv.Error = err.Error()
+		}
+		v.Tablas = append(v.Tablas, tv)
+	}
+[[end]]
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := pagina.Execute(w, v); err != nil {
+		http.Error(w, "no se pudo pintar la pantalla: "+err.Error(), http.StatusInternalServerError)
+	}
+}
+
+[[if .Hooks]]
+// hook recibe un aviso de la cola del núcleo. La entrega ya quedó marcada
+// 'sent' o reintentará: aquí no se responde con error de negocio.
+func hook(w http.ResponseWriter, r *http.Request, evento string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "El hook va por POST.", http.StatusMethodNotAllowed)
+		return
+	}
+	if r.Header.Get("X-ERP-Addon-Token") != token {
+		http.Error(w, "Sin el token de esta sesión no hay hook.", http.StatusForbidden)
+		return
+	}
+	cuerpo, _ := io.ReadAll(io.LimitReader(r.Body, 256*1024))
+	var datos map[string]interface{}
+	_ = json.Unmarshal(cuerpo, &datos)
+	log.Printf("%s: hook %s recibido (empresa %q): %s", idAddon, evento, r.Header.Get("X-ERP-Tenant"), string(cuerpo))
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_, _ = w.Write([]byte(`{"status":1}`))
+}
+[[end]]
+
+[[if .TablasLectura]]
+// leerTabla consulta hasta 20 filas de una tabla declarada en db_read. El DSN
+// es de solo lectura y no trae base por defecto: la base de la empresa activa
+// llega en X-ERP-DB, y se califica la tabla con ella. Sin DSN, la pantalla lo
+// dice en vez de fingir que leyó.
+func leerTabla(r *http.Request, tabla string) ([]string, [][]string, error) {
+	dsn := os.Getenv("ERP_DB_READ_DSN")
+	base := r.Header.Get("X-ERP-DB")
+	if dsn == "" {
+		return nil, nil, fmt.Errorf("sin ERP_DB_READ_DSN: este arranque no tiene lectura granular (el panel de addons dice por qué)")
+	}
+	if !baseSegura(base) {
+		return nil, nil, fmt.Errorf("la cabecera X-ERP-DB no trae un nombre de base válido")
+	}
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer db.Close()
+	rows, err := db.Query("SELECT * FROM `" + base + "`.`" + tabla + "` LIMIT 20")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	columnas, err := rows.Columns()
+	if err != nil {
+		return nil, nil, err
+	}
+	var filas [][]string
+	for rows.Next() {
+		valores := make([]interface{}, len(columnas))
+		destinos := make([]interface{}, len(columnas))
+		for i := range valores {
+			destinos[i] = &valores[i]
+		}
+		if err := rows.Scan(destinos...); err != nil {
+			return nil, nil, err
+		}
+		fila := make([]string, len(columnas))
+		for i, v := range valores {
+			switch t := v.(type) {
+			case nil:
+				fila[i] = ""
+			case []byte:
+				fila[i] = string(t)
+			default:
+				fila[i] = fmt.Sprint(t)
+			}
+		}
+		filas = append(filas, fila)
+	}
+	return columnas, filas, rows.Err()
+}
+
+// baseSegura evita que un nombre de base con backticks o puntos convierta la
+// consulta en otra cosa. El nombre lo pone el núcleo, pero la defensa se queda
+// en el addon: la frontera no obliga a confiar.
+func baseSegura(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+[[end]]
+
+type tablaVista struct {
+	Nombre   string
+	Columnas []string
+	Filas    [][]string
+	Error    string
+}
+
+type vista struct {
+	Nombre      string
+	Descripcion string
+	Ruta        string
+	Usuario     string
+	Empresa     string
+	Permisos    string
+	Cookies     string
+	Hooks       []string
+	Tablas      []tablaVista
+}
+
+var pagina = template.Must(template.New("pagina").Parse(`<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>{{.Nombre}}</title>
+<style>
+body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 2rem; color: #222; line-height: 1.45; }
+h1 { margin-top: 0; }
+table { border-collapse: collapse; margin: .5rem 0 1.5rem; }
+th, td { border: 1px solid #ccc; padding: .35rem .6rem; text-align: left; vertical-align: top; }
+th { background: #f4f4f4; }
+code { background: #f4f4f4; padding: .1rem .3rem; border-radius: 3px; }
+.aviso { color: #b00; }
+.ok { color: #060; }
+.nota { background: #fffbe6; border-left: 4px solid #f0c000; padding: .7rem 1rem; margin: 1.5rem 0; }
+</style>
+</head>
+<body>
+<h1>{{.Nombre}}</h1>
+<p>{{.Descripcion}}</p>
+<p>Esta pantalla vive en el <strong>binario del addon</strong>, no en el núcleo.
+El ERP la sirve por el proxy con la sesión ya validada y sin sus cookies.</p>
+<ul>
+	<li><strong>Usuario</strong>: {{.Usuario}}</li>
+	<li><strong>Empresa activa</strong>: {{.Empresa}}</li>
+	<li><strong>Permisos concedidos</strong>: {{.Permisos}}</li>
+	<li><strong>Cookies del ERP recibidas</strong>: {{.Cookies}}</li>
+	<li><strong>Ruta</strong>: <code>{{.Ruta}}</code> (también en <code>/mod/[[.ID]]</code>)</li>
+</ul>
+
+<h2>Lectura del ERP (db_read)</h2>
+{{if .Tablas}}
+	{{range .Tablas}}
+		<h3><code>{{.Nombre}}</code></h3>
+		{{if .Error}}
+			<p class="aviso">{{.Error}}</p>
+		{{else}}
+			{{if .Filas}}
+				<table>
+					<thead><tr>{{range .Columnas}}<th>{{.}}</th>{{end}}</tr></thead>
+					<tbody>{{range .Filas}}<tr>{{range .}}<td>{{.}}</td>{{end}}</tr>{{end}}</tbody>
+				</table>
+			{{else}}
+				<p>Sin filas todavía.</p>
+			{{end}}
+		{{end}}
+	{{end}}
+{{else}}
+	<p>Este addon no declaró tablas de lectura en <code>db_read</code>.</p>
+{{end}}
+
+<h2>Escritura de negocio (db_write)</h2>
+<p class="nota">Este addon no declara verbos de escritura: el contrato no permite
+SQL libre. Para escribir, el núcleo debe conectar un verbo <code>dominio.accion</code>
+con <code>addonVerboRegistrar</code> y el addon lo pide por
+<code>POST /__addon/[[.ID]]/&lt;verbo&gt;</code> (docs/PLAN-ADDONS.md §7).</p>
+
+<h2>Hooks (hooks_out)</h2>
+{{if .Hooks}}
+	<ul>{{range .Hooks}}<li><code>{{.}}</code></li>{{end}}</ul>
+{{else}}
+	<p>Sin hooks declarados.</p>
+{{end}}
+
+<p><a href="/home">← volver al ERP</a> · <a href="/module/addons">Panel de addons</a></p>
+</body>
+</html>
+`))
