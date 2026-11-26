@@ -127,8 +127,8 @@ func TestElModuloMemoSeRegistraEnModulosYMenuYSusTablasSeCrean(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT url, perm FROM menu WHERE module_id = 'memo'`).Scan(&url, &perm); err != nil {
 		t.Fatalf("memo no dejó entrada de menú: %v", err)
 	}
-	if url != "/memo" || perm != "memo_ver" {
-		t.Fatalf("el menú de memo quedó raro (url=%q perm=%q)", url, perm)
+	if url != "/mod/memo" || perm != "memo_ver" {
+		t.Fatalf("el menú de memo quedó raro (url=%q perm=%q): debe apuntar a la puerta estable /mod/memo", url, perm)
 	}
 
 	for _, tabla := range []string{"memo_notas", "memo_destinatarios"} {

@@ -106,8 +106,8 @@ func TestElModuloDemoSeRegistraEnModulosYMenuYSuCreaSuTabla(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT url, perm FROM menu WHERE module_id = 'demo'`).Scan(&url, &perm); err != nil {
 		t.Fatalf("el módulo demo no dejó entrada de menú: %v", err)
 	}
-	if url != "/demo" || perm != "demo_ver" {
-		t.Fatalf("el menú del demo quedó raro (url=%q perm=%q): lo declarado es /demo y demo_ver", url, perm)
+	if url != "/mod/demo" || perm != "demo_ver" {
+		t.Fatalf("el menú del demo quedó raro (url=%q perm=%q): debe apuntar a la puerta estable /mod/demo", url, perm)
 	}
 
 	var filas int

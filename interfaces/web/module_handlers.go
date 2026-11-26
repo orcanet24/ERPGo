@@ -54,7 +54,8 @@ func (s *Server) registerModuleRoutes() {
 	// Panel maestro de addons externos (Configuración → Módulos → Addons).
 	s.registerAddonAdminRoutes()
 }
-func (s *Server) moduleList(w http.ResponseWriter, r *http.Request) {	s.render(w, r, "module_list.html", map[string]interface{}{
+func (s *Server) moduleList(w http.ResponseWriter, r *http.Request) {
+	s.render(w, r, "module_list.html", map[string]interface{}{
 		"Title": "Módulos del Sistema",
 	})
 }
@@ -204,6 +205,13 @@ func (s *Server) moduleToggle(w http.ResponseWriter, r *http.Request) {
 	// (o seguía oculto) después de pulsar el botón, y el usuario creía que el
 	// interruptor no funcionaba.
 	invalidarCacheMenu()
+	// Si el módulo es un addon externo, el interruptor también manda sobre su
+	// proceso: apagarlo en la última empresa que lo tenía encendido lo detiene;
+	// encenderlo lo arranca sin reiniciar el ERP. Los módulos core no tienen
+	// proceso y esta llamada no hace nada.
+	if s.addons != nil {
+		s.addons.sincronizarProceso(moduleID)
+	}
 	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Módulo actualizado"})
 }
 

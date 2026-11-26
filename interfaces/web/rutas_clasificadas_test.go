@@ -126,6 +126,7 @@ func TestClasificarRutaCasosFijos(t *testing.T) {
 		{"/static/css/style.css", "publico", 0},
 		{"/uploads/EMP123/doc.pdf", "publico", 0},
 		{"/__addon/nota.crear", "publico", 0},
+		{"/mod", "addon", 0},
 		{"/mod/memo/nota", "addon", 0},
 		{"/reports/stock", "modulo", 8},
 	}

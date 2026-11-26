@@ -8,6 +8,7 @@ package web
 // de la administración del sistema, sin reglas gemelas que se desertan.
 
 import (
+	"fmt"
 	"net/http"
 )
 
@@ -35,9 +36,10 @@ func (s *Server) addonPanelData(w http.ResponseWriter, r *http.Request) {
 }
 
 // addonPanelReescanear rele el estado de la carpeta addons/ y lo aplica. Los
-// addons NUEVOS que aparezcan al vuelo no pueden entrar en caliente (el
-// comentario de reescanear explica el porqué del mux): se registran en la DB y
-// el panel avisa que las rutas nuevas se activan al reiniciar el ERP.
+// addons nuevos se sirven en caliente por /mod/<id>/: el núcleo registra ese
+// prefijo una sola vez y despacha por id, así que no hace falta reiniciar el
+// ERP. El mensaje lo dice tal cual para que el dueño no busque un reinicio que
+// no necesita.
 func (s *Server) addonPanelReescanear(w http.ResponseWriter, r *http.Request) {
 	if s.addons == nil {
 		jsonError(w, "No hay carpeta de addons en este arranque. Créela junto al binario y reinicie el ERP.", http.StatusNotFound)
@@ -48,7 +50,7 @@ func (s *Server) addonPanelReescanear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	invalidarCacheMenu()
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Addons re-escaneados. Los addons nuevos conocen sus rutas al reiniciar el ERP.", "estado": s.addonsEstado()})
+	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Addons re-escaneados. Los nuevos se sirven en /mod/<id>/ sin reiniciar el ERP.", "estado": s.addonsEstado()})
 }
 
 // addonPanelReiniciar relanza el proceso hijo de un addon: la operación
@@ -63,7 +65,13 @@ func (s *Server) addonPanelReiniciar(w http.ResponseWriter, r *http.Request) {
 	p := s.addons.progs[id]
 	s.addons.mu.Unlock()
 	if p == nil {
-		jsonError(w, "No hay un addon con id "+id+" cargado en este arranque (re-e-scanea para verlo).", http.StatusNotFound)
+		jsonError(w, "No hay un addon con id "+id+" cargado en este arranque (re-escanea para verlo).", http.StatusNotFound)
+		return
+	}
+	// Un módulo apagado no se reinicia: sería resucitar lo que el master
+	// apagó. Primero se enciende; el toggle arranca el proceso.
+	if !s.addons.addonActivoEnBD(id) {
+		jsonError(w, "El módulo está apagado. Enciéndalo en Configuración → Módulos antes de reiniciarlo.", http.StatusConflict)
 		return
 	}
 	// Si el proceso estaba vivo, muere con orden: un reinicio es un relevo,
@@ -82,7 +90,8 @@ func (s *Server) addonPanelReiniciar(w http.ResponseWriter, r *http.Request) {
 // lanzamiento reserva puerto loopback nuevo (lanzarBajoCandado). Sirve cuando
 // un puerto quedó enredado (proceso huérfano, proxy atascado): el dueño no
 // tiene que matar procesos a mano ni reiniciar el ERP. El addon que ya estaba
-// caído recibe otro intento de lanzamiento.
+// caído recibe otro intento de lanzamiento; el apagado en todas las empresas
+// no se resucita.
 func (s *Server) addonPanelPuertos(w http.ResponseWriter, r *http.Request) {
 	if s.addons == nil {
 		jsonError(w, "No hay carpeta de addons en este arranque.", http.StatusNotFound)
@@ -94,7 +103,12 @@ func (s *Server) addonPanelPuertos(w http.ResponseWriter, r *http.Request) {
 		lista = append(lista, p)
 	}
 	s.addons.mu.Unlock()
+	relanzados := 0
 	for _, p := range lista {
+		if !s.addons.addonActivoEnBD(p.manifiesto.ID) {
+			s.addons.detener(p)
+			continue
+		}
 		s.addons.mu.Lock()
 		if p.cmd != nil && p.cmd.Process != nil {
 			_ = p.cmd.Process.Kill()
@@ -102,6 +116,11 @@ func (s *Server) addonPanelPuertos(w http.ResponseWriter, r *http.Request) {
 		}
 		s.addons.mu.Unlock()
 		s.addons.lanzarOReanudar(p)
+		relanzados++
 	}
-	writeJSON(w, map[string]interface{}{"status": 1, "msg": "Puertos reasignados: cada addon relanzado en un puerto loopback nuevo.", "estado": s.addonsEstado()})
+	writeJSON(w, map[string]interface{}{
+		"status": 1,
+		"msg":    fmt.Sprintf("Puertos reasignados: %d addon(es) relanzado(s) en un puerto loopback nuevo; los apagados no se tocan.", relanzados),
+		"estado": s.addonsEstado(),
+	})
 }

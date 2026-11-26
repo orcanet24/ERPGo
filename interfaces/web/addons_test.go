@@ -33,6 +33,7 @@ package web
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -163,24 +164,7 @@ func hostDeAddon(t *testing.T, dir string) (*Server, *addonHost) {
 	t.Helper()
 	t.Cleanup(stopOrchestrators)
 	s, db := basePrueba(t)
-	if _, err := db.Exec(`CREATE TABLE modules (id TEXT PRIMARY KEY, name TEXT, version TEXT,
-		description TEXT, is_core INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1, path TEXT,
-		author TEXT, license_type TEXT)`); err != nil {
-		t.Fatal(err)
-	}
-	// El esquema de menu de las pruebas base no trae module_id ni is_core
-	// (otras pruebas los montan a mano). Aquí se reemplaza por la versión
-	// COMPLETA del esquema en producción, que es con la que el registro
-	// del addon tiene que funcionar.
-	if _, err := db.Exec(`DROP TABLE menu`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`CREATE TABLE menu (id INTEGER PRIMARY KEY AUTOINCREMENT,
-		parent_id INTEGER, label TEXT, url TEXT, icon TEXT, perm TEXT, active_prefix TEXT,
-		sort_order INTEGER DEFAULT 0, status INTEGER DEFAULT 1, module_id TEXT DEFAULT 'core',
-		is_core INTEGER DEFAULT 0)`); err != nil {
-		t.Fatal(err)
-	}
+	prepararEsquemaDeAddons(t, db)
 	h := &addonHost{
 		s: s, directorio: dir,
 		progs:       map[string]*addonProc{},
@@ -191,6 +175,29 @@ func hostDeAddon(t *testing.T, dir string) (*Server, *addonHost) {
 	h.lanzar = func(p *addonProc, binario string, env []string) error { return nil } // no lanza de verdad
 	s.addons = h
 	return s, h
+}
+
+// prepararEsquemaDeAddons monta en una base el esquema COMPLETO que el
+// registro de addons necesita: modules y el menu con module_id/is_core (la
+// base de prueba trae una versión reducida que otras pruebas usan). Se
+// comparte entre la empresa activa y cualquier empresa adicional, para que las
+// pruebas multiempresa midan el mismo contrato que producción.
+func prepararEsquemaDeAddons(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if _, err := db.Exec(`CREATE TABLE modules (id TEXT PRIMARY KEY, name TEXT, version TEXT,
+		description TEXT, is_core INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1, path TEXT,
+		author TEXT, license_type TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP TABLE menu`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE menu (id INTEGER PRIMARY KEY AUTOINCREMENT,
+		parent_id INTEGER, label TEXT, url TEXT, icon TEXT, perm TEXT, active_prefix TEXT,
+		sort_order INTEGER DEFAULT 0, status INTEGER DEFAULT 1, module_id TEXT DEFAULT 'core',
+		is_core INTEGER DEFAULT 0)`); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // addonsIniciar es auto-suficiente en la carpeta de addons. Estas pruebas
@@ -243,14 +250,20 @@ func TestElEscaneoRegistraElAddonEnModulosYMenu(t *testing.T) {
 	if activo != 1 {
 		t.Fatal("la primera instalación nace activo; nació apagado")
 	}
-	row := db.QueryRow(`SELECT label, url, icon, perm, status, sort_order FROM menu WHERE module_id = 'hola'`)
-	var label, url, icon, perm string
+	row := db.QueryRow(`SELECT label, url, icon, perm, active_prefix, status, sort_order FROM menu WHERE module_id = 'hola'`)
+	var label, url, icon, perm, prefijo string
 	var status, sort int64
-	if err := row.Scan(&label, &url, &icon, &perm, &status, &sort); err != nil {
+	if err := row.Scan(&label, &url, &icon, &perm, &prefijo, &status, &sort); err != nil {
 		t.Fatalf("la entrada de menú no se creó: %v", err)
 	}
-	if label != "Hola addon" || url != "/hola" || status != 1 {
+	// La URL del menú es la PUERTA ESTABLE, no la ruta declarada: /mod/<id>
+	// es lo único que el núcleo registra en el mux de una vez, y así un addon
+	// instalado después del arranque también funciona sin reiniciar el ERP.
+	if label != "Hola addon" || url != "/mod/hola" || status != 1 {
 		t.Fatalf("la entrada de menú quedó mal: %q %q status=%d", label, url, status)
+	}
+	if prefijo != "/mod/hola" {
+		t.Fatalf("el active_prefix del menú fue %q, se esperaba /mod/hola", prefijo)
 	}
 	if perm != "hola_ver" {
 		t.Fatalf("el permiso del menú fue %q, se esperaba hola_ver", perm)
@@ -1622,6 +1635,363 @@ func TestElBotonDePuertosRelanzaCadaAddon(t *testing.T) {
 	h.mu.Unlock()
 	if nuevoPuerto == 11111 || nuevoToken == "token-viejo" || nuevoToken == "" {
 		t.Fatalf("el relanzamiento debía reasignar puerto y token; quedó %d/%q", nuevoPuerto, nuevoToken)
+	}
+}
+
+// ---------- Fase 0: supervisión, interruptor y multiempresa ----------
+
+// ponerBinarioDePrueba deja el archivo con el nombre que buscarBinario busca,
+// para que el lanzamiento no se detenga en «sin binario». El contenido no se
+// ejecuta: el lanzamiento va inyectado.
+func ponerBinarioDePrueba(t *testing.T, dir, id string) {
+	t.Helper()
+	for _, nombre := range []string{"erp-addon-" + id, "erp-addon-" + id + ".exe"} {
+		if err := os.WriteFile(filepath.Join(dir, nombre), []byte("binario de prueba"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// lanzarQueSirveSalud simula el contrato del proceso: escucha en el puerto
+// reservado y responde /healthz con 200. Sin esto, esperarSalud agotaría su
+// plazo y el addon quedaría caído en cada intento.
+func lanzarQueSirveSalud(t *testing.T) func(p *addonProc, binario string, env []string) error {
+	t.Helper()
+	return func(p *addonProc, binario string, env []string) error {
+		puerto := 0
+		for _, e := range env {
+			if strings.HasPrefix(e, "ERP_ADDON_PORT=") {
+				puerto, _ = strconv.Atoi(strings.TrimPrefix(e, "ERP_ADDON_PORT="))
+			}
+		}
+		if puerto == 0 {
+			return fmt.Errorf("el lanzamiento no trajo ERP_ADDON_PORT")
+		}
+		escucha, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", puerto))
+		if err != nil {
+			return err
+		}
+		servidor := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})}
+		go func() { _ = servidor.Serve(escucha) }()
+		t.Cleanup(func() { _ = servidor.Close() })
+		return nil
+	}
+}
+
+// TestElVigilRelanzaElAddonCaidoCuandoVenceElRetroceso fija el defecto que
+// tenía el vigil: marcaba «caído» y programaba el siguiente intento, pero nadie
+// lo consumía, así que el addon quedaba muerto hasta que el dueño pulsaba
+// «Reiniciar». Aquí el retroceso ya venció y el ciclo debe relanzarlo y limpiar
+// la cuenta atrás.
+func TestElVigilRelanzaElAddonCaidoCuandoVenceElRetroceso(t *testing.T) {
+	dir := addonDirPrueba(t, manifiestoHola)
+	ponerBinarioDePrueba(t, filepath.Join(dir, "hola"), "hola")
+	_, h := hostDeAddon(t, dir)
+	h.lanzar = lanzarQueSirveSalud(t)
+
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	p := h.progs["hola"]
+	p.estado = estadoCaydo
+	p.fallasSalud = 3
+	p.proximoIntento = time.Now().Add(-time.Second)
+	h.mu.Unlock()
+
+	h.cicloSalud()
+
+	h.mu.Lock()
+	estado, fallas, proximo := p.estado, p.fallasSalud, p.proximoIntento
+	h.mu.Unlock()
+	if estado != estadoActivo {
+		t.Fatalf("el addon caído con el retroceso vencido debía relanzarse; quedó %q", estado)
+	}
+	if fallas != 0 || !proximo.IsZero() {
+		t.Fatalf("un relanzamiento con éxito debía limpiar el retroceso; fallas=%d próximo=%v", fallas, proximo)
+	}
+}
+
+// TestElAddonApagadoNoArrancaYElInterruptorLoEnciendeYLoApaga cubre las dos
+// mitades del interruptor: el arranque respeta el estado apagado y el toggle
+// manda sobre el proceso (enciende y detiene) sin reiniciar el ERP.
+func TestElAddonApagadoNoArrancaYElInterruptorLoEnciendeYLoApaga(t *testing.T) {
+	dir := addonDirPrueba(t, manifiestoHola)
+	ponerBinarioDePrueba(t, filepath.Join(dir, "hola"), "hola")
+	s, h := hostDeAddon(t, dir)
+	h.lanzar = lanzarQueSirveSalud(t)
+
+	// Fila apagada ANTES del escaneo: el arranque debe respetar el interruptor.
+	if _, err := s.db.Exec(`INSERT INTO modules (id, name, version, is_core, is_active) VALUES ('hola', 'Hola', '1.0.0', 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	estado := h.progs["hola"].estado
+	h.mu.Unlock()
+	if estado != estadoDetenido {
+		t.Fatalf("un addon apagado en todas las empresas no debía lanzarse; quedó %q", estado)
+	}
+
+	mux := http.NewServeMux()
+	s.mux = mux
+	s.registerModuleRoutes()
+	toggle := func() {
+		t.Helper()
+		req := reqPrueba(s, sessPrueba("master"), "/module/hola/toggle")
+		req.Method = http.MethodPost
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("el interruptor respondió %d: %s", rr.Code, rr.Body.String())
+		}
+	}
+
+	toggle()
+	h.mu.Lock()
+	estado = h.progs["hola"].estado
+	h.mu.Unlock()
+	if estado != estadoActivo {
+		t.Fatalf("encender el módulo debía lanzar el proceso; quedó %q", estado)
+	}
+
+	toggle()
+	h.mu.Lock()
+	estado = h.progs["hola"].estado
+	h.mu.Unlock()
+	if estado != estadoDetenido {
+		t.Fatalf("apagar el módulo en la última empresa debía detener el proceso; quedó %q", estado)
+	}
+}
+
+// TestElRegistroDelAddonAlcanzaALasDemasEmpresas: el arranque solo ve la
+// empresa activa; sin la réplica, las demás quedarían sin fila de módulo y su
+// menú desaparecería. El registro debe llegar a cada base del catálogo.
+func TestElRegistroDelAddonAlcanzaALasDemasEmpresas(t *testing.T) {
+	s, h := hostDeAddon(t, addonDirPrueba(t, manifiestoHola))
+
+	if _, err := s.db.Exec(`CREATE TABLE tenants (code TEXT PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO tenants (code) VALUES ('otra')`); err != nil {
+		t.Fatal(err)
+	}
+	otra := abrirBasePrueba(t)
+	prepararEsquemaDeAddons(t, otra)
+	s.tenantDBs = map[string]*sql.DB{"otra": otra}
+
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+
+	var activo int
+	if err := otra.QueryRow(`SELECT is_active FROM modules WHERE id = 'hola'`).Scan(&activo); err != nil {
+		t.Fatalf("la segunda empresa quedó sin fila de módulo: %v", err)
+	}
+	if activo != 1 {
+		t.Fatal("la fila del módulo debía nacer activa también en la segunda empresa")
+	}
+	var url string
+	if err := otra.QueryRow(`SELECT url FROM menu WHERE module_id = 'hola'`).Scan(&url); err != nil {
+		t.Fatalf("la segunda empresa quedó sin menú del addon: %v", err)
+	}
+	if url != "/mod/hola" {
+		t.Fatalf("el menú de la segunda empresa debía apuntar a /mod/hola, dio %q", url)
+	}
+}
+
+// TestElReinicioDeUnAddonApagadoSeRechaza: resucitar lo que el master apagó
+// sería contradecir el interruptor. El panel responde 409 y no lanza nada.
+func TestElReinicioDeUnAddonApagadoSeRechaza(t *testing.T) {
+	s, h := hostDeAddon(t, addonDirPrueba(t, manifiestoHola))
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE modules SET is_active = 0 WHERE id = 'hola'`); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/module/addons/hola/restart", nil)
+	req.SetPathValue("id", "hola")
+	rr := httptest.NewRecorder()
+	s.addonPanelReiniciar(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("reiniciar un addon apagado debía dar 409, dio %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ---------- Fase 1: la puerta estable /mod/<id> ----------
+
+// TestLaPuertaModSirveUnAddonInstaladoDespuesDelArranque es la razón de la
+// puerta estable: el mux solo registra /mod/ al arrancar, y un addon que llega
+// después se sirve igual, sin reiniciar el ERP. Además, apagado en la empresa
+// activa, el deep-link responde 404 aunque el proceso siga vivo para otras.
+func TestLaPuertaModSirveUnAddonInstaladoDespuesDelArranque(t *testing.T) {
+	raiz := t.TempDir()
+	s, h := hostDeAddon(t, raiz)
+	s.mux = http.NewServeMux()
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	s.registrarRutasAddon()
+
+	dir := filepath.Join(raiz, "hola")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifiestoHola), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+
+	var recibido string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recibido = r.URL.Path
+		_, _ = w.Write([]byte("pantalla en caliente"))
+	}))
+	defer upstream.Close()
+
+	h.mu.Lock()
+	p := h.progs["hola"]
+	p.estado = estadoActivo
+	p.proxy = makeProxy(upstream.URL)
+	h.mu.Unlock()
+
+	rr := httptest.NewRecorder()
+	s.mux.ServeHTTP(rr, reqPrueba(s, sessPrueba("master"), "/mod/hola"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("/mod/hola debía servir al addon instalado en caliente; dio %d: %s", rr.Code, rr.Body.String())
+	}
+	if recibido != "/hola" {
+		t.Fatalf("/mod/hola debía reenviarse a la ruta canónica /hola, llegó %q", recibido)
+	}
+
+	// Apagado en la empresa activa: el deep-link da 404 aunque el proceso viva.
+	if _, err := s.db.Exec(`UPDATE modules SET is_active = 0 WHERE id = 'hola'`); err != nil {
+		t.Fatal(err)
+	}
+	rr = httptest.NewRecorder()
+	s.mux.ServeHTTP(rr, reqPrueba(s, sessPrueba("master"), "/mod/hola"))
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("con el módulo apagado /mod/hola debía dar 404, dio %d", rr.Code)
+	}
+}
+
+// TestElAliasHeredadoSigueFuncionando: los enlaces internos y los deep-links
+// viejos apuntan a la ruta declarada (/hola). La puerta estable no puede
+// romperlos.
+func TestElAliasHeredadoSigueFuncionando(t *testing.T) {
+	s, h := hostDeAddon(t, addonDirPrueba(t, manifiestoHola))
+	s.mux = http.NewServeMux()
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	s.registrarRutasAddon()
+
+	var recibido string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recibido = r.URL.Path
+		_, _ = w.Write([]byte("alias heredado"))
+	}))
+	defer upstream.Close()
+
+	h.mu.Lock()
+	p := h.progs["hola"]
+	p.estado = estadoActivo
+	p.proxy = makeProxy(upstream.URL)
+	h.mu.Unlock()
+
+	rr := httptest.NewRecorder()
+	s.mux.ServeHTTP(rr, reqPrueba(s, sessPrueba("master"), "/hola"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("el alias /hola debía seguir sirviendo; dio %d: %s", rr.Code, rr.Body.String())
+	}
+	if recibido != "/hola" {
+		t.Fatalf("el alias debía reenviarse tal cual; llegó %q", recibido)
+	}
+}
+
+// TestElAliasDeUnAddonEnCalienteTambienSeSirve: la pantalla puede abrirse por
+// /mod/<id>, pero los formularios y enlaces internos del addon apuntan a su
+// ruta declarada (/hola). Esa ruta no está en el mux cuando el addon llegó
+// después del arranque; addonDispatchMiddleware la resuelve contra el
+// manifiesto vivo antes de que el mux decida.
+func TestElAliasDeUnAddonEnCalienteTambienSeSirve(t *testing.T) {
+	raiz := t.TempDir()
+	s, h := hostDeAddon(t, raiz)
+	s.mux = http.NewServeMux()
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+	s.registrarRutasAddon()
+
+	dir := filepath.Join(raiz, "hola")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifiestoHola), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+
+	var recibido string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recibido = r.URL.Path
+		_, _ = w.Write([]byte("alias en caliente"))
+	}))
+	defer upstream.Close()
+
+	h.mu.Lock()
+	p := h.progs["hola"]
+	p.estado = estadoActivo
+	p.proxy = makeProxy(upstream.URL)
+	h.mu.Unlock()
+
+	handler := s.addonDispatchMiddleware(s.mux)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, reqPrueba(s, sessPrueba("master"), "/hola"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("el alias /hola de un addon instalado en caliente debía servirse; dio %d: %s", rr.Code, rr.Body.String())
+	}
+	if recibido != "/hola" {
+		t.Fatalf("el alias en caliente debía reenviarse tal cual; llegó %q", recibido)
+	}
+}
+
+// TestElMenuViejoSeNormalizaALaPuertaEstable: las filas sembradas por versiones
+// anteriores apuntan a /hola. El re-escaneo debe moverlas a /mod/hola sin
+// duplicar la entrada ni apagarla.
+func TestElMenuViejoSeNormalizaALaPuertaEstable(t *testing.T) {
+	s, h := hostDeAddon(t, addonDirPrueba(t, manifiestoHola))
+	if _, err := s.db.Exec(`INSERT INTO menu (parent_id, label, url, module_id, status) VALUES (NULL, 'Hola addon', '/hola', 'hola', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.reescanear(); err != nil {
+		t.Fatal(err)
+	}
+
+	var filas int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM menu WHERE module_id = 'hola'`).Scan(&filas); err != nil {
+		t.Fatal(err)
+	}
+	if filas != 1 {
+		t.Fatalf("la normalización debía conservar UNA fila, hay %d", filas)
+	}
+	var url, prefijo string
+	var status int
+	if err := s.db.QueryRow(`SELECT url, active_prefix, status FROM menu WHERE module_id = 'hola'`).Scan(&url, &prefijo, &status); err != nil {
+		t.Fatal(err)
+	}
+	if url != "/mod/hola" || prefijo != "/mod/hola" || status != 1 {
+		t.Fatalf("el menú viejo debía quedar en /mod/hola (con su prefijo y encendido); quedó %q/%q/%d", url, prefijo, status)
 	}
 }
 

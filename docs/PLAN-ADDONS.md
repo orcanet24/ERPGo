@@ -124,9 +124,15 @@ hacer y el núcleo decide si se lo concede. Sin manifiesto válido no arranca.
      `is_active` según lo que el master haya guardado antes: el escaneo no
      vuelve a encender lo que el master apagó).
    - Sincroniza sus entradas en `menu` (`module_id = <addon.id>`,
-     `perm = permiso.code`). Si el addon desaparece de la carpeta, sus filas
-     de `menu` y `modules` se marcan inactivas, **nunca se borran** (política
-     de trazabilidad del repo, como en `schema_z_zzzzzz_retiro_addons.sql`).
+     `perm = permiso.code`), con la URL **normalizada a la puerta estable
+     `/mod/<id>`** (las filas viejas que apuntaban a `/hola` se mueven, no se
+     duplican). Si el addon desaparece de la carpeta, sus filas de `menu` y
+     `modules` se marcan inactivas, **nunca se borran** (política de
+     trazabilidad del repo, como en `schema_z_zzzzzz_retiro_addons.sql`).
+   - Replica el registro en **todas las empresas** del catálogo, no solo en la
+     activa: sin esto las demás se quedarían sin fila de módulo y su menú
+     desaparecería. Los grants de lectura de cada empresa se agregan con la
+     misma clave del usuario lector.
 3. **Lanzamiento.** El núcleo lanza el binario del addon como **proceso hijo
    propio** y le entrega por variables de entorno:
    - `ERP_ADDON_TOKEN`: token efímero de 32 bytes, aleatorio **por sesión**;
@@ -135,6 +141,12 @@ hacer y el núcleo decide si se lo concede. Sin manifiesto válido no arranca.
    - `ERP_ADDON_PORT`: el puerto local reservado donde el addon debe escuchar.
    - `ERP_DB_READ_DSN`: si el manifiesto pide `db_read`, cadena MySQL de solo
      lectura contra la base de la empresa **activa** de cada sesión (ver §7).
+
+   El proceso es **único para todo el ERP** y solo vive si el addon está
+   encendido en ALGUNA empresa: apagado en todas, no se lanza (y si estaba
+   vivo, se detiene). El interruptor de Configuración → Módulos enciende y
+   apaga el proceso sin reiniciar el ERP; la visibilidad por empresa sigue
+   decidiéndose en cada petición.
 4. **Salud.** Cada 30 s el núcleo hace `GET /healthz` al addon. Dos fallos
    seguidos lo marcan «caído» en la pantalla Módulos, sus rutas responden 502
    con mensaje claro («Cobranza no responde; reinícialo en Configuración →
@@ -350,17 +362,30 @@ addons firmados, y el log deja constancia cuando el modo está activo.
 
 ## 5. Proxy inverso y rutas
 
-**Decisión:** el addon sirve en la ruta que su manifiesto declara
-(`/cobranza`), sin prefijos de instalación tipo `/mod/`. El núcleo registra
-esa ruta apuntando a su proxy interno (`/cobranza/*` →
-`http://127.0.0.1:<puertoAddon>/cobranza/*`), de modo que para el usuario y
-para el navegador el addon es una pantalla más del ERP: misma sesión, mismo
-menú activo, misma estética de barra lateral.
+**Decisión:** el addon declara sus rutas (`/cobranza`) y el núcleo expone una
+**puerta estable `/mod/<id>`** que despacha por id. El menú apunta a esa
+puerta, y `/mod/<id>/resto` se reenvía al proceso como `routes[0]/resto`:
 
-Revalidación en cada petición: sesión del ERP (del lado del núcleo) y permiso
-declarado (el canal de navegación también se puede declarar por entrada de
-`menu` con `perms`). Si el addon está caído, el proxy responde 502 con el
-mensaje de salud en vez de colgar al usuario.
+```
+/memo        → /mod/memo  → http://127.0.0.1:<puertoAddon>/memo
+/memo/nota   → /mod/memo/nota → http://127.0.0.1:<puertoAddon>/memo/nota
+```
+
+El núcleo registra `/mod/` **una sola vez, al arrancar**, y el handler resuelve
+el addon en caliente: un addon instalado después (re-escaneo) se sirve sin
+reiniciar el ERP. Las rutas declaradas de los addons presentes al arrancar se
+registran además como **alias heredado** (`/cobranza`), para que los enlaces
+internos y los deep-links viejos sigan funcionando.
+
+Para el usuario y para el navegador el addon es una pantalla más del ERP:
+misma sesión, mismo menú activo, misma estética de barra lateral. Las cookies
+del ERP nunca llegan al proceso.
+
+Revalidación en cada petición: sesión del ERP (del lado del núcleo), empresa
+activa (`is_active` de `modules`) y permiso declarado (el canal de navegación
+también se puede declarar por entrada de `menu` con `perms`). Si el addon está
+caído, el proxy responde 502 con el mensaje de salud en vez de colgar al
+usuario.
 
 ---
 
@@ -467,13 +492,25 @@ tablas son suyas, y el núcleo ni recuerda que existieron.
 > cabeceras de contexto, el registro en `modules`/`menu`, el canal de negocio
 > con token y loopback, y el addon demo (`addons/hola/`) viven en
 > `interfaces/web/addons.go` con sus pruebas en `addons_test.go`.
+>
+> **Cierre 2026-11-26 (fase 0 + fase 1 estables).** Se cerraron los huecos que
+> impedían llamarla terminada: supervisión con relanzamiento automático,
+> arranque solo si el addon está encendido en alguna empresa, interruptor que
+> enciende y apaga el proceso, registro replicado en todas las empresas y
+> puerta `/mod/<id>` registrada una sola vez (addon nuevo en caliente, alias
+> heredado intacto).
 - Escáner de `addons/`, validación del manifiesto, lanzamiento del proceso
   hijo con token efímero y puerto reservado.
-- Proxy inverso de las rutas del manifiesto con validación de sesión del
-  núcleo y cabeceras `X-ERP-User` / `X-ERP-Tenant` / `X-ERP-Perms`.
-- Registro de menú vía `modules` + `menu` (`module_id` del addon) y la
-  pantalla Módulos existente: toggle, «Re-escanear addons», «Reiniciar» y
-  estado de salud del proceso.
+- Proxy inverso con **puerta estable `/mod/<id>`** (registrada una vez) y las
+  rutas declaradas como alias heredado; validación de sesión del núcleo,
+  empresa activa y cabeceras `X-ERP-User` / `X-ERP-Tenant` / `X-ERP-Perms`.
+- Registro de menú vía `modules` + `menu` (`module_id` del addon), replicado
+  en todas las empresas, con la URL normalizada a `/mod/<id>` y la pantalla
+  Módulos existente: toggle, «Re-escanear addons», «Reiniciar» y estado de
+  salud del proceso.
+- Supervisión real: dos fallos de `/healthz` marcan «caído» y el vigil
+  relanza con retroceso exponencial; el interruptor del módulo detiene el
+  proceso cuando queda apagado en todas las empresas.
 - Canal de negocio `/__addon/<id>/<verb>` sin declarar verbs de escritura
   todavía (llega en fase 2): la frontera ya respira sin tocar datos del ERP.
 - **Addon demo** en el repo (`addons/hola/`), mínimo: una pantalla, una

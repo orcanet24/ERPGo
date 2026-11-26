@@ -46,10 +46,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -435,6 +437,13 @@ type addonHost struct {
 	rutasDelMux map[string]bool // rutas ya registradas en el mux (solo al arrancar)
 	avisos      []string        // avisos del último escaneo, para el panel
 
+	// rutasVivas es el conjunto de rutas de addon resolubles AHORA, publicado
+	// como snapshot inmutable. El despachador pregunta por cada petición y no
+	// puede tomar h.mu: ese candado se retiene durante el lanzamiento y la
+	// espera de salud (hasta 10 s), y bloquear al ERP entero detrás de un
+	// addon lento sería peor que el problema que resuelve.
+	rutasVivas atomic.Pointer[map[string]bool]
+
 	// handlers de negocio de los verbs de db_write, por addon y por verbo.
 	// Los conecta el núcleo en el arranque (addonVerboRegistrar); la frontera
 	// NO conoce su lógica: solo valida contexto y permiso, y despacha.
@@ -657,12 +666,10 @@ func (h *addonHost) verificarFirmaAddon(dir string, contenido []byte) (string, e
 }
 
 // reescanear aplica el estado de la carpeta addons/ al ERP: manifiestos →
-// filas de modules/menu → procesos → rutas del proxy. Es el botón
-// «Re-escanear addons» y el arranque. Las rutas del mux se registran UNA vez
-// (al arrancar, cuando aún no hay tráfico): registrar rutas dinámicamente en
-// caliente sería una carrera con el propio ServeMux; los addons nuevos que
-// lleguen al vuelo aparecen con el próximo reinicio del ERP, y el panel lo
-// dice así.
+// filas de modules/menu en TODAS las empresas → procesos → rutas del proxy.
+// Es el botón «Re-escanear addons» y el arranque. El mux solo gana una ruta
+// estable, /mod/<id>/ (ver registrarRutasAddon): los addons nuevos que
+// lleguen al vuelo se sirven por ahí sin reiniciar el ERP.
 func (h *addonHost) reescanear() error {
 	if h == nil {
 		return nil
@@ -671,28 +678,37 @@ func (h *addonHost) reescanear() error {
 	idsNuevos := idsOrdenados(fila)
 
 	h.mu.Lock()
-	// Los addons que desaparecieron de la carpeta: dejar de servir, marcar
-	// inactivo en la DB (las filas jamás se borran: es la trazabilidad del
-	// repo) y decirlo en el log. Sus rutas siguen registradas en el mux, pero
-	// el proxy ya no las resuelve: devuelve «addon no instalado».
+	// Los addons que desaparecieron de la carpeta: dejar de servir y marcarlos
+	// inactivos en todas las empresas (las filas jamás se borran: es la
+	// trazabilidad del repo). Sus rutas siguen registradas en el mux, pero el
+	// proxy ya no las resuelve: devuelve «addon no instalado».
+	var retirados []string
 	for id, p := range h.progs {
 		if _, queda := fila[id]; !queda {
 			if p.cmd != nil && p.cmd.Process != nil {
 				_ = p.cmd.Process.Kill()
 			}
-			h.marcaInactivoEnBD(id)
 			delete(h.progs, id)
+			retirados = append(retirados, id)
 		}
 	}
 	h.mu.Unlock()
+	// Fuera del candado: marcar inactivo recorre el catálogo de empresas y no
+	// puede bloquear al vigil de salud mientras habla con MySQL.
+	for _, id := range retirados {
+		h.marcaInactivoEnBD(id)
+	}
 
 	for _, id := range idsNuevos {
 		nuevo := fila[id]
 		h.mu.Lock()
 		// Se conserva el proceso vivo entre rescaneos: mismo binario y mismo
 		// manifiesto = mismo proceso. Solo se reinicia si el binario cambió
-		// (se recompiló) o si el anterior no estaba en pie.
+		// (se recompiló), si el manifiesto cambió (versión, rutas, menú,
+		// permisos) o si el anterior no estaba en pie.
+		cambioManifiesto := false
 		if previo, estaba := h.progs[id]; estaba {
+			cambioManifiesto = !reflect.DeepEqual(previo.manifiesto, nuevo.manifiesto)
 			nuevo.cmd = previo.cmd
 			nuevo.token = previo.token
 			nuevo.puerto = previo.puerto
@@ -702,21 +718,32 @@ func (h *addonHost) reescanear() error {
 			nuevo.ultimoError = previo.ultimoError
 			nuevo.lecturaOK = previo.lecturaOK
 			nuevo.lecturaAviso = previo.lecturaAviso
+			nuevo.proximoIntento = previo.proximoIntento
 			nuevo.proxy = previo.proxy
-			nuevo.manifiesto = previo.manifiesto // el vivo manda; el nuevo pide reinicio
+			if !cambioManifiesto {
+				nuevo.manifiesto = previo.manifiesto // el vivo manda
+			}
 			nuevo.dir = previo.dir
 		}
 		h.progs[id] = nuevo
-		rebuilt := nuevo.binario != nuevo.buscarBinario()
+		cambioBinario := nuevo.binario != nuevo.buscarBinario()
 		reiniciar := nuevo.estado == "" || nuevo.estado == estadoCaydo ||
-			nuevo.estado == estadoSinBin || rebuilt
+			nuevo.estado == estadoSinBin || cambioBinario || cambioManifiesto
 		h.mu.Unlock()
 
 		if err := h.registrarEnBD(nuevo.manifiesto, nuevo.migraciones); err != nil {
 			avisos = append(avisos, fmt.Sprintf("%s: no se pudo registrar en modules/menu: %v", id, err))
 		}
+		// El registro de arriba solo alcanza a la empresa activa; las demás se
+		// quedarían sin fila de módulo (y su menú desaparecería) si no se
+		// replican.
+		h.registrarEnOtrasEmpresas(nuevo.manifiesto, nuevo.migraciones)
 		if reiniciar {
+			// lanzarOReanudar respeta el interruptor: un addon apagado en todas
+			// las empresas no arranca, y si estaba vivo se detiene.
 			h.lanzarOReanudar(nuevo)
+		} else if !h.addonActivoEnBD(id) {
+			h.detener(nuevo)
 		}
 	}
 	if len(avisos) > 0 || len(idsNuevos) > 0 {
@@ -725,6 +752,7 @@ func (h *addonHost) reescanear() error {
 	h.mu.Lock()
 	h.avisos = avisos
 	h.mu.Unlock()
+	h.publicarRutas()
 	for _, aviso := range avisos {
 		log.Printf("addons: %s", aviso)
 	}
@@ -733,10 +761,22 @@ func (h *addonHost) reescanear() error {
 
 // registrarRutasAddon es la ÚNICA vez que se registran rutas de addons en el
 // mux: en el arranque. Va acompañada del escaneo inicial.
+//
+// La puerta /mod/<id>/ se registra UNA sola vez y despacha por id en caliente:
+// no depende de conocer la carpeta al arrancar. Las rutas declaradas de los
+// addons presentes se registran además como alias heredado (sus enlaces
+// internos y los deep-links viejos siguen funcionando); un addon que llegue
+// después de un re-escaneo se sirve por /mod/<id>/ sin reiniciar el ERP.
 func (s *Server) registrarRutasAddon() {
 	if s == nil || s.addons == nil {
 		return
 	}
+	// El prefijo estable. Se registran las dos formas para que /mod (sin id)
+	// también llegue al handler y responda con su 404 claro en vez de caer en
+	// el fail-closed de rutas sin clasificar.
+	s.mux.HandleFunc("/mod", func(w http.ResponseWriter, req *http.Request) { s.addonRouter(w, req) })
+	s.mux.HandleFunc("/mod/", func(w http.ResponseWriter, req *http.Request) { s.addonRouter(w, req) })
+
 	s.addons.mu.Lock()
 	vistas := map[string]bool{}
 	for _, p := range s.addons.progs {
@@ -753,11 +793,38 @@ func (s *Server) registrarRutasAddon() {
 	s.addons.mu.Lock()
 	s.addons.rutasDelMux = vistas
 	s.addons.mu.Unlock()
+	s.addons.publicarRutas()
 
 	// El canal de negocio SIEMPRE existe, aunque no haya addons: es el
 	// receptor del núcleo, y responder «no hay addon con ese id» sin exponer
 	// tokens es parte del contrato.
 	s.mux.HandleFunc("/__addon/{id}/{verb}", s.addonCanal)
+}
+
+// publicarRutas deja un snapshot inmutable de las rutas de addon que el
+// despachador puede resolver: las registradas en el mux al arrancar (para que
+// un addon retirado siga respondiendo 404, no 403) más las declaradas por los
+// manifiestos vivos (para el addon instalado en caliente). Se llama al
+// escanear y al registrar el mux, nunca por petición.
+func (h *addonHost) publicarRutas() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	vivas := make(map[string]bool, len(h.rutasDelMux))
+	for r := range h.rutasDelMux {
+		vivas[r] = true
+	}
+	for _, p := range h.progs {
+		if p == nil {
+			continue
+		}
+		for _, r := range p.manifiesto.Routes {
+			vivas[r] = true
+		}
+	}
+	h.mu.Unlock()
+	h.rutasVivas.Store(&vivas)
 }
 
 // esRutaAddon dice si un path pertenece a una página declarada por el
@@ -771,14 +838,67 @@ func (s *Server) esRutaAddon(path string) bool {
 	if s == nil || s.addons == nil {
 		return false
 	}
+	// La puerta estable siempre es de addons: el handler decide si el id
+	// existe (404) o si el módulo está apagado para esta empresa.
+	if path == "/mod" || strings.HasPrefix(path, "/mod/") {
+		return true
+	}
+	// El snapshot incluye las rutas del mux (para que un addon retirado siga
+	// dando 404, no 403) y las declaradas por los manifiestos vivos (para el
+	// addon instalado en caliente). Se consulta SIN candado: esta función
+	// corre en CADA petición del ERP y h.mu se retiene durante el lanzamiento
+	// y la espera de salud de un addon (hasta 10 s).
+	if vivas := s.addons.rutasVivas.Load(); vivas != nil {
+		return algunaRutaDeAddon(path, *vivas)
+	}
+	// Sin snapshot (host construido a mano antes del primer escaneo) el
+	// candado es la única fuente. Es el arranque, no el camino caliente.
 	s.addons.mu.Lock()
 	defer s.addons.mu.Unlock()
-	for r := range s.addons.rutasDelMux {
-		if path == r || strings.HasPrefix(path, r+"/") {
+	if algunaRutaDeAddon(path, s.addons.rutasDelMux) {
+		return true
+	}
+	for _, p := range s.addons.progs {
+		for _, r := range p.manifiesto.Routes {
+			if rutaDeAddonCoincide(path, r) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// algunaRutaDeAddon dice si path es una de las rutas del conjunto o cuelga de
+// una de ellas.
+func algunaRutaDeAddon(path string, rutas map[string]bool) bool {
+	for r := range rutas {
+		if rutaDeAddonCoincide(path, r) {
 			return true
 		}
 	}
 	return false
+}
+
+// rutaDeAddonCoincide compara por segmento: /mod/hola no debe aceptar
+// /mod/holanda.
+func rutaDeAddonCoincide(path, ruta string) bool {
+	return path == ruta || strings.HasPrefix(path, ruta+"/")
+}
+
+// addonDispatchMiddleware resuelve las rutas de addons contra los manifiestos
+// VIVOS antes de que el mux decida. El mux solo gana /mod/ una vez; un addon
+// instalado en caliente se sirve por /mod/<id> y, además, por sus rutas
+// declaradas, que es a donde apuntan los formularios y enlaces internos del
+// propio addon. Sin esta capa, la pantalla cargaría en /mod/<id> pero su
+// primer POST a /<ruta> caería en el mux sin patrón.
+func (s *Server) addonDispatchMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.esRutaAddon(r.URL.Path) {
+			s.addonRouter(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ---------- Registro en la DB: modules y menu ----------
@@ -793,6 +913,78 @@ func (h *addonHost) dbDeAddon() *sql.DB {
 	return h.s.activeDB()
 }
 
+// porCadaEmpresa ejecuta fn sobre la base activa y sobre cada empresa del
+// catálogo, una sola vez por handle. Es la vía para que el registro de un
+// addon no se quede en la empresa que estaba activa al arrancar: las demás
+// también necesitan su fila de modules/menu. Un catálogo ilegible (pruebas,
+// instalación de una sola empresa) no impide la operación local.
+func (h *addonHost) porCadaEmpresa(fn func(db *sql.DB, code string)) {
+	if h == nil || h.s == nil || fn == nil {
+		return
+	}
+	vistos := map[*sql.DB]bool{}
+	activo := h.s.activeTenantCode()
+	if db := h.s.activeDB(); db != nil {
+		vistos[db] = true
+		fn(db, activo)
+	}
+	ctl, err := h.s.controlStore()
+	if err != nil {
+		return
+	}
+	rows, err := ctl.Query(`SELECT code FROM tenants`)
+	if err != nil {
+		return
+	}
+	var codigos []string
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err == nil && code != "" {
+			codigos = append(codigos, code)
+		}
+	}
+	rows.Close()
+	for _, code := range codigos {
+		if code == activo {
+			continue
+		}
+		db := h.s.dbForTenant(code)
+		if db == nil || vistos[db] {
+			continue
+		}
+		vistos[db] = true
+		fn(db, code)
+	}
+}
+
+// addonActivoEnBD dice si el addon está encendido en ALGUNA empresa. El
+// proceso es único para todo el ERP: apagarlo porque una empresa lo apagó
+// dejaría sin pantalla a las demás. La visibilidad por empresa la decide
+// addonEstaApagado en cada petición; esto solo decide si vale la pena tener
+// el proceso vivo. Sin ninguna fila legible se responde «sí»: una base de
+// prueba o una instalación recién sembrada no debe impedir el lanzamiento.
+func (h *addonHost) addonActivoEnBD(id string) bool {
+	if h == nil || h.s == nil {
+		return true
+	}
+	consultado := false
+	activo := false
+	h.porCadaEmpresa(func(db *sql.DB, code string) {
+		var a int
+		if err := db.QueryRow(`SELECT is_active FROM modules WHERE id = ?`, id).Scan(&a); err != nil {
+			return
+		}
+		consultado = true
+		if a == 1 {
+			activo = true
+		}
+	})
+	if !consultado {
+		return true
+	}
+	return activo
+}
+
 // registrarEnBD sincroniza las filas del addon con modules y menu de la base
 // de empresa: PRIMERO sus migraciones (la tabla propia debe existir aunque el
 // registro de módulo falle), luego modules y menu. Nada se borra: lo que ya
@@ -805,13 +997,57 @@ func (h *addonHost) registrarEnBD(m addonManifest, migraciones []string) error {
 	return h.registrarEnDB(db, m, migraciones)
 }
 
+// addonMenuURL traduce una URL declarada por el addon a la puerta estable
+// /mod/<id>. El manifiesto sigue hablando en sus rutas (/hola, /hola/config),
+// pero el menú apunta al prefijo que el núcleo registra de una vez: así un
+// addon instalado después del arranque también aparece y funciona sin
+// reiniciar el ERP.
+func addonMenuURL(m addonManifest, u string) string {
+	if u == "" || len(m.Routes) == 0 {
+		return u
+	}
+	for _, r := range m.Routes {
+		if u == r {
+			return "/mod/" + m.ID
+		}
+		if strings.HasPrefix(u, r+"/") {
+			return "/mod/" + m.ID + strings.TrimPrefix(u, r)
+		}
+	}
+	return u
+}
+
 // sincronizarMenu refleja el manifiesto en el menú: las entradas declaradas se
 // insertan (si no existen) o encienden/actualizan (si existen); las que ya no
-// están declaradas, status = 0.
+// están declaradas, status = 0. Las URLs pasan por addonMenuURL para que la
+// entrada apunte a /mod/<id> y no a una ruta que solo existía en el arranque.
 func (h *addonHost) sincronizarMenu(db *sql.DB, m addonManifest) error {
+	if db == nil {
+		return nil
+	}
 	deseadas := map[string]bool{}
 	for _, e := range m.Menu {
-		deseadas[e.URL] = true
+		deseadas[addonMenuURL(m, e.URL)] = true
+	}
+
+	// Normalizar filas antiguas: las sembradas con la ruta declarada (/hola)
+	// pasan a la puerta estable (/mod/hola) conservando su fila y su estado.
+	// Se hace ANTES de leer para que el barrido de retiradas no las confunda
+	// con entradas que ya no existen. Si la fila nueva ya existe, la vieja se
+	// retira abajo (no está en deseadas).
+	for _, e := range m.Menu {
+		nueva := addonMenuURL(m, e.URL)
+		if nueva == e.URL {
+			continue
+		}
+		var existeNueva int
+		_ = db.QueryRow(`SELECT COUNT(*) FROM menu WHERE module_id = ? AND url = ?`, m.ID, nueva).Scan(&existeNueva)
+		if existeNueva > 0 {
+			continue
+		}
+		if _, err := db.Exec(`UPDATE menu SET url = ? WHERE module_id = ? AND url = ?`, nueva, m.ID, e.URL); err != nil {
+			return fmt.Errorf("normalizar la entrada de menú %q: %w", e.URL, err)
+		}
 	}
 
 	// Filas viejas de ESTE addon que ya no están en el manifiesto → inactivas.
@@ -838,17 +1074,24 @@ func (h *addonHost) sincronizarMenu(db *sql.DB, m addonManifest) error {
 	}
 
 	for _, e := range m.Menu {
+		nueva := addonMenuURL(m, e.URL)
+		prefijo := addonMenuURL(m, e.ActivePrefix)
+		if prefijo == "" {
+			// Sin active_prefix, el subrayado del menú sigue al prefijo estable:
+			// /mod/hola/config ilumina /mod/hola sin depender de la ruta interna.
+			prefijo = "/mod/" + m.ID
+		}
 		var existe int
-		_ = db.QueryRow(`SELECT COUNT(*) FROM menu WHERE module_id = ? AND url = ?`, m.ID, e.URL).Scan(&existe)
+		_ = db.QueryRow(`SELECT COUNT(*) FROM menu WHERE module_id = ? AND url = ?`, m.ID, nueva).Scan(&existe)
 		if existe == 0 {
-			if _, err := db.Exec(`INSERT INTO menu (parent_id, label, url, module_id, is_core, icon, sort_order, status, perm)
-				VALUES (?, ?, ?, ?, 0, ?, ?, 1, ?)`,
-				e.ParentID, e.Label, e.URL, m.ID, e.Icon, e.SortOrder, strings.Join(e.Perms, "|")); err != nil {
+			if _, err := db.Exec(`INSERT INTO menu (parent_id, label, url, module_id, is_core, icon, active_prefix, sort_order, status, perm)
+				VALUES (?, ?, ?, ?, 0, ?, ?, ?, 1, ?)`,
+				e.ParentID, e.Label, nueva, m.ID, e.Icon, prefijo, e.SortOrder, strings.Join(e.Perms, "|")); err != nil {
 				return fmt.Errorf("insertar el menú %q: %w", e.Label, err)
 			}
 		} else {
-			if _, err := db.Exec(`UPDATE menu SET label = ?, icon = ?, sort_order = ?, status = 1, perm = ?
-				WHERE module_id = ? AND url = ?`, e.Label, e.Icon, e.SortOrder, strings.Join(e.Perms, "|"), m.ID, e.URL); err != nil {
+			if _, err := db.Exec(`UPDATE menu SET label = ?, icon = ?, active_prefix = ?, sort_order = ?, status = 1, perm = ?
+				WHERE module_id = ? AND url = ?`, e.Label, e.Icon, prefijo, e.SortOrder, strings.Join(e.Perms, "|"), m.ID, nueva); err != nil {
 				return fmt.Errorf("actualizar el menú %q: %w", e.Label, err)
 			}
 		}
@@ -856,15 +1099,14 @@ func (h *addonHost) sincronizarMenu(db *sql.DB, m addonManifest) error {
 	return nil
 }
 
-// marcaInactivoEnBD marca el addon como «no instalado» SIN borrar nada:
-// modules (is_active = 0) y menú (status = 0) quedan como evidencia.
+// marcaInactivoEnBD marca el addon como «no instalado» en todas las empresas
+// SIN borrar nada: modules (is_active = 0) y menú (status = 0) quedan como
+// evidencia.
 func (h *addonHost) marcaInactivoEnBD(id string) {
-	db := h.dbDeAddon()
-	if db == nil {
-		return
-	}
-	_, _ = db.Exec(`UPDATE modules SET is_active = 0 WHERE id = ? AND is_core = 0`, id)
-	_, _ = db.Exec(`UPDATE menu SET status = 0 WHERE module_id = ?`, id)
+	h.porCadaEmpresa(func(db *sql.DB, code string) {
+		_, _ = db.Exec(`UPDATE modules SET is_active = 0 WHERE id = ? AND is_core = 0`, id)
+		_, _ = db.Exec(`UPDATE menu SET status = 0 WHERE module_id = ?`, id)
+	})
 }
 
 // addonRegistrarEmpresa es lo que se llama cuando se prepara una empresa
@@ -922,6 +1164,53 @@ func (h *addonHost) registrarEnDB(db *sql.DB, m addonManifest, migraciones []str
 		}
 	}
 	return h.sincronizarMenu(db, m)
+}
+
+// registrarEnOtrasEmpresas replica el registro (migraciones, modules y menu)
+// en cada empresa del catálogo que no sea la activa. El arranque solo ve la
+// empresa activa; sin esto, las demás no tendrían la fila del módulo y su
+// menú desaparecería, y el dueño lo reportaría como un addon roto. Los grants
+// de lectura se agregan con la misma clave de la sesión (el usuario lector ya
+// existe); un fallo de grants no tumba el registro: queda en el log.
+func (h *addonHost) registrarEnOtrasEmpresas(m addonManifest, migraciones []string) {
+	if h == nil || h.s == nil {
+		return
+	}
+	activo := h.s.activeTenantCode()
+	ctl, err := h.s.controlStore()
+	if err != nil {
+		return
+	}
+	rows, err := ctl.Query(`SELECT code FROM tenants`)
+	if err != nil {
+		return
+	}
+	var codigos []string
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err == nil && code != "" {
+			codigos = append(codigos, code)
+		}
+	}
+	rows.Close()
+	for _, code := range codigos {
+		if code == activo {
+			continue
+		}
+		db := h.s.dbForTenant(code)
+		if db == nil {
+			continue
+		}
+		if err := h.registrarEnDB(db, m, migraciones); err != nil {
+			log.Printf("AVISO addons: %s: no se pudo registrar en la empresa %q: %v", m.ID, code, err)
+			continue
+		}
+		if len(m.DBRead) > 0 && h.s.config != nil && h.s.config.DBHost != "" {
+			if err := h.s.addonConcederLecturaEnBase(&addonProc{manifiesto: m}, h.s.tenantDBName(code)); err != nil {
+				log.Printf("AVISO addons: %s: sin grants de lectura para la empresa %q: %v", m.ID, code, err)
+			}
+		}
+	}
 }
 
 // ---------- Migraciones propias y lectura granular (fase 2) ----------
@@ -1185,10 +1474,16 @@ func reservarPuerto() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-// lanzarOReanudar arranca el addon como proceso propio, con token efímero y
-// puerto reservado. Un fallo queda explicado en el panel, no escondido.
+// lanzarOReanudar arranca (o releva) el addon como proceso propio, con token
+// efímero y puerto reservado. Si el módulo está apagado en TODAS las empresas,
+// no se lanza y el proceso vivo (si lo había) se detiene. Un fallo queda
+// explicado en el panel y programa el siguiente intento del vigil.
 func (h *addonHost) lanzarOReanudar(p *addonProc) {
 	if h == nil || p == nil {
+		return
+	}
+	if !h.addonActivoEnBD(p.manifiesto.ID) {
+		h.detener(p)
 		return
 	}
 	h.mu.Lock()
@@ -1196,7 +1491,91 @@ func (h *addonHost) lanzarOReanudar(p *addonProc) {
 	h.lanzarBajoCandado(p)
 }
 
+// detener apaga el proceso del addon y lo deja en estado «detenido»: el
+// interruptor del módulo lo apagó. No se reintenta mientras siga apagado.
+func (h *addonHost) detener(p *addonProc) {
+	if h == nil || p == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if p.cmd != nil && p.cmd.Process != nil {
+		_ = p.cmd.Process.Kill()
+	}
+	p.cmd = nil
+	p.estado = estadoDetenido
+	p.fallasSalud = 0
+	p.proximoIntento = time.Time{}
+	p.ultimoError = ""
+	p.proxy = nil
+}
+
+// sincronizarProceso aplica el interruptor del módulo al proceso hijo: si el
+// addon quedó encendido en alguna empresa, se asegura de que esté lanzado; si
+// quedó apagado en todas, se detiene. El proceso es único para el ERP, así que
+// el interruptor de una empresa no apaga a las demás.
+func (h *addonHost) sincronizarProceso(id string) {
+	if h == nil || id == "" {
+		return
+	}
+	h.mu.Lock()
+	p := h.progs[id]
+	estado := ""
+	if p != nil {
+		estado = p.estado
+	}
+	h.mu.Unlock()
+	if p == nil {
+		return
+	}
+	if !h.addonActivoEnBD(id) {
+		h.detener(p)
+		return
+	}
+	switch estado {
+	case estadoDetenido, estadoCaydo, estadoSinBin, "":
+		h.lanzarOReanudar(p)
+	}
+}
+
+// ahoraDe es el reloj del host con respaldo: las pruebas inyectan h.ahora,
+// pero un host mínimo no debe entrar en pánico por no hacerlo.
+func (h *addonHost) ahoraDe() time.Time {
+	if h != nil && h.ahora != nil {
+		return h.ahora()
+	}
+	return time.Now()
+}
+
+// programarReintento fija el próximo intento con retroceso exponencial
+// (5 s, 10 s, 20 s… tope 5 min). Se usa cuando un lanzamiento falla para que
+// el vigil vuelva a probar; un fallo de arranque no se convierte en un
+// martilleo cada 30 s.
+func (h *addonHost) programarReintento(p *addonProc) {
+	if p == nil {
+		return
+	}
+	p.fallasSalud++
+	if p.fallasSalud < 2 {
+		p.fallasSalud = 2
+	}
+	retardo := time.Duration(5<<minDe(p.fallasSalud-2, 9)) * time.Second
+	if retardo > 5*time.Minute {
+		retardo = 5 * time.Minute
+	}
+	p.proximoIntento = h.ahoraDe().Add(retardo)
+}
+
 func (h *addonHost) lanzarBajoCandado(p *addonProc) {
+	// Un relanzamiento es un relevo: el proceso anterior muere antes de que el
+	// nuevo reserve puerto. Sin esto, recompilar un binario dejaba dos procesos
+	// escuchando y el proxy podía seguir hablando con el viejo.
+	if p.cmd != nil && p.cmd.Process != nil {
+		_ = p.cmd.Process.Kill()
+		p.cmd = nil
+	}
+	p.proximoIntento = time.Time{}
+
 	binario := p.buscarBinario()
 	p.binario = binario
 	if binario == "" {
@@ -1210,6 +1589,7 @@ func (h *addonHost) lanzarBajoCandado(p *addonProc) {
 	if err != nil {
 		p.estado = estadoCaydo
 		p.ultimoError = "no se pudo reservar un puerto loopback: " + err.Error()
+		h.programarReintento(p)
 		log.Printf("AVISO addons: %s: %s", p.manifiesto.ID, p.ultimoError)
 		return
 	}
@@ -1234,16 +1614,22 @@ func (h *addonHost) lanzarBajoCandado(p *addonProc) {
 	if err := iniciar(p, binario, env); err != nil {
 		p.estado = estadoCaydo
 		p.ultimoError = "no se pudo lanzar el proceso: " + err.Error()
+		h.programarReintento(p)
 		log.Printf("AVISO addons: %s: %s", p.manifiesto.ID, p.ultimoError)
 		return
 	}
 
 	// El addon tiene un plazo fijo para estar sano; si no, queda caído y el
-	// vigil lo reintenta con retroceso (ver tickSalud). Nada de esto congela
+	// vigil lo reintenta con retroceso (ver cicloSalud). Nada de esto congela
 	// el arranque del ERP más allá de la vida del lanzamiento.
 	if !esperarSalud(puerto, 10*time.Second) {
+		if p.cmd != nil && p.cmd.Process != nil {
+			_ = p.cmd.Process.Kill()
+			p.cmd = nil
+		}
 		p.estado = estadoCaydo
 		p.ultimoError = "el addon no respondió /healthz en el plazo de gracia"
+		h.programarReintento(p)
 		log.Printf("AVISO addons: %s: %s", p.manifiesto.ID, p.ultimoError)
 		return
 	}
@@ -1252,6 +1638,7 @@ func (h *addonHost) lanzarBajoCandado(p *addonProc) {
 	p.puerto = puerto
 	p.estado = estadoActivo
 	p.fallasSalud = 0
+	p.proximoIntento = time.Time{}
 	p.ultimoError = ""
 	p.proxy = httputil.NewSingleHostReverseProxy(destinoAddon(puerto))
 	p.proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
@@ -1413,51 +1800,106 @@ func (h *addonHost) vigilarSalud() {
 		case <-h.parado:
 			return
 		case <-t.C:
-			h.mu.Lock()
-			var lista []*addonProc
-			for _, p := range h.progs {
-				if p != nil {
-					lista = append(lista, p)
-				}
-			}
-			h.mu.Unlock()
-			for _, p := range lista {
-				h.tickSalud(p)
-			}
+			h.cicloSalud()
 		}
+	}
+}
+
+// cicloSalud es una pasada completa y testeable del vigil: comprueba la salud
+// de los activos y relanza los caídos cuyo próximo intento ya venció. Se
+// separa del ticker para poder probar la recuperación sin esperar 30 s.
+func (h *addonHost) cicloSalud() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	var lista []*addonProc
+	for _, p := range h.progs {
+		if p != nil {
+			lista = append(lista, p)
+		}
+	}
+	h.mu.Unlock()
+	for _, p := range lista {
+		h.tickSalud(p)
+	}
+	for _, p := range lista {
+		h.reintentarSiVence(p)
 	}
 }
 
 // tickSalud es el ciclo pequeño: 1 falla → nada (pudo ser un pico de carga);
 // 2 fallas seguidas → caído; desde ahí, reintentos espaciados (5 s, 10 s, 20 s
-// … tope 5 min). Un addon lento no es un addon caído.
+// … tope 5 min). Un addon lento no es un addon caído. Los estados «detenido»
+// (apagado por el master) y «sin binario» no se sondean ni se reintentan: no
+// hay nada que escuchar hasta que el dueño los encienda o compile.
 func (h *addonHost) tickSalud(p *addonProc) {
+	if p == nil {
+		return
+	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if p.token != "" && p.estado == estadoActivo {
-		resp, err := (&http.Client{Timeout: 3 * time.Second}).Get(fmt.Sprintf("http://127.0.0.1:%d/healthz", p.puerto))
+	if p.estado != estadoActivo {
+		h.mu.Unlock()
+		return
+	}
+	puerto, token := p.puerto, p.token
+	h.mu.Unlock()
+
+	sano := false
+	if token != "" {
+		resp, err := (&http.Client{Timeout: 3 * time.Second}).Get(fmt.Sprintf("http://127.0.0.1:%d/healthz", puerto))
 		if err == nil {
-			defer func() {
-				if resp != nil && resp.Body != nil {
-					resp.Body.Close()
-				}
-			}()
-			if resp.StatusCode == http.StatusOK {
-				p.fallasSalud = 0
-				return
+			sano = resp.StatusCode == http.StatusOK
+			if resp.Body != nil {
+				resp.Body.Close()
 			}
 		}
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	// El estado pudo cambiar mientras se consultaba (un reinicio o un toggle):
+	// no se pisa la decisión del dueño.
+	if p.estado != estadoActivo {
+		return
+	}
+	if sano {
+		p.fallasSalud = 0
+		return
 	}
 	p.fallasSalud++
 	if p.fallasSalud < 2 {
 		return
 	}
 	p.estado = estadoCaydo
+	p.ultimoError = "no respondió /healthz en el vigil de 30 s"
 	retardo := time.Duration(5<<minDe(p.fallasSalud-2, 9)) * time.Second
 	if retardo > 5*time.Minute {
 		retardo = 5 * time.Minute
 	}
-	p.proximoIntento = h.ahora().Add(retardo)
+	p.proximoIntento = h.ahoraDe().Add(retardo)
+}
+
+// reintentarSiVence relanza un addon caído cuando su retroceso ya venció. Es
+// la pieza que antes faltaba: tickSalud marcaba «caído» y programaba el
+// siguiente intento, pero nadie lo consumía y el addon quedaba muerto hasta
+// que el dueño pulsaba «Reiniciar».
+func (h *addonHost) reintentarSiVence(p *addonProc) {
+	if p == nil {
+		return
+	}
+	h.mu.Lock()
+	if p.estado != estadoCaydo || p.proximoIntento.IsZero() || h.ahoraDe().Before(p.proximoIntento) {
+		h.mu.Unlock()
+		return
+	}
+	if p.cmd != nil && p.cmd.Process != nil {
+		_ = p.cmd.Process.Kill()
+	}
+	p.cmd = nil
+	p.proximoIntento = time.Time{}
+	h.mu.Unlock()
+	h.lanzarOReanudar(p)
 }
 
 func minDe(a, b int) int {
@@ -1469,20 +1911,44 @@ func minDe(a, b int) int {
 
 // ---------- El proxy inverso ----------
 
-// addonRouter es el handler del mux para las rutas de addons: busca el addon
-// por prefijo más largo de ruta declarada.
-func (s *Server) addonRouter(w http.ResponseWriter, r *http.Request) {
-	h := s.addons
+// resolverAddon busca el addon que sirve un path y devuelve la ruta CANÓNICA
+// que hay que reenviar al proceso. Acepta dos formas:
+//
+//   - /mod/<id>[/resto] → routes[0][/resto]: la puerta estable que el núcleo
+//     registra de una vez y que sirve incluso a addons instalados después del
+//     arranque.
+//   - /<ruta declarada>[/resto] → el mismo path: alias heredado para los
+//     enlaces internos y los deep-links que ya existían.
+func (h *addonHost) resolverAddon(path string) (*addonProc, string) {
 	if h == nil {
-		jsonError(w, "No hay addons en este arranque.", http.StatusNotFound)
-		return
+		return nil, ""
+	}
+	if path == "/mod" || strings.HasPrefix(path, "/mod/") {
+		resto := strings.TrimPrefix(strings.TrimPrefix(path, "/mod"), "/")
+		if resto == "" {
+			return nil, ""
+		}
+		id := resto
+		sufijo := ""
+		if i := strings.IndexByte(resto, '/'); i >= 0 {
+			id = resto[:i]
+			sufijo = resto[i:]
+		}
+		h.mu.Lock()
+		p := h.progs[id]
+		h.mu.Unlock()
+		if p == nil || len(p.manifiesto.Routes) == 0 {
+			return nil, ""
+		}
+		return p, p.manifiesto.Routes[0] + sufijo
 	}
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	var p *addonProc
 	longitud := 0
 	for _, cand := range h.progs {
 		for _, rt := range cand.manifiesto.Routes {
-			if r.URL.Path == rt || strings.HasPrefix(r.URL.Path, rt+"/") {
+			if path == rt || strings.HasPrefix(path, rt+"/") {
 				if len(rt) > longitud {
 					longitud = len(rt)
 					p = cand
@@ -1490,8 +1956,19 @@ func (s *Server) addonRouter(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	h.mu.Unlock()
+	return p, path
+}
 
+// addonRouter es el handler del mux para las rutas de addons. Primero resuelve
+// la puerta estable /mod/<id> o el alias heredado; después aplica los mismos
+// candados (estado, interruptor por empresa y sesión) y reenvía al proceso.
+func (s *Server) addonRouter(w http.ResponseWriter, r *http.Request) {
+	h := s.addons
+	if h == nil {
+		jsonError(w, "No hay addons en este arranque.", http.StatusNotFound)
+		return
+	}
+	p, canonico := h.resolverAddon(r.URL.Path)
 	if p == nil {
 		jsonError(w, "Esa ruta no pertenece a ningún addon instalado.", http.StatusNotFound)
 		return
@@ -1528,7 +2005,7 @@ func (s *Server) addonRouter(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
-	s.addonProxyRequest(w, r, sess, p)
+	s.addonProxyRequest(w, r, sess, p, canonico)
 }
 
 // addonEstaApagado dice si el módulo está inactivo en la empresa activa. Sin
@@ -1547,10 +2024,16 @@ func (s *Server) addonEstaApagado(r *http.Request, id string) bool {
 }
 
 // addonProxyRequest reenvía al addon con las cabeceras de contexto y SIN las
-// cookies del ERP: el addonde parte de las cabeceras que el núcleo ya
-// autenticó, y las cookies del navegador no le sirven ni deben servirle.
-func (s *Server) addonProxyRequest(w http.ResponseWriter, r *http.Request, sess *SessionData, p *addonProc) {
+// cookies del ERP: el addon parte de las cabeceras que el núcleo ya autenticó,
+// y las cookies del navegador no le sirven ni deben servirle. `canonico` es la
+// ruta que entiende el proceso: /mod/<id>/resto ya viene traducida a
+// routes[0]+/resto; el alias heredado llega tal cual.
+func (s *Server) addonProxyRequest(w http.ResponseWriter, r *http.Request, sess *SessionData, p *addonProc, canonico string) {
 	req := r.Clone(r.Context())
+	if canonico != "" && canonico != r.URL.Path {
+		req.URL.Path = canonico
+		req.URL.RawPath = ""
+	}
 	req.Header.Del("Cookie")
 	req.Header.Del("X-Csrf-Token")
 	req.Header.Set("X-ERP-User", sess.UserID)

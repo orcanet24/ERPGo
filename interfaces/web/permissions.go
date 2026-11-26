@@ -239,7 +239,7 @@ func clasificarRuta(path string) (clase string, modulo int) {
 	if isMasterRoute(path) || isCrossTenantRoute(path) {
 		return "master", 0
 	}
-	if path == "/mod/" || strings.HasPrefix(path, "/mod/") {
+	if path == "/mod" || strings.HasPrefix(path, "/mod/") {
 		return "addon", 0
 	}
 	if dept, ok := moduleForRoute(path); ok {
@@ -673,7 +673,9 @@ func (s *Server) permissionMiddleware(next http.Handler) http.Handler {
 
 		// El proxy de addons tiene autorización propia, basada en los permisos
 		// declarados y aprobados por rol; no se mapea como un módulo core.
-		if strings.HasPrefix(r.URL.Path, "/mod/") {
+		// Se incluye /mod exacto: es la puerta estable que el mux registra una
+		// vez y su handler responde 404 claro cuando no hay id.
+		if r.URL.Path == "/mod" || strings.HasPrefix(r.URL.Path, "/mod/") {
 			next.ServeHTTP(w, r)
 			return
 		}

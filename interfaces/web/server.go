@@ -567,8 +567,9 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	s.registerPermissionRoutes()
 
 	// Frontera de addons externos: escaneo, registro y lanzamiento.
-	// routers addon y canal están registrados ANTES de servir; las rutas no
-	// se tocan a mitad de ciclo (comentario en reescanear).
+	// El mux solo gana la puerta estable /mod/ (una vez, antes de servir);
+	// addonDispatchMiddleware resuelve en caliente el id y las rutas
+	// declaradas de cualquier addon, incluido uno instalado después.
 	s.addonsIniciar()
 	s.registrarRutasAddon()
 	// Los verbos de negocio de los módulos demo (fuera de la frontera: sus
@@ -689,7 +690,7 @@ func (s *Server) Start() error {
 	s.uploadMgr = upload.NewManager("uploads")
 
 	addr := s.config.ServerHost + ":" + s.config.ServerPort
-	baseHandler := s.cacheDefaultMiddleware(s.corsMiddleware(s.authMiddleware(s.permissionMiddleware(s.auditMiddleware(s.mux)))))
+	baseHandler := s.cacheDefaultMiddleware(s.corsMiddleware(s.authMiddleware(s.permissionMiddleware(s.auditMiddleware(s.addonDispatchMiddleware(s.mux))))))
 	// gzip comprime respuestas textuales antes de salir por la red.
 	// gzip.BestSpeed: nivel 1, poca CPU, ahorro significativo de ancho de banda.
 	// Solo se activa si el cliente envía Accept-Encoding: gzip.
