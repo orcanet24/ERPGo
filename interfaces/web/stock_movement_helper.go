@@ -4,6 +4,7 @@ package web
 
 import (
 	"database/sql"
+	"fmt"
 )
 
 // insertStockMovement crea un registro en stock_movement.
@@ -17,6 +18,24 @@ func insertStockMovement(tx *sql.Tx, movementType string, productID int, warehou
 		movementType, productID, warehouseID, quantity, unitCost,
 		referenceType, referenceID, referenceNo, date)
 	return err
+}
+
+// insertarMovimientoCompra registra la entrada de un renglón de compra.
+//
+// El renglón trae el CÓDIGO del producto (`product_id`, la clave natural que
+// escribe el formulario), pero `stock_movement.product_id` es el id numérico
+// interno. Convertir el código con strconv.Atoi devolvía 0 para cualquier
+// código alfanumérico —el que genera el alta de productos—, y el movimiento no
+// se insertaba: la compra quedaba guardada y el inventario seguía en cero. La
+// conversión pasa por idInternoProducto, la misma que ya usaba la factura.
+func insertarMovimientoCompra(tx *sql.Tx, productID, warehouseID string, quantity, unitCost float64,
+	purchaseID int, date string) error {
+	pid := idInternoProducto(tx, productID)
+	if pid == 0 {
+		return fmt.Errorf("el producto %q no existe en el catálogo: no se puede cargar su entrada al inventario", productID)
+	}
+	return insertStockMovement(tx, "purchase", pid, warehouseID, quantity, unitCost,
+		"purchase", purchaseID, fmt.Sprintf("PUR-%d", purchaseID), date)
 }
 
 // insertStockMovementEntrada crea un movimiento de entrada (cantidad positiva).

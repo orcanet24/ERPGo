@@ -180,7 +180,7 @@ func (s *Server) stockReportItems(r *http.Request, tipo, almacen string) []map[s
 		if err := rows.Scan(&pid, &name, &model, &cat, &unit, &price, &itemType); err != nil {
 			continue
 		}
-		pidInt, _ := strconv.Atoi(pid.String)
+		pidInt := idInternoProducto(s.dbFor(r), pid.String)
 		t := normalizarTipoItem(itemType.String)
 		stock := stockPorMovimientos(s.dbFor(r), pidInt, almacen)
 		lista = append(lista, map[string]interface{}{

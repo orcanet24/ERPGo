@@ -1084,18 +1084,31 @@ func (s *Server) invoiceDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) invoiceDetails(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var iid, custID, invNo int64
+	var iid, custID, invNo, interno int64
 	var date, details, ctrl, custRIF, series sql.NullString
 	var igtf float64
 	var total, paid, due, discount, vat, tax, shipping float64
 	var paymentType int
-	err := s.dbFor(r).QueryRow(`SELECT invoice_id, customer_id, date, total_amount, paid_amount, due_amount,
+	// El id de la ruta llega de dos maneras: interno, desde el listado
+	// (`/invoice/details/' + d.id`), y fiscal, desde la respuesta del guardado
+	// (que devuelve el correlativo `invoice`). Con un solo criterio, abrir la
+	// factura recién emitida mostraba el documento SIN renglones —«Sin
+	// productos» con el gran total correcto— porque se buscaba por el número
+	// fiscal y los renglones referencian el id interno.
+	const consultaFactura = `SELECT invoice_id, customer_id, date, total_amount, paid_amount, due_amount,
 		invoice_discount, total_vat_amnt, total_tax, shipping_cost, invoice_details, payment_type,
 		IFNULL(control_no,''), IFNULL(customer_rif,''), series, IFNULL(igtf_amount,0),
-		IFNULL(invoice,0)
-		FROM invoice WHERE invoice_id = ?`, id).
-		Scan(&iid, &custID, &date, &total, &paid, &due, &discount, &vat, &tax, &shipping, &details, &paymentType,
-			&ctrl, &custRIF, &series, &igtf, &invNo)
+		IFNULL(invoice,0), id
+		FROM invoice WHERE `
+	leerFactura := func(columna string) error {
+		return s.dbFor(r).QueryRow(consultaFactura+columna+" = ?", id).
+			Scan(&iid, &custID, &date, &total, &paid, &due, &discount, &vat, &tax, &shipping, &details, &paymentType,
+				&ctrl, &custRIF, &series, &igtf, &invNo, &interno)
+	}
+	err := leerFactura("id")
+	if err != nil {
+		err = leerFactura("invoice_id")
+	}
 	if err != nil {
 		http.Error(w, "Factura no encontrada", 404)
 		return
@@ -1114,7 +1127,7 @@ func (s *Server) invoiceDetails(w http.ResponseWriter, r *http.Request) {
 			d.quantity, d.rate, d.total_price
 		FROM invoice_details d
 		LEFT JOIN product_information p ON p.product_id = d.product_id
-		WHERE d.invoice_id = ?`, id)
+		WHERE d.invoice_id = ?`, interno)
 	if rows != nil {
 		for rows.Next() {
 			var d drow
@@ -1248,7 +1261,7 @@ func (s *Server) posProducts(w http.ResponseWriter, r *http.Request) {
 		if img == "" {
 			img = "/static/image/product.png"
 		}
-		pidInt, _ := strconv.Atoi(pid.String)
+		pidInt := idInternoProducto(s.dbFor(r), pid.String)
 		stock := s.stockForProduct(r, pidInt)
 		out = append(out, map[string]interface{}{
 			"id": pid.String, "name": name.String, "model": model.String,

@@ -663,7 +663,7 @@ func (s *Server) aiStockSummary(sess *SessionData, asOf, currency string) (strin
 		if err := rows.Scan(&pid, &name, &model, &price, &purchasePrice); err != nil {
 			return "", nil, fmt.Errorf("no se pudo leer el inventario: %w", err)
 		}
-		pidInt, _ := strconv.Atoi(pid.String)
+		pidInt := idInternoProducto(s.dbFor(r), pid.String)
 		stock := s.stockForProduct(r, pidInt)
 		fmt.Fprintf(&sb, "Producto: %s (%s), Existencia: %.2f, Precio compra: %.2f %s, Precio venta: %s %s\n",
 			name.String, model.String, stock, purchasePrice, currency, price.String, currency)

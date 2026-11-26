@@ -220,7 +220,11 @@ func (s *Server) consumoSave(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		pidInt, _ := strconv.Atoi(l.ProductID)
+		pidInt := idInternoProducto(tx, l.ProductID)
+		if pidInt == 0 {
+			jsonError(w, fmt.Sprintf("el producto %q no existe en el catálogo", l.ProductID), 400)
+			return
+		}
 		if err := insertStockMovement(tx, "consumo", pidInt, almacen, l.Qty, l.Costo,
 			"consumption", int(nextID), no, date); err != nil {
 			jsonError(w, err.Error(), 500)

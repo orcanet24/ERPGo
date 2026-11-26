@@ -123,10 +123,12 @@
 <script>
 // Validación RIF en vivo (módulo 11 SENIAT) — feedback inmediato
 var submittedActionForm = 'save';
-$(function () {
-    $('button[type=submit]', '#customerForm').on('click', function () { submittedActionForm = $(this).val(); });
-
-    function validateRIFLive(rif) {
+// La función vive en el ámbito global del script: el manejador de envío está en
+// otro bloque y la llamaba desde allí. Al estar dentro de $(function(){...})
+// solo existía dentro de ese cierre, así que guardar un cliente lanzaba
+// «validateRIFLive is not defined», el envío se detenía y el alta nunca llegaba
+// al servidor.
+function validateRIFLive(rif) {
         rif = (rif || '').toUpperCase().replace(/[.\- ]/g, '');
         if (!rif) return { ok: true, msg: '' };
         // La LETRA manda sobre el selector: J/G son siempre RIF completo (una
@@ -155,7 +157,11 @@ $(function () {
         if (dv >= 10) dv = 0;
         if (dv !== parseInt(rif[9], 10)) return { ok: false, msg: 'Dígito verificador inválido (esperado: ' + dv + ')' };
         return { ok: true, msg: '✓ RIF válido' };
-    }
+}
+
+$(function () {
+    $('button[type=submit]', '#customerForm').on('click', function () { submittedActionForm = $(this).val(); });
+
     $('#rifInput').on('input', function () {
         var r = validateRIFLive($(this).val());
         var $h = $('#rifHelp');

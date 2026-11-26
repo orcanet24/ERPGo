@@ -96,12 +96,18 @@ func (s *Server) kardexMovements(r *http.Request, pid, from, to string) ([]karde
 	// Ahora todo movimiento de inventario se escribe en stock_movement con su
 	// almacén. El libro se arma de ahí: si algo no está en el libro, es porque
 	// no movió inventario. Un servicio, por definición, no aparece.
+	// La pantalla recibe el CÓDIGO del producto y `stock_movement.product_id`
+	// es el id interno numérico: comparar el código contra la columna lo
+	// convertía en 0 y el libro salía «Sin datos» aunque la compra y la venta
+	// estuvieran registradas. La conversión es la misma que usa el resto del
+	// inventario (idInternoProducto).
+	pidInt := idInternoProducto(s.dbFor(r), pid)
 	rows, err := s.dbFor(r).Query(`
 		SELECT date, movement_type, IFNULL(reference_no,''), quantity, IFNULL(unit_cost,0),
 			IFNULL(warehouse_id,'')
 		FROM stock_movement
 		WHERE product_id = ? AND date BETWEEN ? AND ? AND IFNULL(is_posted,1) = 1
-		ORDER BY date ASC, id ASC`, pid, from, to)
+		ORDER BY date ASC, id ASC`, pidInt, from, to)
 	if err != nil {
 		return nil, err
 	}

@@ -565,13 +565,14 @@ func (s *Server) purchaseSave(w http.ResponseWriter, r *http.Request) {
 		// Stock: SOLO si el renglón vive en un almacén. Un servicio no entra, no
 		// sale y no se cuenta; por eso aquí no hay movimiento que crear.
 		if l.Destino.MueveStock {
-			pidInt, _ := strconv.Atoi(l.ProductID)
-			if pidInt > 0 {
-				if err := insertStockMovement(tx, "purchase", pidInt, l.Almacen, l.Qty, l.Rate,
-					"purchase", int(purchaseID), fmt.Sprintf("PUR-%d", purchaseID), purchaseDate); err != nil {
-					jsonError(w, err.Error(), 500)
-					return
-				}
+			// El renglón trae el código del producto, no su id numérico: la
+			// conversión y el alta del movimiento viven en el helper, que falla
+			// en voz alta si el producto no existe en vez de dejar el inventario
+			// en cero con la compra ya guardada.
+			if err := insertarMovimientoCompra(tx, l.ProductID, l.Almacen, l.Qty, l.Rate,
+				int(purchaseID), purchaseDate); err != nil {
+				jsonError(w, err.Error(), 500)
+				return
 			}
 		}
 

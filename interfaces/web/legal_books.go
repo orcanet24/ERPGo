@@ -340,7 +340,7 @@ func (s *Server) inventoryControlRows(r *http.Request) []inventarioControlRow {
 		if err := rows.Scan(&pid, &name, &model, &unit, &price, &tipo, &totalCost, &purchasedQty); err != nil {
 			continue
 		}
-		pidInt, _ := strconv.Atoi(pid.String)
+		pidInt := idInternoProducto(s.dbFor(r), pid.String)
 		var entries, exits, adjustments float64
 		_ = s.dbFor(r).QueryRow(`
 			SELECT IFNULL(SUM(CASE WHEN movement_type IN ('purchase','return_customer','transfer_in') THEN quantity ELSE 0 END),0),

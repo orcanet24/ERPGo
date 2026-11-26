@@ -86,7 +86,7 @@ func (s *Server) productListData(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&pid, &name, &model, &cat, &unit, &price, &status, &itemType); err != nil {
 			continue
 		}
-		pidInt, _ := strconv.Atoi(pid.String)
+		pidInt := idInternoProducto(s.dbFor(r), pid.String)
 		stock := s.stockForProduct(r, pidInt)
 		tipo := normalizarTipoItem(itemType.String)
 		list = append(list, map[string]interface{}{
@@ -354,7 +354,7 @@ func (s *Server) productSearch(w http.ResponseWriter, r *http.Request) {
 		var pid, name, model, price, unit, sprice, barcode, image, itemType, wh sql.NullString
 		var lastCost float64
 		_ = rows.Scan(&pid, &name, &model, &price, &unit, &sprice, &barcode, &image, &itemType, &wh, &lastCost)
-		pidInt, _ := strconv.Atoi(pid.String)
+		pidInt := idInternoProducto(s.dbFor(r), pid.String)
 		stock := s.stockForProduct(r, pidInt)
 		label := name.String
 		if model.String != "" {
@@ -438,7 +438,7 @@ func (s *Server) productDetails(w http.ResponseWriter, r *http.Request) {
 		}
 		rows.Close()
 	}
-	pidInt, _ := strconv.Atoi(id)
+	pidInt := idInternoProducto(s.dbFor(r), id)
 	stock = s.stockForProduct(r, pidInt)
 
 	s.render(w, r, "product_details.html", map[string]interface{}{
