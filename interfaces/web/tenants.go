@@ -1184,20 +1184,14 @@ func (s *Server) switchTenantDo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rotar el id de sesión al cambiar de empresa.
-	cookie, _ := r.Cookie("erpgow_session")
-	if cookie != nil {
-		s.sessions.Delete(cookie.Value)
-	}
 	// La procedencia se guarda ANTES de sobrescribir la sesión: leerla después
 	// anotaba siempre el destino como origen, y una auditoría que dice que el
 	// usuario venía de la misma empresa a la que llegó no sirve para demostrar
 	// nada.
 	origen := sess.TenantCode
 
-	sess.TenantCode = code
-	newID := s.sessions.Create(sess)
-	s.escribirGalletaSesion(w, r, newID, 86400)
+	// Rota el id de sesión al cambiar de empresa (el contexto de datos cambió).
+	s.sesionEnEmpresa(w, r, code)
 
 	// Auditoría: el cambio de empresa se registra en la empresa destino, que
 	// es donde este usuario tiene permisos.
@@ -1381,18 +1375,54 @@ func (s *Server) setupCompanyDo(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// Dejar esta empresa como la activa.
-	_ = s.setTenant(res.Code)
+	// Dejar esta empresa como la activa. La conexión se abre ANTES de tocar la
+	// sesión: si la base nueva no abre, la sesión no puede quedar apuntando a
+	// una empresa que el proceso no sabe leer.
+	origen := ""
+	if sess := s.sessionFromRequest(r); sess != nil {
+		origen = sess.TenantCode
+	}
+	if err := s.setTenant(res.Code); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	// Al terminar, el destino depende de quién hizo la acción. En la
 	// instalación no hay sesión (el asistente se entra sin credenciales), así que
 	// va al login. Creando una empresa desde el panel ya hay sesión: mandarla al
 	// login sería cerrarle la sesión al propio usuario que la acaba de crear.
-	if sess := s.sessionFromRequest(r); sess != nil {
+	if s.sesionEnEmpresa(w, r, res.Code) {
+		s.audit(nil, "switch_tenant", "Seguridad", "tenant", res.Code, nil,
+			map[string]string{"from": origen})
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
 	http.Redirect(w, r, "/login", http.StatusFound)
+}
+
+// sesionEnEmpresa deja la sesión del usuario apuntando a la empresa indicada.
+//
+// setTenant() cambia la conexión del proceso, pero quién manda en cada petición
+// es la empresa de la SESIÓN (dbForSession). Al crear una empresa desde el
+// panel, el super administrador veía el panel de la empresa nueva y seguía
+// escribiendo en la anterior: el almacén, el usuario y el plan de cuentas caían
+// en la otra base. El cambio es el mismo que hace el selector de empresas, con
+// rotación del id de sesión porque el contexto de datos cambió.
+//
+// Devuelve false cuando no hay sesión (primera instalación); quien llama decide
+// a dónde mandar al usuario.
+func (s *Server) sesionEnEmpresa(w http.ResponseWriter, r *http.Request, code string) bool {
+	sess := s.sessionFromRequest(r)
+	if sess == nil {
+		return false
+	}
+	if cookie, err := r.Cookie("erpgow_session"); err == nil && cookie != nil {
+		s.sessions.Delete(cookie.Value)
+	}
+	sess.TenantCode = code
+	nuevo := s.sessions.Create(sess)
+	s.escribirGalletaSesion(w, r, nuevo, 86400)
+	return true
 }
 
 // ---------- Empresa por defecto ----------
