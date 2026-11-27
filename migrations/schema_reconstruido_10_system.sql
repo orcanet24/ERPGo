@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS `cost_component` (
   `period` varchar(7) COLLATE utf8mb4_unicode_ci NOT NULL,
   `product_id` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
   `component` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `line_no` int NOT NULL DEFAULT '1',
   `amount` decimal(18,4) NOT NULL DEFAULT '0.0000',
   `quantity` decimal(14,4) NOT NULL DEFAULT '0.0000',
   `unit_cost` decimal(18,4) NOT NULL DEFAULT '0.0000',
@@ -45,7 +46,7 @@ CREATE TABLE IF NOT EXISTS `cost_component` (
   `source_ref` varchar(60) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
   `created_at` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_cost_component` (`period`,`product_id`,`component`),
+  UNIQUE KEY `uq_cost_component_linea` (`period`,`product_id`,`component`,`line_no`),
   KEY `idx_cc_periodo` (`period`),
   KEY `idx_cc_producto` (`product_id`,`period`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

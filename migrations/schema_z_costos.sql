@@ -299,6 +299,12 @@ CREATE TABLE IF NOT EXISTS `cost_component` (
   `period` VARCHAR(7) NOT NULL,
   `product_id` VARCHAR(100) NOT NULL,
   `component` VARCHAR(20) NOT NULL,
+  -- Número de renglón DENTRO del componente. Una receta con dos materiales
+  -- produce dos trazas `material` en el mismo período y producto, y la clave
+  -- única anterior (period, product_id, component) solo admitía una: el
+  -- segundo INSERT rompía el cálculo. line_no conserva la unicidad sin perder
+  -- el detalle de cada componente.
+  `line_no` INT NOT NULL DEFAULT 1,
   `amount` DECIMAL(18,4) NOT NULL DEFAULT 0,
   `quantity` DECIMAL(14,4) NOT NULL DEFAULT 0,
   `unit_cost` DECIMAL(18,4) NOT NULL DEFAULT 0,
@@ -308,10 +314,54 @@ CREATE TABLE IF NOT EXISTS `cost_component` (
   `source_ref` VARCHAR(60) NOT NULL DEFAULT '',
   `created_at` VARCHAR(32) NOT NULL DEFAULT '',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_cost_component` (`period`, `product_id`, `component`),
+  UNIQUE KEY `uq_cost_component_linea` (`period`, `product_id`, `component`, `line_no`),
   KEY `idx_cc_periodo` (`period`),
   KEY `idx_cc_producto` (`product_id`, `period`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- La columna y la clave nueva, para las bases que YA se migraron con la clave
+-- antigua. Sin este bloque, una base existente conserva
+-- UNIQUE(period, product_id, component) y el segundo material de una receta
+-- sigue rompiendo el guardado. information_schema es la forma portable:
+-- ADD COLUMN IF NOT EXISTS no existe antes de MySQL 8.0.29.
+SET @col := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'cost_component'
+    AND COLUMN_NAME = 'line_no'
+);
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `cost_component` ADD COLUMN `line_no` INT NOT NULL DEFAULT 1 AFTER `component`',
+  'DO 0');
+PREPARE st FROM @sql;
+EXECUTE st;
+DEALLOCATE PREPARE st;
+
+SET @idx := (
+  SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'cost_component'
+    AND INDEX_NAME = 'uq_cost_component'
+);
+SET @sql := IF(@idx > 0,
+  'ALTER TABLE `cost_component` DROP INDEX `uq_cost_component`',
+  'DO 0');
+PREPARE st FROM @sql;
+EXECUTE st;
+DEALLOCATE PREPARE st;
+
+SET @idx := (
+  SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'cost_component'
+    AND INDEX_NAME = 'uq_cost_component_linea'
+);
+SET @sql := IF(@idx = 0,
+  'ALTER TABLE `cost_component` ADD UNIQUE KEY `uq_cost_component_linea` (`period`, `product_id`, `component`, `line_no`)',
+  'DO 0');
+PREPARE st FROM @sql;
+EXECUTE st;
+DEALLOCATE PREPARE st;
 
 -- ---------------------------------------------------------------------------
 -- 10. COSTO CONGELADO POR PERÍODO.

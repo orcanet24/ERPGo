@@ -581,7 +581,7 @@ func (s *Server) costGradeSave(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]interface{}{
 		"status": 1, "msg": "Grado guardado",
-		"tasa": calcularTasaHoraria(g.Salario, g.Overhead, g.HorasAnual),
+		"tasa": calcularTasaHoraria(g.Salario, g.Overhead, g.Productivy, g.HorasAnual),
 	})
 }
 

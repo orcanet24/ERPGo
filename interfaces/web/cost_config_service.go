@@ -367,7 +367,7 @@ func listarGrados(db *sql.DB) ([]CostGrado, error) {
 		// La tasa se calcula aquí, no se lee: es el mismo calcularTasaHoraria
 		// que usa el motor, de modo que lo que se ve en pantalla y lo que se
 		// cobra no pueden salir distintos.
-		g.Tasa = calcularTasaHoraria(g.Salario, g.Overhead, g.HorasAnual)
+		g.Tasa = calcularTasaHoraria(g.Salario, g.Overhead, g.Productivy, g.HorasAnual)
 		out = append(out, g)
 	}
 	return out, rows.Err()

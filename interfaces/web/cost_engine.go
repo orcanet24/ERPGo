@@ -64,12 +64,17 @@ const (
 // Un desglose sin trazabilidad no se puede reproducir, y un costo que no se
 // puede reproducir no es un costo, es una estimación.
 type CostTrace struct {
-	Component string  // material | labor | customs | ...
-	Regla     string  // "receta: 3 componentes, merma 2.50%"
-	Tasa      float64 // la tasa USADA, con la que se calculó
-	Cantidad  float64 // horas, unidades, lo que corresponda
-	Importe   float64
-	Fuente    string // referencia al dato de origen (tabla, id)
+	Component string  `json:"component"` // material | labor | customs | ...
+	Regla     string  `json:"regla"`     // "receta: 3 componentes, merma 2.50%"
+	Tasa      float64 `json:"tasa"`      // la tasa USADA, con la que se calculó
+	Cantidad  float64 `json:"cantidad"`  // horas, unidades, lo que corresponda
+	Importe   float64 `json:"importe"`
+	Fuente    string  `json:"source"` // referencia al dato de origen (tabla, id)
+	// Grade solo se llena en las trazas de mano de obra. Va aquí y no en una
+	// tabla aparte porque es lo que permite guardar en cost_component el rol
+	// con el que se calculó la hora; sin él, el renglón de labor se guardaba
+	// con grade vacío y no se podía reconstruir de dónde salió la tarifa.
+	Grade string `json:"grade,omitempty"`
 }
 
 // CostBreakdown es el resultado: el desglose completo de un costo.
@@ -126,6 +131,12 @@ type costInputs struct {
 	DegrPerUnidad float64 // depreciación por unidad producida
 	OverheadPerUn float64 // indirecto por unidad
 	Salida        float64 // stock saliente del kardex (para PP)
+
+	// IsAssembled indica que el producto se fabrica/ensambla. Sirve para no
+	// callar la depreciación: mientras no existan activos fijos (Fase 1), un
+	// producto ensamblado recibe una advertencia explícita en vez de un cero
+	// que parece un costo completo.
+	IsAssembled bool
 
 	// Errores de lectura que no deben abortar el cálculo: el motor prefiere
 	// calcular con lo que haya y decirlo, antes que devolver nada.
@@ -440,6 +451,7 @@ func laborPorHoras(in costInputs) (float64, []CostTrace, []string) {
 			Cantidad:  h.Hours,
 			Importe:   costo,
 			Fuente:    "cost_timesheet",
+			Grade:     h.Grade,
 		})
 	}
 
@@ -456,18 +468,26 @@ func laborPorHoras(in costInputs) (float64, []CostTrace, []string) {
 
 // calcularTasaHoraria devuelve la tarifa de un grado.
 //
-//	(tasa_anual + cargas) / horas anuales
+//	(tasa_anual + cargas) / horas anuales × productividad
 //
 // NO se guarda como columna generada: hacerlo cambiaría la tasa retroactivamente
 // y con ella el costo de todo lo ya facturado. Se calcula aquí y se GUARDA en el
 // componente de costo, que es donde queda la tarifa que de verdad se usó.
-func calcularTasaHoraria(salarioAnual, overheadPct float64, horasAnuales int) float64 {
+//
+// La productividad se aplica aquí porque es parte de la tarifa del grado, no un
+// ajuste por línea. Un factor de 1 (o cero sin configurar) deja la tarifa igual;
+// 1.25 encarece la hora un 25%. Si se ignorara, el formulario guardaría un dato
+// que después no cambia ningún costo: una promesa falsa.
+func calcularTasaHoraria(salarioAnual, overheadPct, productividad float64, horasAnuales int) float64 {
 	if horasAnuales <= 0 {
 		return 0
 	}
+	if productividad <= 0 {
+		productividad = 1
+	}
 	// 2080 = 40 h × 52 semanas. Si alguien pone 0 horas, no se divide entre cero.
 	conCargas := salarioAnual * (1 + overheadPct/100)
-	return conCargas / float64(horasAnuales)
+	return conCargas / float64(horasAnuales) * productividad
 }
 
 // ---------------------------------------------------------------------------
@@ -494,8 +514,12 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 	// --- Configuración ----------------------------------------------------
 	var metodo sql.NullString
 	var loss sql.NullFloat64
-	err := db.QueryRow(`SELECT costing_method, IFNULL(loss_factor,0) FROM product_cost_config
-		WHERE product_id = ?`, productID).Scan(&metodo, &loss)
+	var centroID sql.NullInt64
+	var ensamblado sql.NullInt64
+	err := db.QueryRow(`SELECT costing_method, IFNULL(loss_factor,0),
+		IFNULL(cost_center_id,0), IFNULL(is_assembled,0)
+		FROM product_cost_config WHERE product_id = ?`, productID).
+		Scan(&metodo, &loss, &centroID, &ensamblado)
 	// ESTE ERROR ANTES SE TRAGABA, Y POR ESO NO SE SABÍA QUE EXISTÍA.
 	//
 	// sql.ErrNoRows es lo normal: el producto no está configurado y se usan los
@@ -522,6 +546,49 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 	}
 	if loss.Valid {
 		in.LossFactor = loss.Float64
+	}
+	in.IsAssembled = ensamblado.Valid && ensamblado.Int64 != 0
+
+	// --- Centro de costo (indirecto) --------------------------------------
+	//
+	// cost_center_id se guardaba en product_cost_config pero el motor nunca lo
+	// leía: el indirecto salía siempre cero. La tarifa por unidad es la que se
+	// puede aplicar sin conocer las horas de proceso; la tarifa por hora
+	// necesita process_route (Fase 2) y se avisa en vez de inventarla.
+	if centroID.Valid && centroID.Int64 > 0 {
+		var codigo string
+		var tasaUnidad, tasaHora sql.NullFloat64
+		var activo sql.NullInt64
+		errCentro := db.QueryRow(`SELECT code, IFNULL(overhead_rate_unit,0),
+			IFNULL(overhead_rate_hour,0), IFNULL(active,1)
+			FROM cost_center WHERE id = ?`, centroID.Int64).
+			Scan(&codigo, &tasaUnidad, &tasaHora, &activo)
+		switch {
+		case errCentro == sql.ErrNoRows:
+			in.Faltantes = append(in.Faltantes, fmt.Sprintf(
+				"el centro de costo %d configurado para el producto no existe: no se aplicó indirecto",
+				centroID.Int64))
+		case errCentro != nil:
+			in.Faltantes = append(in.Faltantes,
+				"no se pudo leer el centro de costo del producto: "+errCentro.Error())
+		case !activo.Valid || activo.Int64 == 0:
+			in.Faltantes = append(in.Faltantes, fmt.Sprintf(
+				"el centro de costo %s está inactivo: no se aplicó indirecto", codigo))
+		case tasaUnidad.Valid && tasaUnidad.Float64 > 0:
+			in.OverheadPerUn = tasaUnidad.Float64
+		case tasaHora.Valid && tasaHora.Float64 > 0:
+			in.Faltantes = append(in.Faltantes, fmt.Sprintf(
+				"el centro de costo %s solo tiene tarifa por hora: el indirecto por unidad necesita las horas de process_route (Fase 2)",
+				codigo))
+		}
+	}
+
+	// La depreciación no se puede inventar. Si el producto se fabrica, el cero
+	// se dice en voz alta: un costo sin depreciación presentado como completo
+	// es más peligroso que un costo con una advertencia.
+	if in.IsAssembled {
+		in.Faltantes = append(in.Faltantes,
+			"el producto está marcado como ensamblado, pero la depreciación de activos fijos todavía no está implementada (Fase 1): el costo de depreciación saldrá en cero")
 	}
 
 	// --- Costo vigente (PP) -----------------------------------------------
@@ -664,14 +731,15 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 
 // tasaDeGrado devuelve la tarifa horaria de un grado, calculada en el momento.
 func (s *Server) tasaDeGrado(db *sql.DB, grade string) float64 {
-	var salario, cargas sql.NullFloat64
+	var salario, cargas, productividad sql.NullFloat64
 	var horas int
-	if err := db.QueryRow(`SELECT base_salary_annual, overhead_pct, hours_per_year
+	if err := db.QueryRow(`SELECT base_salary_annual, overhead_pct, hours_per_year,
+		IFNULL(productivity_factor,1)
 		FROM labor_grade WHERE code = ?`, grade).
-		Scan(&salario, &cargas, &horas); err != nil {
+		Scan(&salario, &cargas, &horas, &productividad); err != nil {
 		return 0
 	}
-	return calcularTasaHoraria(salario.Float64, cargas.Float64, horas)
+	return calcularTasaHoraria(salario.Float64, cargas.Float64, productividad.Float64, horas)
 }
 
 // ---------------------------------------------------------------------------
@@ -719,18 +787,30 @@ func (s *Server) guardarComponentesCosto(db *sql.DB, b CostBreakdown, in costInp
 		return err
 	}
 
+	// line_no separa los renglones del mismo componente. Una receta con dos
+	// materiales produce dos trazas `material`; antes la clave única
+	// (period, product_id, component) solo dejaba guardar la primera y el
+	// segundo INSERT rompía el cálculo entero.
+	lineas := map[string]int{}
 	for _, t := range b.Traces {
 		if t.Component == compFinal {
 			// El total no es un componente: se guarda en cost_snapshot. Meterlo
 			// aquí duplicaría el total al sumar componentes.
 			continue
 		}
+		lineas[t.Component]++
+		grade := ""
+		var horas float64
+		if t.Component == compLabor {
+			grade = t.Grade
+			horas = t.Cantidad
+		}
 		_, err := tx.Exec(`INSERT INTO cost_component
-			(period, product_id, component, amount, quantity, unit_cost, grade,
-			 hours, rate_used, source_ref, created_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			b.Periodo, b.ProductID, t.Component, t.Importe, t.Cantidad,
-			t.Tasa, "", t.Cantidad, t.Tasa, t.Fuente, ahora)
+			(period, product_id, component, line_no, amount, quantity, unit_cost,
+			 grade, hours, rate_used, source_ref, created_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			b.Periodo, b.ProductID, t.Component, lineas[t.Component],
+			t.Importe, t.Cantidad, t.Tasa, grade, horas, t.Tasa, t.Fuente, ahora)
 		if err != nil {
 			return err
 		}
