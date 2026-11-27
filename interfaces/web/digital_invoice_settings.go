@@ -90,6 +90,23 @@ var diCatalogo = []diImprenta{
 				Ayuda: "Si la escribe, CG la imprime debajo de la dirección fiscal de la factura."},
 		},
 	},
+	{
+		Code:          "thka",
+		Nombre:        "The Factory HKA (TFHKA)",
+		Descripcion:   "Imprenta digital autorizada con documento electrónico anidado: usuario y clave de API, token de doce horas y número de control asignado en la emisión. El PDF se archiva en el ERP cuando la imprenta lo entrega.",
+		Documentacion: "https://demoemisionv2.thefactoryhka.com.ve/",
+		Campos: []diCampo{
+			{Nombre: "base_url", Etiqueta: "URL base de la API", Tipo: "url", Obligatorio: true,
+				PorDefecto: "https://demoemisionv2.thefactoryhka.com.ve/",
+				Ayuda:      "El host de demostración es demoemisionv2…; producción es emisionv2… Se lo entrega TFHKA con sus credenciales."},
+			{Nombre: "user_name", Etiqueta: "Usuario de API", Tipo: "text", Obligatorio: true},
+			{Nombre: "user_password", Etiqueta: "Clave de API", Tipo: "password", Obligatorio: true, Secreto: true},
+			{Nombre: "numero_serie", Etiqueta: "Serie", Tipo: "text",
+				Ayuda: "La serie del negocio (máximo 20 caracteres). Déjela vacía si no trabaja con series: THKA lo permite."},
+			{Nombre: "sucursal_id", Etiqueta: "Sucursal (opcional)", Tipo: "text",
+				Ayuda: "Código de sucursal de hasta 6 caracteres; THKA lo imprime en el documento si se envía."},
+		},
+	},
 }
 
 // diImprentaPorCodigo busca una imprenta del catálogo.

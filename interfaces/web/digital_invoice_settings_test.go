@@ -284,6 +284,16 @@ func TestValidarConfigPideLasCredencialesDeCadaImprenta(t *testing.T) {
 			"URL",
 		},
 		{
+			"thka sin usuario", "thka",
+			di.ProviderConfig{Code: "thka", BaseURL: "https://demoemisionv2.thefactoryhka.com.ve/", UserPassword: "c"},
+			"Usuario de API",
+		},
+		{
+			"thka sin clave", "thka",
+			di.ProviderConfig{Code: "thka", BaseURL: "https://demoemisionv2.thefactoryhka.com.ve/", UserName: "u"},
+			"Clave de API",
+		},
+		{
 			"imprenta desconocida", "imprenta-inventada", di.ProviderConfig{Code: "imprenta-inventada"},
 			"catálogo",
 		},
@@ -312,6 +322,13 @@ func TestValidarConfigPideLasCredencialesDeCadaImprenta(t *testing.T) {
 		UserName: "u", UserPassword: "c", NumeroSerie: "A",
 	}); err != nil {
 		t.Errorf("cgimprenta completa no debía fallar: %v", err)
+	}
+	// THKA permite no usar series: la serie es opcional en su catálogo.
+	if err := diValidarConfig("thka", di.ProviderConfig{
+		Code: "thka", BaseURL: "https://demoemisionv2.thefactoryhka.com.ve/",
+		UserName: "u", UserPassword: "c",
+	}); err != nil {
+		t.Errorf("thka completa sin serie no debía fallar: %v", err)
 	}
 }
 

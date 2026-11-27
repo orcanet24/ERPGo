@@ -40,7 +40,8 @@ func baseDeFacturacionDigital(t *testing.T) *sql.DB {
 			customer_id INTEGER NOT NULL DEFAULT 0,
 			date TEXT, total_amount REAL DEFAULT 0, total_vat_amnt REAL DEFAULT 0,
 			currency_code TEXT DEFAULT 'VES', exchange_rate REAL DEFAULT 1,
-			igtf_amount REAL DEFAULT 0, customer_rif TEXT DEFAULT '', series TEXT DEFAULT 'FACT')`,
+			igtf_amount REAL DEFAULT 0, customer_rif TEXT DEFAULT '', series TEXT DEFAULT 'FACT',
+			is_credit INTEGER DEFAULT 0)`,
 		`CREATE TABLE invoice_details (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			invoice_id TEXT NOT NULL, product_id TEXT, description TEXT,
@@ -49,7 +50,8 @@ func baseDeFacturacionDigital(t *testing.T) *sql.DB {
 			discount_pct REAL DEFAULT 0)`,
 		`CREATE TABLE product_information (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			product_id TEXT NOT NULL, product_name TEXT DEFAULT '')`,
+			product_id TEXT NOT NULL, product_name TEXT DEFAULT '',
+			item_type TEXT DEFAULT 'venta')`,
 		`CREATE TABLE customer_information (
 			customer_id INTEGER PRIMARY KEY AUTOINCREMENT,
 			customer_name TEXT DEFAULT '', customer_email TEXT DEFAULT '',
@@ -471,6 +473,75 @@ func TestPorcentajeDeTexto(t *testing.T) {
 		if obtenido := porcentajeDeTexto(texto); obtenido != esperado {
 			t.Errorf("porcentajeDeTexto(%q) = %v, se esperaba %v", texto, obtenido, esperado)
 		}
+	}
+}
+
+// servidorTHKADePrueba es una imprenta The Factory HKA falsa: autentica, emite
+// con su sobre Documentoelectronico y asigna un número de control.
+func servidorTHKADePrueba(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/Autenticacion":
+			_, _ = w.Write([]byte(`{"resultado":"jwt-prueba"}`))
+		case "/api/Emision":
+			_, _ = w.Write([]byte(`{"codigo":"200","mensaje":"Documento procesado exitosamente",` +
+				`"resultado":{"serie":"A","numeroControl":"00-00000056"}}`))
+		default:
+			// La descarga del PDF no está simulada: el adaptador debe seguir
+			// adelante con el número de control, que es lo fiscal.
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+// TestEmitirPorTHKAGuardaElControlConSuSerie: el circuito completo del ERP con
+// la tercera imprenta (configuración activa → documento → control en la cola).
+func TestEmitirPorTHKAGuardaElControlConSuSerie(t *testing.T) {
+	ctl := baseDeControlDigital(t)
+	db := baseDeFacturacionDigital(t)
+	facturaDePrueba(t, db, "10")
+
+	servidor := servidorTHKADePrueba(t)
+	defer servidor.Close()
+
+	config := `{"code":"thka","base_url":"` + servidor.URL + `","user_name":"usuario.api",` +
+		`"user_password":"clave.api","numero_serie":"A","enabled":true}`
+	if _, err := ctl.Exec(`INSERT INTO digital_invoice_config
+		(company_id, addon_code, config_json, enabled) VALUES ('empresa1', 'thka', ?, 1)`, config); err != nil {
+		t.Fatalf("no se pudo configurar la imprenta: %v", err)
+	}
+	if _, err := ctl.Exec(`INSERT INTO digital_invoice_log
+		(invoice_id, company_id, addon_code, nro_documento, tipo_documento, status)
+		VALUES (900, 'empresa1', 'thka', 900, 'FA', 'pending')`); err != nil {
+		t.Fatalf("no se pudo encolar la factura: %v", err)
+	}
+
+	s := &Server{controlDB: ctl, controlListo: true}
+	s.tenantMu.Lock()
+	s.db = db
+	s.activeTenant = "empresa1"
+	s.tenantMu.Unlock()
+
+	fila := struct {
+		id, nroDoc, intentos int64
+		invoiceID, tenant    string
+	}{id: 1, nroDoc: 900, intentos: 0, invoiceID: "900", tenant: "empresa1"}
+	s.diEmitirFila(ctl, fila)
+
+	var estado, control, addon string
+	if err := ctl.QueryRow(`SELECT status, COALESCE(nro_control_texto,''), addon_code
+			FROM digital_invoice_log WHERE id = 1`).Scan(&estado, &control, &addon); err != nil {
+		t.Fatalf("no se pudo leer la fila emitida: %v", err)
+	}
+	if estado != "sent" {
+		t.Fatalf("estado = %q", estado)
+	}
+	if control != "00-00000056" {
+		t.Errorf("control textual guardado = %q", control)
+	}
+	if addon != "thka" {
+		t.Errorf("addon_code = %q", addon)
 	}
 }
 

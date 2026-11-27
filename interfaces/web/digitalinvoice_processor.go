@@ -352,12 +352,13 @@ func (s *Server) diCargarDocumento(db *sql.DB, invoiceID string, nroDocumento in
 		tasa             float64
 		customerID       int64
 		idInterno        int64
+		esCredito        int
 	)
 	err := db.QueryRow(`SELECT COALESCE(date,''), COALESCE(customer_rif,''), COALESCE(total_amount,0),
 			COALESCE(total_vat_amnt,0), COALESCE(currency_code,'VES'), COALESCE(exchange_rate,0),
-			COALESCE(igtf_amount,0), COALESCE(customer_id,0), COALESCE(id,0)
+			COALESCE(igtf_amount,0), COALESCE(customer_id,0), COALESCE(id,0), COALESCE(is_credit,0)
 		FROM invoice WHERE invoice = ? LIMIT 1`, invoiceID).
-		Scan(&fecha, &rifCabecera, &total, &iva, &moneda, &tasa, &igtf, &customerID, &idInterno)
+		Scan(&fecha, &rifCabecera, &total, &iva, &moneda, &tasa, &igtf, &customerID, &idInterno, &esCredito)
 	if err != nil {
 		return nil, fmt.Errorf("factura inexistente: %w", err)
 	}
@@ -403,6 +404,7 @@ func (s *Server) diCargarDocumento(db *sql.DB, invoiceID string, nroDocumento in
 		IVA:               iva,
 		IGTF:              igtf,
 		TotalFinal:        total,
+		TipoPago:          tipoDePagoDeFactura(esCredito),
 		ReferenciaSistema: invoiceID,
 		Cliente:           cliente,
 	}
@@ -456,7 +458,7 @@ func diRenglones(db *sql.DB, invoiceID string, idInterno int64) ([]di.DetalleIte
 	consulta := `SELECT d.product_id, COALESCE(p.product_name,''), COALESCE(d.description,''),
 			COALESCE(d.quantity,0), COALESCE(d.rate,0), COALESCE(d.total_price,0),
 			COALESCE(d.vat_amnt,0), COALESCE(d.vat_amnt_per,''), COALESCE(d.discount_per,''),
-			COALESCE(d.discount_pct,0)
+			COALESCE(d.discount_pct,0), COALESCE(p.item_type,'venta')
 		FROM invoice_details d
 		LEFT JOIN product_information p ON p.product_id = d.product_id
 		WHERE d.invoice_id = ? ORDER BY d.id`
@@ -469,10 +471,10 @@ func diRenglones(db *sql.DB, invoiceID string, idInterno int64) ([]di.DetalleIte
 		defer rows.Close()
 		var salida []di.DetalleItem
 		for rows.Next() {
-			var codigo, nombre, descripcion, vatPer, descPer string
+			var codigo, nombre, descripcion, vatPer, descPer, tipoItem string
 			var cantidad, precio, totalRenglon, vat, descPct float64
 			if rows.Scan(&codigo, &nombre, &descripcion, &cantidad, &precio, &totalRenglon,
-				&vat, &vatPer, &descPer, &descPct) != nil {
+				&vat, &vatPer, &descPer, &descPct, &tipoItem) != nil {
 				continue
 			}
 			porcentaje := porcentajeDeTexto(vatPer)
@@ -490,6 +492,13 @@ func diRenglones(db *sql.DB, invoiceID string, idInterno int64) ([]di.DetalleIte
 			// el importe de IVA da cero: una base diminuta puede redondear el
 			// IVA a 0,00 y eso NO convierte la venta en exenta.
 			exento := porcentaje <= 0
+			// Bien o servicio: es lo que imprime la factura (indicador 1/2 en
+			// THKA y unidad de medida distinta en cada caso). El dato está en el
+			// catálogo de productos, no se adivina por el nombre.
+			tipo := 1
+			if strings.EqualFold(strings.TrimSpace(tipoItem), "servicio") {
+				tipo = 2
+			}
 			salida = append(salida, di.DetalleItem{
 				Codigo:         strings.TrimSpace(codigo),
 				Nombre:         strings.TrimSpace(nombre),
@@ -500,7 +509,7 @@ func diRenglones(db *sql.DB, invoiceID string, idInterno int64) ([]di.DetalleIte
 				PorcentajeIVA:  porcentaje,
 				EsExento:       exento,
 				CodigoImpuesto: codigoImpuestoDe(porcentaje, exento),
-				TipoProducto:   1,
+				TipoProducto:   tipo,
 			})
 		}
 		return salida, rows.Err()
@@ -544,6 +553,15 @@ func codigoImpuestoDe(porcentaje float64, exento bool) string {
 	default:
 		return "E"
 	}
+}
+
+// tipoDePagoDeFactura traduce el crédito de la factura al texto que esperan las
+// imprentas en el campo de tipo de pago ("Inmediato" o "Crédito").
+func tipoDePagoDeFactura(esCredito int) string {
+	if esCredito == 1 {
+		return "Crédito"
+	}
+	return "Inmediato"
 }
 
 // fechaDeTexto interpreta la fecha de la factura, que el ERP guarda como texto

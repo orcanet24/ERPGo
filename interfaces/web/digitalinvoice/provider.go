@@ -105,34 +105,40 @@ type PagoDetalle struct {
 // FechaTasa es el día AL QUE CORRESPONDE TasaCambio, no necesariamente el de
 // emisión: una factura emitida el lunes con la tasa del viernes debe imprimir la
 // tasa del viernes, y varios proveedores rechazan la tasa sin su fecha.
+//
+// DocumentoAfectadoFecha y DocumentoAfectadoMonto existen para las NOTAS: hay
+// imprentas (THKA) que imprimen la fecha y el monto de la factura afectada y
+// rechazan la nota si no se los envían. La emisión de facturas los deja en cero.
 type DatosDocumento struct {
-	Tipo              DocumentType  `json:"tipo"`
-	Numero            int           `json:"numero"`             // correlativo interno del documento
-	DocumentoAfectado string        `json:"documento_afectado"` // factura afectada por una NC/ND
-	Descripcion       string        `json:"descripcion"`        // motivo de la nota
-	FechaEmision      time.Time     `json:"fecha_emision"`
-	Cliente           DatosCliente  `json:"cliente"`
-	Detalles          []DetalleItem `json:"detalles"`
-	Pagos             []PagoDetalle `json:"pagos"`
-	Moneda            string        `json:"moneda"`
-	TasaCambio        float64       `json:"tasa_cambio"`
-	FechaTasa         time.Time     `json:"fecha_tasa"`
-	Subtotal          float64       `json:"subtotal"`
-	Descuento         float64       `json:"descuento"`
-	MontoExento       float64       `json:"monto_exento"`
-	BaseImponible     float64       `json:"base_imponible"`
-	BaseReducida      float64       `json:"base_reducida"`
-	BaseSuntuario     float64       `json:"base_suntuario"`
-	IVA               float64       `json:"iva"`
-	IVAReducido       float64       `json:"iva_reducido"`
-	IVASuntuario      float64       `json:"iva_suntuario"`
-	Total             float64       `json:"total"`
-	IGTF              float64       `json:"igtf"`
-	TotalFinal        float64       `json:"total_final"`
-	Propina           float64       `json:"propina"`
-	TipoPago          string        `json:"tipo_pago"` // "Contado", "15 DIAS", etc.
-	Notas             []string      `json:"notas"`
-	ReferenciaSistema string        `json:"referencia_sistema"` // Referencia interna (ej: invoice_id)
+	Tipo                   DocumentType  `json:"tipo"`
+	Numero                 int           `json:"numero"`             // correlativo interno del documento
+	DocumentoAfectado      string        `json:"documento_afectado"` // factura afectada por una NC/ND
+	DocumentoAfectadoFecha time.Time     `json:"documento_afectado_fecha"`
+	DocumentoAfectadoMonto float64       `json:"documento_afectado_monto"`
+	Descripcion            string        `json:"descripcion"` // motivo de la nota
+	FechaEmision           time.Time     `json:"fecha_emision"`
+	Cliente                DatosCliente  `json:"cliente"`
+	Detalles               []DetalleItem `json:"detalles"`
+	Pagos                  []PagoDetalle `json:"pagos"`
+	Moneda                 string        `json:"moneda"`
+	TasaCambio             float64       `json:"tasa_cambio"`
+	FechaTasa              time.Time     `json:"fecha_tasa"`
+	Subtotal               float64       `json:"subtotal"`
+	Descuento              float64       `json:"descuento"`
+	MontoExento            float64       `json:"monto_exento"`
+	BaseImponible          float64       `json:"base_imponible"`
+	BaseReducida           float64       `json:"base_reducida"`
+	BaseSuntuario          float64       `json:"base_suntuario"`
+	IVA                    float64       `json:"iva"`
+	IVAReducido            float64       `json:"iva_reducido"`
+	IVASuntuario           float64       `json:"iva_suntuario"`
+	Total                  float64       `json:"total"`
+	IGTF                   float64       `json:"igtf"`
+	TotalFinal             float64       `json:"total_final"`
+	Propina                float64       `json:"propina"`
+	TipoPago               string        `json:"tipo_pago"` // "Contado", "15 DIAS", etc.
+	Notas                  []string      `json:"notas"`
+	ReferenciaSistema      string        `json:"referencia_sistema"` // Referencia interna (ej: invoice_id)
 }
 
 // ResultadoEmision es la respuesta después de emitir un documento.

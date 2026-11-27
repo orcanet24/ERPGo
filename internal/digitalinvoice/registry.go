@@ -22,6 +22,7 @@ import (
 
 	provider "erpgo/interfaces/web/digitalinvoice"
 	"erpgo/interfaces/web/digitalinvoice/cgimprenta"
+	"erpgo/interfaces/web/digitalinvoice/thka"
 	"erpgo/interfaces/web/digitalinvoice/unidigital"
 )
 
@@ -104,6 +105,8 @@ func NuevoProveedorActivo(codigo string, cfg provider.ProviderConfig) (provider.
 		return unidigital.NuevoProveedor(cfg)
 	case "cgimprenta":
 		return cgimprenta.NuevoProveedor(cfg)
+	case "thka":
+		return thka.NuevoProveedor(cfg)
 	default:
 		return nil, fmt.Errorf("proveedor de facturación digital no soportado: %s", codigo)
 	}
