@@ -85,7 +85,7 @@ SET @col := (
   SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE()
     AND TABLE_NAME = 'product_recipe'
-    AND COLUMN_NAME = `active`
+    AND COLUMN_NAME = 'active'
 );
 SET @sql := IF(@col = 0,
   'ALTER TABLE `product_recipe` ADD COLUMN `active` TINYINT NOT NULL DEFAULT 1 AFTER `version`',
@@ -98,7 +98,7 @@ SET @col := (
   SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE()
     AND TABLE_NAME = 'product_recipe'
-    AND COLUMN_NAME = `batch_reference`
+    AND COLUMN_NAME = 'batch_reference'
 );
 SET @sql := IF(@col = 0,
   'ALTER TABLE `product_recipe` ADD COLUMN `batch_reference` VARCHAR(40) NOT NULL DEFAULT \'\' AFTER `active`',
@@ -111,7 +111,7 @@ SET @col := (
   SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE()
     AND TABLE_NAME = 'product_recipe'
-    AND COLUMN_NAME = `yield_pct`
+    AND COLUMN_NAME = 'yield_pct'
 );
 SET @sql := IF(@col = 0,
   'ALTER TABLE `product_recipe` ADD COLUMN `yield_pct` DECIMAL(6,4) NOT NULL DEFAULT 0 AFTER `batch_reference`',

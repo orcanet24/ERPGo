@@ -128,9 +128,12 @@ CREATE TABLE IF NOT EXISTS `finance_scan_state` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- El menú, con INSERT condicional por URL: si una base ya trae la entrada (por
--- haberla creado a mano) no se toca y no se duplica.
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`)
-SELECT 275, 21, 'Canales de aviso', '/settings/notify', NULL, 'setting', '/settings/notify', 65, 1
+-- haberla creado a mano) no se toca y no se duplica. El id 277 es propio: el
+-- 275 ya lo usa «Facturación Digital» (schema_z_zzzzzz_menu_digital_invoice) y
+-- con el 275 el INSERT entero chocaba por clave primaria y la pantalla
+-- quedaba sin puerta (fallo visto en la instalación limpia de 2026-11-27).
+INSERT IGNORE INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`)
+SELECT 277, 21, 'Canales de aviso', '/settings/notify', NULL, 'setting', '/settings/notify', 35, 1
 FROM (SELECT COUNT(*) AS n FROM `menu` WHERE `url` = '/settings/notify') AS existente
 WHERE existente.n = 0;
 
