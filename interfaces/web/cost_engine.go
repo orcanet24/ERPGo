@@ -133,7 +133,7 @@ type costInputs struct {
 	Salida        float64 // stock saliente del kardex (para PP)
 
 	// IsAssembled indica que el producto se fabrica/ensambla. Sirve para no
-	// callar la depreciación: mientras no existan activos fijos (Fase 1), un
+	// callar la depreciación: mientras no existan activos fijos (Fase 2), un
 	// producto ensamblado recibe una advertencia explícita en vez de un cero
 	// que parece un costo completo.
 	IsAssembled bool
@@ -554,7 +554,7 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 	// cost_center_id se guardaba en product_cost_config pero el motor nunca lo
 	// leía: el indirecto salía siempre cero. La tarifa por unidad es la que se
 	// puede aplicar sin conocer las horas de proceso; la tarifa por hora
-	// necesita process_route (Fase 2) y se avisa en vez de inventarla.
+	// necesita process_route (Fase 3) y se avisa en vez de inventarla.
 	if centroID.Valid && centroID.Int64 > 0 {
 		var codigo string
 		var tasaUnidad, tasaHora sql.NullFloat64
@@ -578,7 +578,7 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 			in.OverheadPerUn = tasaUnidad.Float64
 		case tasaHora.Valid && tasaHora.Float64 > 0:
 			in.Faltantes = append(in.Faltantes, fmt.Sprintf(
-				"el centro de costo %s solo tiene tarifa por hora: el indirecto por unidad necesita las horas de process_route (Fase 2)",
+				"el centro de costo %s solo tiene tarifa por hora: el indirecto por unidad necesita las horas de process_route (Fase 3)",
 				codigo))
 		}
 	}
@@ -588,7 +588,7 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 	// es más peligroso que un costo con una advertencia.
 	if in.IsAssembled {
 		in.Faltantes = append(in.Faltantes,
-			"el producto está marcado como ensamblado, pero la depreciación de activos fijos todavía no está implementada (Fase 1): el costo de depreciación saldrá en cero")
+			"el producto está marcado como ensamblado, pero la depreciación de activos fijos todavía no está implementada (Fase 2): el costo de depreciación saldrá en cero")
 	}
 
 	// --- Costo vigente (PP) -----------------------------------------------

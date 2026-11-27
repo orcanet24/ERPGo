@@ -208,6 +208,41 @@ sus propias tablas de escenarios. Útil, pero no sustituye al motor.
 Cada fase termina con `gofmt`, `go build ./...`, `go vet ./interfaces/web`,
 `go test ./...` y su propia prueba. Ninguna fase se cierra en rojo.
 
+### 6.0 Principio de composición: el método elige el material, no los componentes
+
+El motor actual trata los métodos como **excluyentes**: `RECIPE` suma solo
+material, `HOURS` suma solo mano de obra, `YIELD` suma solo material. Eso sirve
+para un negocio de un solo proceso, pero no para una panadería (receta + horno +
+horas), una fábrica (BOM de varios niveles + máquina + depreciación) o un
+servicio (horas + indirecto). La regla que se adopta es una sola:
+
+> **El método describe de dónde sale el MATERIAL. La mano de obra, el indirecto
+> y la depreciación se suman siempre, sea cual sea el método.**
+
+Así, un producto puede tener los cuatro componentes a la vez sin inventar un
+método nuevo por cada combinación. `PP`, `RECIPE`, `YIELD` e `IMPORT` responden
+por el material; `HOURS` es el caso en que no hay material propio (servicio).
+La suma final sigue siendo la misma: `material + labor + indirecto +
+depreciación + aduana`.
+
+Los siete puntos que faltaban quedan cubiertos así:
+
+| # | Punto | Fase |
+|---|---|---|
+| 1 | Mano de obra dentro de `RECIPE` | **1** |
+| 2 | Conversión de unidades de medida | 4 |
+| 3 | Rendimiento, lote y versión de receta | 4 |
+| 4 | BOM multinivel | 5 |
+| 5 | Órdenes de producción | 6 |
+| 6 | Pantallas de grados de mano de obra y centros de costo | **1** |
+| 7 | Activos fijos, depreciación, indirecto por hora y rutas de proceso | 2 y 3 |
+
+El orden no es arbitrario: la Fase 1 hace que el motor componga; la Fase 2 le
+da la depreciación que hoy vale cero; la Fase 3 usa las rutas para el indirecto
+por hora; la Fase 4 corrige las cantidades (sin UoM una receta en gramos sale
+1.000 veces mal); la Fase 5 explota el BOM; la Fase 6 produce contra ese BOM; la
+Fase 7 informa y concilia.
+
 ### Fase 0 — Corrección y red de seguridad (bloqueante)
 
 Objetivo: que lo que ya existe no mienta.
@@ -235,7 +270,42 @@ Objetivo: que lo que ya existe no mienta.
 **Criterio de aceptación:** guardar un producto `RECIPE` de varios componentes
 termina en éxito y el total del desglose es igual a la suma de componentes.
 
-### Fase 1 — Activos fijos y depreciación (la brecha más grande)
+### Fase 1 — Compositor de costos, mano de obra en receta y administración de grados y centros
+
+Objetivo: que el método elija **de dónde sale el material**, no **qué
+componentes existen**. Es la fase que hace posible el resto: sin ella, una
+panadería no puede tener receta y mano de obra en el mismo producto.
+
+1. **Regla de composición.** `calcularCosto` calcula el material según el método
+   (`PP`, `RECIPE`, `YIELD`, `IMPORT`; `HOURS` no tiene material propio) y
+   después suma, siempre, mano de obra, indirecto y depreciación. El `switch`
+   deja de ser excluyente: solo decide la fuente del material.
+2. **Mano de obra dentro de la receta.** `product_recipe` gana `labor_grade` y
+   `hours` (migración idempotente). Un renglón con `labor_grade` no es material:
+   aporta horas × tarifa del grado. La tarifa se calcula con
+   `calcularTasaHoraria`, igual que en la hoja de horas.
+3. **Regla contra el doble conteo.** Si la receta define mano de obra, esa es la
+   estándar y `cost_timesheet` **no** se suma; si la receta no la define, se usa
+   la hoja de horas. Si existen las dos y difieren, el cálculo usa la receta y
+   emite una advertencia con la diferencia. Nunca se suman las dos.
+4. **Pantalla de grados y centros.** `costGradeSave` y `costCenterSave` ya
+   existen sin plantilla. Se crean las pantallas de alta/edición/listado con
+   permisos, y el selector de centro de costo en `cost_product.html` (el motor
+   ya lo lee, la pantalla no lo ofrece).
+5. **Pruebas:**
+   - receta con 2 materiales + 1 renglón de mano de obra produce 2 trazas de
+     material y 1 de labor, y el total es la suma;
+   - un producto `YIELD` con horas de despiece suma material + labor;
+   - receta con mano de obra y hoja de horas a la vez no duplica y avisa;
+   - el selector de centro guarda y el indirecto aparece en el desglose;
+   - guardar la pantalla de grados persiste `productivity_factor` y cambia la
+     tarifa.
+
+**Criterio de aceptación:** una receta de pan con harina, levadura y 0,5 h de
+oficial panadero devuelve material + labor en el mismo desglose, y el total no
+depende de que el método se llame `RECIPE` o `HOURS`.
+
+### Fase 2 — Activos fijos y depreciación (la brecha más grande)
 
 Adoptar del script, adaptado al núcleo:
 
@@ -273,7 +343,7 @@ Adoptar del script, adaptado al núcleo:
 aporta 200/mes; con 1.000 unidades del período, 0,20 por unidad, visible en el
 desglose y congelado en `cost_snapshot`.
 
-### Fase 2 — Indirectos y rutas de proceso (usar lo que ya está)
+### Fase 3 — Indirectos por hora y rutas de proceso (usar lo que ya está)
 
 1. Poblar `OverheadPerUn` desde `cost_center`:
    - `overhead_rate_unit` si el producto se costea por unidad;
@@ -289,7 +359,7 @@ desglose y congelado en `cost_snapshot`.
    - `setup_time_min` se cobra completo aunque la cantidad sea 1;
    - una ruta sin grado no rompe el cálculo y avisa.
 
-### Fase 3 — Unidades de medida y costo con vigencia
+### Fase 4 — Unidades de medida, versión, lote y rendimiento de receta
 
 1. `unit_of_measure` (`code`, `name`, `allows_decimal`) y
    `product_uom_conversion` (`product_id`, `from_uom`, `to_uom`, `factor`).
@@ -309,7 +379,57 @@ desglose y congelado en `cost_snapshot`.
    - `yield_pct` reduce la salida y sube el costo unitario;
    - costo a una fecha pasada coincide con el kardex de esa fecha.
 
-### Fase 4 — Informes e integración contable
+### Fase 5 — BOM multinivel
+
+1. **Explosión recursiva con control de ciclos.** `materialPorReceta` resuelve un
+   componente que a su vez es `RECIPE`, `YIELD` o `IMPORT` con su propio costo,
+   hasta `max_bom_depth` (por defecto 10). Un ciclo (A usa B, B usa A) se corta
+   con advertencia y la ruta del ciclo en la traza; nunca se cuelga ni se suma
+   dos veces.
+2. **Costo del subconjunto.** Se calcula en orden topológico y se memoiza por
+   `(producto, período)`. No se escribe `product_information.cost` desde aquí:
+   ese número lo mantiene el kardex. El subconjunto se guarda como
+   `cost_component` del padre con `source_ref = "bom:<producto>"` y su nivel.
+3. **Trazas con nivel y ruta.** `CostTrace` gana `Level` y `Path`
+   (`pan > masa > harina`) para que el desglose se pueda leer y auditar.
+4. **Pruebas:**
+   - BOM de 3 niveles da el mismo total que el cálculo manual;
+   - un ciclo no cuelga y avisa;
+   - cambiar el costo de un insumo de nivel 2 cambia el del nivel 1 y el del
+     producto terminado;
+   - el costo del subconjunto no se duplica al guardar dos veces.
+
+**Criterio de aceptación:** un producto terminado con masa intermedia y relleno
+intermedio muestra el costo de cada nivel y el total, y recalcular no duplica
+renglones.
+
+### Fase 6 — Órdenes de producción
+
+1. `production_order` (`id`, `code`, `product_id`, `quantity`, `period`,
+   `route_id`, `status`, `started_at`, `closed_at`, `created_by`) y
+   `production_order_line` (`order_id`, `component_id`, `planned_qty`,
+   `actual_qty`, `unit_cost`, `labor_grade`, `hours`).
+2. Servicio `cost_production_service.go`:
+   - alta desde la receta activa (copia el BOM planificado);
+   - consumo real por línea, con merma real = `actual_qty - planned_qty`;
+   - cierre transaccional que calcula el costo real, lo guarda en
+     `cost_component`/`cost_snapshot` y, si el módulo de inventario está activo,
+     registra la salida de insumos y la entrada de terminado por el servicio de
+     kardex existente;
+   - una orden cerrada no se edita: se reabre con motivo, como el período.
+3. Pantalla `/cost/production` con alta, avance y cierre.
+4. Pruebas:
+   - una orden con consumo real mayor al planificado sube el costo y registra la
+     merma real;
+   - cerrar dos veces no duplica ni el costo ni el movimiento;
+   - una orden cerrada rechaza edición sin motivo;
+   - el costo de la orden coincide con la suma de sus líneas.
+
+**Criterio de aceptación:** producir 100 panes con 60 kg de harina (plan 55) y
+4 h de oficial devuelve el costo real por pan, con la merma real visible y sin
+tocar el costo de los períodos cerrados.
+
+### Fase 7 — Informes e integración contable
 
 1. Informe de costo vs. precio vs. margen por producto y por lista.
 2. Costo de ventas del período desde `cost_snapshot` (no desde el costo actual:
@@ -325,29 +445,31 @@ desglose y congelado en `cost_snapshot`.
 | Script | Destino en ERPGo | Acción |
 |---|---|---|
 | `config` | `settings` / configuración existente | **No crear**; mapear |
-| `unidades_medida` | `unit_of_measure` (nueva) | Adoptar (Fase 3) |
+| `unidades_medida` | `unit_of_measure` (nueva) | Adoptar (Fase 4) |
 | `items` | `product_information` | **Rechazar duplicado** |
-| `item_costos` | `product_cost_at` desde kardex | Adoptar como lectura (Fase 3) |
-| `recetas` | `product_recipe` + versión/rendimiento/lote | Ampliar (Fase 3) |
-| `receta_detalle` | `product_recipe` + `uom` | Ampliar (Fase 3) |
-| `activos_fijos` | `fixed_asset` (nueva) | Adoptar (Fase 1) |
-| `activo_depreciacion_cuota` | `fixed_asset_depreciation` | Adoptar (Fase 1) |
-| `activo_depreciacion_mov` | `fixed_asset_depreciation_movement` | Adoptar (Fase 1) |
+| `item_costos` | `product_cost_at` desde kardex | Adoptar como lectura (Fase 4) |
+| `recetas` | `product_recipe` + versión/rendimiento/lote | Ampliar (Fase 4) |
+| `receta_detalle` | `product_recipe` + `uom` y mano de obra | Ampliar (Fases 1 y 4) |
+| `activos_fijos` | `fixed_asset` (nueva) | Adoptar (Fase 2) |
+| `activo_depreciacion_cuota` | `fixed_asset_depreciation` | Adoptar (Fase 2) |
+| `activo_depreciacion_mov` | `fixed_asset_depreciation_movement` | Adoptar (Fase 2) |
 | `auditoria` | `audit_log` | **No crear**; usar el existente |
-| Triggers | Reglas de servicio Go | Reimplementar (Fase 1) |
-| Procedimientos | Servicios Go transaccionales | Reimplementar (Fase 1) |
-| Vistas | Consultas/reportes Go | Reimplementar (Fases 1 y 4) |
+| Triggers | Reglas de servicio Go | Reimplementar (Fase 2) |
+| Procedimientos | Servicios Go transaccionales | Reimplementar (Fase 2) |
+| Vistas | Consultas/reportes Go | Reimplementar (Fases 2 y 7) |
 
 ---
 
 ## 8. Riesgos y decisiones que hay que tomar antes de codificar
 
 1. **Alcance de la depreciación:** ¿solo costo de producto o también asiento
-   contable? La Fase 1 la deja como costo; el asiento contable es Fase 4 y
+   contable? La Fase 2 la deja como costo; el asiento contable es Fase 7 y
    requiere decidir cuentas.
-2. **Prorrateo de activos globales:** ¿por horas de ruta, por unidades
-   producidas o por consumo de centro? Hay que elegir una regla y dejarla
-   escrita; el script no la define.
+2. **Prorrateo de activos globales:** se adopta **por unidades producidas** como
+   regla por defecto, porque es la única que no exige que todos los productos
+   tengan ruta. Si el activo está atado a un centro con ruta, se puede elegir
+   «por horas de ruta» con una marca explícita. Queda escrito aquí; el script no
+   la define.
 3. **Unidad base del producto:** migrar `product_information.unit` (texto
    libre) a códigos puede romper datos viejos. Se hará con tabla de
    equivalencias y aviso, no con `UPDATE` ciego.
@@ -355,6 +477,16 @@ desglose y congelado en `cost_snapshot`.
    Debe quedar una sola activa por producto y el cambio debe quedar auditado.
 5. **Compatibilidad:** las migraciones deben ser idempotentes y correr en
    MariaDB 10.4 y MySQL 8, como el resto del repo.
+6. **Mano de obra de receta vs. hoja de horas:** no se suman. La receta es el
+   estándar; la hoja de horas entra solo cuando la receta no define mano de
+   obra. Si las dos existen, se avisa la diferencia. Es la única regla que evita
+   cobrar dos veces la misma hora.
+7. **BOM multinivel:** profundidad máxima configurable (10 por defecto) y corte
+   de ciclos con advertencia. El costo del subconjunto **no** se escribe en
+   `product_information.cost`; se memoiza y se guarda como componente del padre.
+8. **Orden de producción:** costea siempre; postea inventario solo si el módulo
+   está activo, usando el servicio de kardex existente. Una orden cerrada se
+   reabre con motivo, igual que un período.
 
 ---
 
@@ -388,8 +520,11 @@ desglose y congelado en `cost_snapshot`.
    duplicaría el maestro de productos.
 2. **Mantener el motor del núcleo** y arreglar la Fase 0 de inmediato: hoy hay
    un guardado que falla y dos componentes que siempre valen cero.
-3. **Adoptar del script** activos fijos con depreciación (Fase 1), indirectos y
-   rutas (Fase 2), y unidades/conversión (Fase 3).
+3. **Cubrir los siete puntos que faltan**, en este orden: composición y mano de
+   obra en receta con sus pantallas (Fase 1); activos fijos y depreciación
+   (Fase 2); rutas e indirecto por hora (Fase 3); UoM, versión y rendimiento
+   (Fase 4); BOM multinivel (Fase 5); órdenes de producción (Fase 6); informes y
+   conciliación contable (Fase 7).
 4. **Usar `audit_log`**, no una tabla `auditoria` paralela.
 5. **Escribir pruebas desde la Fase 0.** Sin ellas, la próxima brecha vuelve a
    pasar inadvertida.
