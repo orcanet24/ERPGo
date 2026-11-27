@@ -118,6 +118,12 @@ type costInputs struct {
 	// RECIPE: componentes de la receta.
 	Componentes []costComponente
 
+	// RECIPE: mano de obra estándar definida en la propia receta. Va aparte de
+	// Componentes porque no se multiplica por un costo unitario: se paga por
+	// hora del grado. Es lo que permite costear una panadería (harina + horas
+	// de horneado) sin inventar un método nuevo.
+	LaborReceta []costHora
+
 	// YIELD: de qué producto de origen sale y con qué rendimiento.
 	YieldBase costYieldRow
 
@@ -141,6 +147,11 @@ type costInputs struct {
 	// Errores de lectura que no deben abortar el cálculo: el motor prefiere
 	// calcular con lo que haya y decirlo, antes que devolver nada.
 	Faltantes []string
+
+	// Avisos son reglas que se cumplieron pero que conviene mirar: por ejemplo,
+	// que la receta ya traía mano de obra y se ignoró la hoja de horas para no
+	// cobrarla dos veces. No son faltantes: no impiden calcular.
+	Avisos []string
 }
 
 type costComponente struct {
@@ -197,6 +208,10 @@ func calcularCosto(in costInputs) CostBreakdown {
 	}
 
 	// --- 1. Material según el método -------------------------------------
+	//
+	// El método elige DE DÓNDE SALE EL MATERIAL, no qué componentes existen.
+	// HOURS es el único sin material propio: es un servicio. La mano de obra,
+	// el indirecto y la depreciación se suman abajo para TODOS los métodos.
 	switch in.Metodo {
 	case costRecipe:
 		b.Material, b.Traces = materialPorReceta(in)
@@ -205,7 +220,8 @@ func calcularCosto(in costInputs) CostBreakdown {
 	case costImport:
 		b.Material, b.Customs, b.Traces, b.Advertencias = materialPorImportacion(in)
 	case costHours:
-		b.Labor, b.Traces, b.Advertencias = laborPorHoras(in)
+		// Servicio: no hay material propio. Si alguien cargó componentes, no se
+		// inventan aquí; la mano de obra se calcula en el paso siguiente.
 	case costPP, "":
 		b.Material = in.Salida / in.Cantidad
 		b.Traces = append(b.Traces, CostTrace{
@@ -221,7 +237,29 @@ func calcularCosto(in costInputs) CostBreakdown {
 		b.Material = in.Salida / in.Cantidad
 	}
 
-	// --- 2. La merma SOLO al material (ver 0.1) --------------------------
+	// --- 2. Mano de obra -------------------------------------------------
+	//
+	// La receta manda: si define mano de obra, esa es la estándar y la hoja de
+	// horas no se suma (cargarCostInputs ya avisó si había horas registradas).
+	// Si la receta no la define, se usa la hoja. Nunca las dos: cobrar la misma
+	// hora dos veces es el error que más caro sale y el más difícil de ver,
+	// porque el total sigue pareciendo razonable.
+	if len(in.LaborReceta) > 0 {
+		labor, traces, avisos := laborPorHoras(costInputs{
+			Cantidad: in.Cantidad,
+			Horas:    in.LaborReceta,
+		})
+		b.Labor = labor
+		b.Traces = append(b.Traces, traces...)
+		b.Advertencias = append(b.Advertencias, avisos...)
+	} else if len(in.Horas) > 0 {
+		labor, traces, avisos := laborPorHoras(in)
+		b.Labor = labor
+		b.Traces = append(b.Traces, traces...)
+		b.Advertencias = append(b.Advertencias, avisos...)
+	}
+
+	// --- 3. La merma SOLO al material (ver 0.1) --------------------------
 	//
 	// En el borrador anterior esta línea multiplicaba un campo que nadie
 	// inicializaba (breakdown.Total) y luego FinalCost se construía sumando los
@@ -238,7 +276,7 @@ func calcularCosto(in costInputs) CostBreakdown {
 		})
 	}
 
-	// --- 3. Los demás componentes ----------------------------------------
+	// --- 4. Los demás componentes ----------------------------------------
 	b.Depreciation = in.DegrPerUnidad
 	if b.Depreciation > 0 {
 		b.Traces = append(b.Traces, CostTrace{
@@ -262,7 +300,7 @@ func calcularCosto(in costInputs) CostBreakdown {
 	// b.Customs ya se llenó en materialPorImportacion, que sabe sobre qué se
 	// reparte (la partida recibida, no la pedida).
 
-	// --- 4. Total --------------------------------------------------------
+	// --- 5. Total --------------------------------------------------------
 	b.Final = b.Material + b.Labor + b.Depreciation + b.Overhead + b.Customs
 
 	b.Traces = append(b.Traces, CostTrace{
@@ -273,6 +311,9 @@ func calcularCosto(in costInputs) CostBreakdown {
 
 	for _, f := range in.Faltantes {
 		b.Advertencias = append(b.Advertencias, f)
+	}
+	for _, a := range in.Avisos {
+		b.Advertencias = append(b.Advertencias, a)
 	}
 	return b
 }
@@ -608,10 +649,15 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 			"el producto no tiene costo en product_information: no se pudo aplicar el método PP")
 	}
 
-	// --- Receta ------------------------------------------------------------
+	// --- Receta: material y mano de obra estándar --------------------------
+	//
+	// Un renglón de product_recipe es material si no tiene labor_grade, y es
+	// mano de obra si lo tiene. Se clasifican aquí, en la lectura, para que el
+	// cálculo puro no tenga que saber de columnas.
 	rows, err := db.Query(`SELECT component_id, quantity,
 		IFNULL((SELECT cost FROM product_information p WHERE p.product_id = r.component_id),0),
-		IFNULL(loss_factor,0), step_order
+		IFNULL(loss_factor,0), step_order,
+		IFNULL(labor_grade,''), IFNULL(hours,0)
 		FROM product_recipe r WHERE product_id = ? ORDER BY step_order, component_id`, productID)
 	if err != nil {
 		if in.Metodo == costRecipe {
@@ -621,15 +667,27 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 	} else {
 		for rows.Next() {
 			var c costComponente
-			if err := rows.Scan(&c.ComponentID, &c.Cantidad, &c.UnitCost, &c.LossFactor, &c.Step); err == nil {
-				in.Componentes = append(in.Componentes, c)
+			var grade string
+			var horas float64
+			if err := rows.Scan(&c.ComponentID, &c.Cantidad, &c.UnitCost,
+				&c.LossFactor, &c.Step, &grade, &horas); err == nil {
+				if strings.TrimSpace(grade) != "" {
+					in.LaborReceta = append(in.LaborReceta, costHora{
+						Grade:        grade,
+						Hours:        horas,
+						HourlyRate:   s.tasaDeGrado(db, grade),
+						Productivity: 1,
+					})
+				} else {
+					in.Componentes = append(in.Componentes, c)
+				}
 			}
 		}
 		rows.Close()
 	}
 	if in.Metodo == costRecipe && len(in.Componentes) == 0 {
 		in.Faltantes = append(in.Faltantes,
-			"el producto está configurado como RECIPE pero no tiene componentes en product_recipe")
+			"el producto está configurado como RECIPE pero no tiene componentes de material en product_recipe")
 	}
 
 	// --- Rendimiento --------------------------------------------------------
@@ -642,46 +700,66 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 		if entradaID == "" {
 			in.Faltantes = append(in.Faltantes,
 				"no hay rendimiento definido en product_yield para este producto")
-			return in
-		}
-		in.YieldBase.InputProductID = entradaID
-		if pct.Valid {
-			in.YieldBase.ExpectedPct = pct.Float64
-		}
-
-		// El costo que se reparte es el de la ENTRADA (la canal), no el del corte
-		// que sale. Es el error más caro de este método: leer el costo del producto
-		// de salida y repartirlo sobre sí mismo da un resultado circular y el
-		// rendimiento no entra nunca en la cuenta.
-		var costoEntrada sql.NullFloat64
-		_ = db.QueryRow(`SELECT cost FROM product_information WHERE product_id = ?`, entradaID).
-			Scan(&costoEntrada)
-		if costoEntrada.Valid {
-			in.Salida = costoEntrada.Float64 * in.Cantidad
 		} else {
-			in.Faltantes = append(in.Faltantes,
-				"el producto de entrada "+entradaID+" no tiene costo en product_information")
+			in.YieldBase.InputProductID = entradaID
+			if pct.Valid {
+				in.YieldBase.ExpectedPct = pct.Float64
+			}
+
+			// El costo que se reparte es el de la ENTRADA (la canal), no el del
+			// corte que sale. Es el error más caro de este método: leer el costo
+			// del producto de salida y repartirlo sobre sí mismo da un resultado
+			// circular y el rendimiento no entra nunca en la cuenta.
+			var costoEntrada sql.NullFloat64
+			_ = db.QueryRow(`SELECT cost FROM product_information WHERE product_id = ?`, entradaID).
+				Scan(&costoEntrada)
+			if costoEntrada.Valid {
+				in.Salida = costoEntrada.Float64 * in.Cantidad
+			} else {
+				in.Faltantes = append(in.Faltantes,
+					"el producto de entrada "+entradaID+" no tiene costo en product_information")
+			}
 		}
-		return in
+		// NO se retorna: el despiece también paga mano de obra. El return que
+		// había aquí dejaba a YIELD sin horas nunca, aunque la carnicería
+		// registrara el tiempo de despiece.
 	}
 
 	// --- Horas --------------------------------------------------------------
-	if in.Metodo == costHours {
-		hrows, err := db.Query(`SELECT grade, SUM(hours),
-			IFNULL(MAX(rate_used),0), 1.0
-			FROM cost_component
-			WHERE product_id = ? AND period = ? AND component = 'labor'
-			GROUP BY grade`, productID, periodo)
-		if err == nil {
-			for hrows.Next() {
-				var h costHora
-				if err := hrows.Scan(&h.Grade, &h.Hours, &h.HourlyRate, &h.Productivity); err == nil {
-					in.Horas = append(in.Horas, h)
-				}
-			}
-			hrows.Close()
+	//
+	// Regla contra el doble conteo: la receta define la mano de obra estándar.
+	// Si la define, la hoja de horas no se suma y se avisa. Si no la define, se
+	// usa la hoja para CUALQUIER método: el despiece, el horneado y el empaque
+	// también cuestan horas aunque el material venga de otro lado.
+	if len(in.LaborReceta) > 0 {
+		var horasTS float64
+		_ = db.QueryRow(`SELECT IFNULL(SUM(hours),0) FROM cost_timesheet
+			WHERE product_id = ? AND work_date LIKE ?`, productID, periodo+"%").
+			Scan(&horasTS)
+		if horasTS > 0 {
+			in.Avisos = append(in.Avisos, fmt.Sprintf(
+				"la receta ya define mano de obra estándar: se ignoraron %.2f h de cost_timesheet para no cobrarlas dos veces",
+				horasTS))
 		}
-		// Si no hay componentes guardados aún, se lee la hoja de horas directa.
+	} else {
+		// Para HOURS se conserva el orden histórico: primero los componentes de
+		// labor ya guardados (recálculo) y, si no hay, la hoja de horas.
+		if in.Metodo == costHours {
+			hrows, err := db.Query(`SELECT grade, SUM(hours),
+				IFNULL(MAX(rate_used),0), 1.0
+				FROM cost_component
+				WHERE product_id = ? AND period = ? AND component = 'labor'
+				GROUP BY grade`, productID, periodo)
+			if err == nil {
+				for hrows.Next() {
+					var h costHora
+					if err := hrows.Scan(&h.Grade, &h.Hours, &h.HourlyRate, &h.Productivity); err == nil {
+						in.Horas = append(in.Horas, h)
+					}
+				}
+				hrows.Close()
+			}
+		}
 		if len(in.Horas) == 0 {
 			trows, err := db.Query(`SELECT grade, SUM(hours), 0.0, 1.0
 				FROM cost_timesheet t
@@ -699,7 +777,7 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 				trows.Close()
 			}
 		}
-		if len(in.Horas) == 0 {
+		if in.Metodo == costHours && len(in.Horas) == 0 {
 			in.Faltantes = append(in.Faltantes,
 				"no hay horas en cost_timesheet para este producto en "+periodo)
 		}

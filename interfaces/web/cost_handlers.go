@@ -45,8 +45,10 @@ func (s *Server) registerCostRoutes() {
 	s.mux.HandleFunc("GET /cost/product/{id}/recipe", s.costRecipeGet)
 	s.mux.HandleFunc("GET /cost/product/{id}/breakdown", s.costBreakdownGet)
 	s.mux.HandleFunc("GET /cost/product/{id}/yield", s.costYieldGet)
-	s.mux.HandleFunc("GET /cost/grades", s.costGradesGet)
-	s.mux.HandleFunc("GET /cost/centers", s.costCentersGet)
+	s.mux.HandleFunc("GET /cost/grades", s.costGradesView)
+	s.mux.HandleFunc("GET /cost/grades/data", s.costGradesGet)
+	s.mux.HandleFunc("GET /cost/centers", s.costCentersView)
+	s.mux.HandleFunc("GET /cost/centers/data", s.costCentersGet)
 	s.mux.HandleFunc("GET /cost/lists", s.costListsGet)
 	s.mux.HandleFunc("GET /cost/timesheet", s.costTimesheetView)
 	s.mux.HandleFunc("GET /cost/timesheet/data", s.costTimesheetGet)
@@ -170,6 +172,16 @@ func (s *Server) costProductView(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
+	grados, err := listarGrados(db)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	centros, err := listarCentros(db)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
 
 	// Lo que falta se calcula ANTES de mostrar la ficha. Una ficha de
 	// configuración que dice "todo listo" cuando no lo está es peor que no
@@ -186,6 +198,8 @@ func (s *Server) costProductView(w http.ResponseWriter, r *http.Request) {
 		"Config":        cfg,
 		"Receta":        receta,
 		"Rendimientos":  rendimientos,
+		"Grados":        grados,
+		"Centros":       centros,
 		"Metodos":       costMetodos,
 		"Faltantes":     faltantes,
 		"Periodo":       periodo,
@@ -372,6 +386,37 @@ func (s *Server) costYieldGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"status": 1, "rows": y})
 }
 
+// costGradesView es la pantalla de administración de grados de mano de obra.
+// Antes solo existía el endpoint de guardado: se podía crear un grado por POST
+// pero no había dónde escribirlo, así que la hoja de horas no tenía tarifas.
+func (s *Server) costGradesView(w http.ResponseWriter, r *http.Request) {
+	grados, err := listarGrados(s.dbFor(r))
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	s.render(w, r, "cost_grades.html", map[string]interface{}{
+		"Title":  "Grados de mano de obra",
+		"Module": "cost",
+		"Grados": grados,
+	})
+}
+
+// costCentersView es la pantalla de administración de centros de costo. El
+// motor ya lee overhead_rate_unit; faltaba el lugar donde se escribe.
+func (s *Server) costCentersView(w http.ResponseWriter, r *http.Request) {
+	centros, err := listarCentros(s.dbFor(r))
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	s.render(w, r, "cost_centers.html", map[string]interface{}{
+		"Title":   "Centros de costo",
+		"Module":  "cost",
+		"Centros": centros,
+	})
+}
+
 func (s *Server) costGradesGet(w http.ResponseWriter, r *http.Request) {
 	g, err := listarGrados(s.dbFor(r))
 	if err != nil {
@@ -510,6 +555,8 @@ func (s *Server) costRecipeSave(w http.ResponseWriter, r *http.Request) {
 		Unit:        r.FormValue("unit"),
 		LossFactor:  merma,
 		Step:        step,
+		LaborGrade:  strings.TrimSpace(r.FormValue("labor_grade")),
+		Hours:       parseMoney(r.FormValue("hours")),
 	}
 	if err := guardarReceta(s.dbFor(r), rec); err != nil {
 		jsonError(w, err.Error(), 400)
@@ -785,16 +832,26 @@ func costFaltantes(db *sql.DB, cfg CostConfig, receta []CostReceta) []string {
 
 	switch cfg.Metodo {
 	case costRecipe:
-		if len(receta) == 0 {
-			out = append(out, "No tiene componentes. Se añaden en la pestaña de receta (product_recipe).")
-		} else {
+		materiales := 0
+		for _, c := range receta {
+			if c.LaborGrade != "" {
+				// Un grado sin tarifa deja la mano de obra en cero sin que el
+				// total lo delate: el renglón existe, pero no suma.
+				if c.UnitCost <= 0 {
+					out = append(out, "El grado de mano de obra "+c.LaborGrade+
+						" no tiene tarifa calculable: revisa salario y horas anuales en labor_grade.")
+				}
+				continue
+			}
+			materiales++
 			// Un componente sin costo hace que la receta salga subvaluada sin
 			// que ningún total dé una pista. Merece su propio aviso.
-			for _, c := range receta {
-				if c.UnitCost <= 0 {
-					out = append(out, "El componente "+c.ComponentID+" no tiene costo en product_information: se está costeando a cero.")
-				}
+			if c.UnitCost <= 0 {
+				out = append(out, "El componente "+c.ComponentID+" no tiene costo en product_information: se está costeando a cero.")
 			}
+		}
+		if materiales == 0 {
+			out = append(out, "No tiene componentes de material. Se añaden en la pestaña de receta (product_recipe).")
 		}
 	case costYield:
 		// El rendimiento se busca por el producto de ENTRADA. Si el producto

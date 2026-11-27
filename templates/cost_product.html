@@ -55,6 +55,23 @@
                             se guarda como decimal.
                         </p>
                     </div>
+                    <div class="form-group">
+                        <label>Centro de costo (indirecto)</label>
+                        <select name="cost_center_id" class="form-control">
+                            <option value="">Sin centro</option>
+                            {{$cc := .Config.CostCenter}}
+                            {{range .Centros}}
+                            <option value="{{.ID}}" {{if eq (printf "%d" .ID) $cc}}selected{{end}}>
+                                {{.Code}} &mdash; {{.Name}}
+                            </option>
+                            {{end}}
+                        </select>
+                        <p class="help-block">
+                            El indirecto por unidad del centro se suma al costo. Si el
+                            centro solo tiene tarifa por hora, el motor lo avisa en vez
+                            de inventar las horas.
+                        </p>
+                    </div>
                     <div class="row">
                         <div class="col-md-6"><div class="form-group">
                             <label><input type="checkbox" name="perishable" value="1"
@@ -103,7 +120,7 @@
                 <h5>Receta</h5>
                 <table class="table" id="tblReceta">
                     <thead><tr>
-                        <th>Componente</th><th class="text-right">Cant.</th>
+                        <th>Componente / mano de obra</th><th class="text-right">Cant.</th>
                         <th class="text-right">Costo unit.</th>
                         <th class="text-right">Merma %</th>
                         <th class="text-right">Total</th><th></th>
@@ -112,17 +129,36 @@
                 </table>
                 <form id="fReceta" class="form-inline">
                     <input type="hidden" name="product_id" value="{{.ProductID}}">
-                    <input type="text" name="component_id" class="form-control input-small"
-                           placeholder="Código componente" required>
-                    <input type="number" step="0.0001" name="quantity"
-                           class="form-control input-small" placeholder="Cant." style="width:90px;">
-                    <input type="text" name="unit" class="form-control input-small"
-                           placeholder="Und." style="width:70px;">
-                    <input type="number" step="0.01" name="loss_factor"
-                           class="form-control input-small" placeholder="Merma %" style="width:80px;">
+                    <select name="tipo" id="tipoReceta" class="form-control input-small">
+                        <option value="material">Material</option>
+                        <option value="labor">Mano de obra</option>
+                    </select>
+                    <span id="camposMaterial">
+                        <input type="text" name="component_id" class="form-control input-small"
+                               placeholder="Código componente">
+                        <input type="number" step="0.0001" name="quantity"
+                               class="form-control input-small" placeholder="Cant." style="width:90px;">
+                        <input type="text" name="unit" class="form-control input-small"
+                               placeholder="Und." style="width:70px;">
+                        <input type="number" step="0.01" name="loss_factor"
+                               class="form-control input-small" placeholder="Merma %" style="width:80px;">
+                    </span>
+                    <span id="camposLabor" style="display:none;">
+                        <select name="labor_grade" class="form-control input-small">
+                            <option value="">Grado...</option>
+                            {{range .Grados}}<option value="{{.Code}}">{{.Name}}</option>{{end}}
+                        </select>
+                        <input type="number" step="0.01" min="0.01" name="hours"
+                               class="form-control input-small" placeholder="Horas" style="width:80px;">
+                    </span>
                     <input type="number" name="step_order" class="form-control input-small"
                            value="1" style="width:60px;">
                     <button class="btn btn-default">Añadir</button>
+                    <p class="help-block">
+                        Un renglón de mano de obra se paga por hora del grado. La
+                        receta es la mano de obra estándar: si la defines aquí, la
+                        hoja de horas no se suma y el motor lo avisa.
+                    </p>
                 </form>
             </div>
 
@@ -205,12 +241,16 @@ $(function () {
                     h = '<tr><td colspan="6" class="text-muted">Sin componentes.</td></tr>';
                 }
                 $.each(r.rows, function (i, c) {
+                    var esLabor = (c.labor_grade || '') !== '';
+                    var sub = esLabor
+                        ? '<span class="label label-info">mano de obra</span>'
+                        : '<span class="text-muted">' + c.component_id + '</span>';
+                    var merma = esLabor ? '&mdash;' : (n(c.loss_factor) * 100).toFixed(2);
                     h += '<tr>' +
-                        '<td>' + c.nombre + '<br><span class="text-muted">' +
-                             c.component_id + '</span></td>' +
+                        '<td>' + c.nombre + '<br>' + sub + '</td>' +
                         '<td class="text-right">' + n(c.cantidad) + ' ' + c.unit + '</td>' +
                         '<td class="text-right">' + n(c.unit_cost).toFixed(4) + '</td>' +
-                        '<td class="text-right">' + (n(c.loss_factor) * 100).toFixed(2) + '</td>' +
+                        '<td class="text-right">' + merma + '</td>' +
                         '<td class="text-right">' + n(c.total).toFixed(2) + '</td>' +
                         '<td><a href="#" class="borrarComp" data-c="' + c.component_id +
                              '" data-s="' + c.step + '">x</a></td></tr>';
@@ -219,13 +259,30 @@ $(function () {
             });
     }
 
+    // ---------- Tipo de renglón: material o mano de obra ----------
+    // Los campos que no corresponden se DESHABILITAN, no solo se ocultan:
+    // un campo oculto se sigue enviando y el motor recibiría cantidad y horas
+    // a la vez, con lo que un renglón de labor podría colarse como material.
+    function alternarTipoReceta() {
+        var labor = $('#tipoReceta').val() === 'labor';
+        $('#camposMaterial').toggle(!labor);
+        $('#camposLabor').toggle(labor);
+        $('#camposMaterial :input').prop('disabled', labor);
+        $('#camposLabor :input').prop('disabled', !labor);
+    }
+    $('#tipoReceta').on('change', alternarTipoReceta);
+
     $('#fReceta').on('submit', function (e) {
         e.preventDefault();
         var f = $(this);
         $.post('/cost/recipe/save', f.serialize())
             .done(function (r) {
-                if (r.status === 1) { toastr.success(r.msg); f[0].reset(); cargarReceta(); }
-                else toastr.error(r.error || 'Error');
+                if (r.status === 1) {
+                    toastr.success(r.msg);
+                    f[0].reset();
+                    alternarTipoReceta();
+                    cargarReceta();
+                } else toastr.error(r.error || 'Error');
             })
             .fail(function (x) {
                 toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudo guardar');
@@ -346,6 +403,7 @@ $(function () {
             });
     });
 
+    alternarTipoReceta();
     cargarReceta();
     cargarYield();
 

@@ -83,10 +83,44 @@ CREATE TABLE IF NOT EXISTS `product_recipe` (
   `loss_factor` DECIMAL(6,4) NOT NULL DEFAULT 0,
   `step_order` INT NOT NULL DEFAULT 0,
   `is_substitute` TINYINT NOT NULL DEFAULT 0,
+  -- Mano de obra estándar DENTRO de la receta. Un renglón con labor_grade no
+  -- es material: aporta horas × tarifa del grado. Así una panadería costea
+  -- harina y horas de horneado en el mismo producto, sin un método aparte.
+  `labor_grade` VARCHAR(30) NOT NULL DEFAULT '',
+  `hours` DECIMAL(12,2) NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_recipe` (`product_id`, `component_id`, `step_order`),
   KEY `idx_recipe_producto` (`product_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Columnas de mano de obra para las bases que ya tienen product_recipe. Sin
+-- esto, una base existente sigue con la receta de solo materiales y el motor
+-- no puede distinguir un renglón de labor de uno de material.
+SET @col := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'product_recipe'
+    AND COLUMN_NAME = 'labor_grade'
+);
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `product_recipe` ADD COLUMN `labor_grade` VARCHAR(30) NOT NULL DEFAULT '''' AFTER `is_substitute`',
+  'DO 0');
+PREPARE st FROM @sql;
+EXECUTE st;
+DEALLOCATE PREPARE st;
+
+SET @col := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'product_recipe'
+    AND COLUMN_NAME = 'hours'
+);
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `product_recipe` ADD COLUMN `hours` DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER `labor_grade`',
+  'DO 0');
+PREPARE st FROM @sql;
+EXECUTE st;
+DEALLOCATE PREPARE st;
 
 -- ---------------------------------------------------------------------------
 -- 2. RENDIMIENTO DE DESPIECE. Carnicería.

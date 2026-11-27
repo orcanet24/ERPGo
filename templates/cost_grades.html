@@ -1,0 +1,175 @@
+{{define "content"}}
+{{/* recarga completa permitida */}}
+{{/* tras guardar el grado se recarga para que el nuevo grado esté disponible
+     de inmediato en el selector de la hoja de horas y en la receta. */}}
+{{/*
+  cost_grades.html — Administración de grados de mano de obra.
+
+  POR QUÉ EXISTE. El endpoint /cost/grade/save llevaba tiempo escrito y no
+  tenía pantalla: se podía crear un grado por POST, pero quien configuraba el
+  sistema no tenía dónde. Sin grados, la hoja de horas costea a cero y el
+  costo de un servicio sale incompleto sin que nada lo diga.
+
+  La tarifa NO se edita: se calcula con (salario × (1+carga)) ÷ horas al año ×
+  productividad. Si fuera editable, subir el salario no cambiaría la tarifa y
+  el formulario sería una promesa falsa.
+*/}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Grados de mano de obra</h4></div>
+        <div class="panel-tools pull-right">
+            <a href="/cost" class="btn btn-default">Volver a costos</a>
+        </div>
+    </div>
+    <div class="panel-body">
+
+        <div class="row">
+            <div class="col-md-5">
+                <h5 id="tituloFormGrado">Nuevo grado</h5>
+                <form id="fGrado">
+                    <div class="form-group">
+                        <label>Código</label>
+                        <input type="text" name="code" id="gCode" class="form-control"
+                               placeholder="maestro" required>
+                        <p class="help-block">Identifica el grado en la receta y en la
+                            hoja de horas. Cambiarlo crea un grado nuevo.</p>
+                    </div>
+                    <div class="form-group">
+                        <label>Nombre</label>
+                        <input type="text" name="name" id="gName" class="form-control"
+                               placeholder="Oficial panadero">
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6"><div class="form-group">
+                            <label>Salario anual</label>
+                            <input type="number" step="0.01" min="0" name="base_salary_annual"
+                                   id="gSalario" class="form-control" value="0">
+                        </div></div>
+                        <div class="col-md-6"><div class="form-group">
+                            <label>Carga social (%)</label>
+                            <input type="number" step="0.01" min="0" name="overhead_pct"
+                                   id="gOverhead" class="form-control" value="0">
+                        </div></div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6"><div class="form-group">
+                            <label>Horas al año</label>
+                            <input type="number" min="1" name="hours_per_year"
+                                   id="gHoras" class="form-control" value="2080">
+                        </div></div>
+                        <div class="col-md-6"><div class="form-group">
+                            <label>Productividad</label>
+                            <input type="number" step="0.01" min="0.01" name="productivity_factor"
+                                   id="gProductividad" class="form-control" value="1">
+                            <p class="help-block">1 = tarifa base; 1.25 encarece la hora un 25%.</p>
+                        </div></div>
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" name="active" value="1" id="gActivo" checked>
+                            Activo</label>
+                    </div>
+                    <button class="btn btn-primary">Guardar grado</button>
+                    <button type="button" class="btn btn-default" id="btnNuevoGrado">Limpiar</button>
+                </form>
+            </div>
+
+            <div class="col-md-7">
+                <h5>Grados definidos</h5>
+                <table class="table">
+                    <thead><tr>
+                        <th>Código</th><th>Nombre</th>
+                        <th class="text-right">Salario</th>
+                        <th class="text-right">Carga %</th>
+                        <th class="text-right">Horas/año</th>
+                        <th class="text-right">Productividad</th>
+                        <th class="text-right">Tarifa/hora</th>
+                        <th>Activo</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                    {{range .Grados}}
+                        <tr>
+                            <td><strong>{{.Code}}</strong></td>
+                            <td>{{.Name}}</td>
+                            <td class="text-right">{{printf "%.2f" .Salario}}</td>
+                            <td class="text-right">{{printf "%.2f" .Overhead}}</td>
+                            <td class="text-right">{{.HorasAnual}}</td>
+                            <td class="text-right">{{printf "%.2f" .Productivy}}</td>
+                            <td class="text-right"><strong>{{printf "%.4f" .Tasa}}</strong></td>
+                            <td>{{if .Activo}}Sí{{else}}No{{end}}</td>
+                            <td><a href="#" class="editarGrado"
+                                   data-code="{{.Code}}" data-name="{{.Name}}"
+                                   data-salario="{{printf "%.2f" .Salario}}"
+                                   data-overhead="{{printf "%.2f" .Overhead}}"
+                                   data-horas="{{.HorasAnual}}"
+                                   data-productividad="{{printf "%.2f" .Productivy}}"
+                                   data-activo="{{.Activo}}">editar</a></td>
+                        </tr>
+                    {{else}}
+                        <tr><td colspan="9" class="text-muted">Sin grados definidos.</td></tr>
+                    {{end}}
+                    </tbody>
+                </table>
+                <p class="text-muted">
+                    La tarifa se calcula al momento con el mismo motor que costea:
+                    <em>(salario × (1+carga)) ÷ horas al año × productividad</em>.
+                    No se guarda en la tabla, para que subir un salario no reescriba
+                    el costo de lo ya facturado.
+                </p>
+            </div>
+        </div>
+
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+
+    function limpiar() {
+        $('#fGrado')[0].reset();
+        $('#gCode').prop('readonly', false);
+        $('#tituloFormGrado').text('Nuevo grado');
+        $('#gActivo').prop('checked', true);
+    }
+
+    $('#btnNuevoGrado').on('click', limpiar);
+
+    $('.editarGrado').on('click', function (e) {
+        e.preventDefault();
+        var d = $(this).data();
+        $('#gCode').val(d.code).prop('readonly', true);
+        $('#gName').val(d.name);
+        $('#gSalario').val(d.salario);
+        $('#gOverhead').val(d.overhead);
+        $('#gHoras').val(d.horas);
+        $('#gProductividad').val(d.productividad);
+        $('#gActivo').prop('checked', Number(d.activo) === 1);
+        $('#tituloFormGrado').text('Editando ' + d.code);
+    });
+
+    $('#fGrado').on('submit', function (e) {
+        e.preventDefault();
+        var f = $(this);
+        // Un checkbox desmarcado no se envía. Se añade active=0 DESPUÉS de los
+        // campos: si estuviera marcado, FormValue toma el primer valor (1) y el
+        // grado no se desactiva por accidente.
+        var datos = f.serialize();
+        if (!$('#gActivo').is(':checked')) { datos += '&active=0'; }
+        $.post('/cost/grade/save', datos)
+            .done(function (r) {
+                if (r.status === 1) {
+                    toastr.success(r.msg + ' (tarifa ' + Number(r.tasa).toFixed(4) + '/h)');
+                    window.location.reload();
+                } else {
+                    toastr.error(r.error || 'Error');
+                }
+            })
+            .fail(function (x) {
+                toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudo guardar');
+            });
+    });
+
+});
+</script>
+{{end}}

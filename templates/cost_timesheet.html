@@ -126,7 +126,7 @@ $(function () {
 
     // ---------- Grados ----------
     function cargarGrados() {
-        $.get('/cost/grades').done(function (r) {
+        $.get('/cost/grades/data').done(function (r) {
             var h = '', sel = '';
             $.each(r.rows, function (i, g) {
                 h += '<tr><td>' + g.code + '</td><td>' + g.name + '</td>' +

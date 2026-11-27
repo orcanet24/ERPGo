@@ -1,0 +1,161 @@
+{{define "content"}}
+{{/* recarga completa permitida */}}
+{{/* tras guardar el centro se recarga para que la tarifa quede disponible de
+     inmediato en el selector del producto. */}}
+{{/*
+  cost_centers.html — Administración de centros de costo.
+
+  POR QUÉ EXISTE. El motor ya lee cost_center.overhead_rate_unit y lo suma al
+  costo del producto, pero no había pantalla para escribir la tarifa: el dato
+  existía en el esquema y valía cero siempre. Un indirecto que se muestra y no
+  se puede configurar es una promesa falsa.
+
+  La tarifa por hora se guarda, pero el motor todavía no la aplica: necesita
+  las horas de process_route (Fase 3). Mientras tanto, el cálculo avisa en vez
+  de inventar las horas.
+*/}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Centros de costo</h4></div>
+        <div class="panel-tools pull-right">
+            <a href="/cost" class="btn btn-default">Volver a costos</a>
+        </div>
+    </div>
+    <div class="panel-body">
+
+        <div class="row">
+            <div class="col-md-5">
+                <h5 id="tituloFormCentro">Nuevo centro</h5>
+                <form id="fCentro">
+                    <div class="form-group">
+                        <label>Código</label>
+                        <input type="text" name="code" id="cCode" class="form-control"
+                               placeholder="HORNO" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Nombre</label>
+                        <input type="text" name="name" id="cName" class="form-control"
+                               placeholder="Horno de panadería">
+                    </div>
+                    <div class="form-group">
+                        <label>Tipo</label>
+                        <select name="type" id="cType" class="form-control">
+                            <option value="production">Producción</option>
+                            <option value="service">Servicio</option>
+                            <option value="admin">Administración</option>
+                        </select>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6"><div class="form-group">
+                            <label>Indirecto por unidad</label>
+                            <input type="number" step="0.0001" min="0" name="overhead_rate_unit"
+                                   id="cTasaUnidad" class="form-control" value="0">
+                            <p class="help-block">Se suma por unidad producida. Es la
+                                tarifa que el motor aplica hoy.</p>
+                        </div></div>
+                        <div class="col-md-6"><div class="form-group">
+                            <label>Indirecto por hora</label>
+                            <input type="number" step="0.0001" min="0" name="overhead_rate_hour"
+                                   id="cTasaHora" class="form-control" value="0">
+                            <p class="help-block">Se aplicará con las horas de la ruta
+                                de proceso (Fase 3).</p>
+                        </div></div>
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" name="active" value="1" id="cActivo" checked>
+                            Activo</label>
+                    </div>
+                    <button class="btn btn-primary">Guardar centro</button>
+                    <button type="button" class="btn btn-default" id="btnNuevoCentro">Limpiar</button>
+                </form>
+            </div>
+
+            <div class="col-md-7">
+                <h5>Centros definidos</h5>
+                <table class="table">
+                    <thead><tr>
+                        <th>Código</th><th>Nombre</th><th>Tipo</th>
+                        <th class="text-right">Por unidad</th>
+                        <th class="text-right">Por hora</th>
+                        <th>Activo</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                    {{range .Centros}}
+                        <tr>
+                            <td><strong>{{.Code}}</strong></td>
+                            <td>{{.Name}}</td>
+                            <td>{{.Type}}</td>
+                            <td class="text-right">{{printf "%.4f" .TasaUnidad}}</td>
+                            <td class="text-right">{{printf "%.4f" .TasaHora}}</td>
+                            <td>{{if .Activo}}Sí{{else}}No{{end}}</td>
+                            <td><a href="#" class="editarCentro"
+                                   data-code="{{.Code}}" data-name="{{.Name}}"
+                                   data-type="{{.Type}}"
+                                   data-unidad="{{printf "%.4f" .TasaUnidad}}"
+                                   data-hora="{{printf "%.4f" .TasaHora}}"
+                                   data-activo="{{.Activo}}">editar</a></td>
+                        </tr>
+                    {{else}}
+                        <tr><td colspan="7" class="text-muted">Sin centros definidos.</td></tr>
+                    {{end}}
+                    </tbody>
+                </table>
+                <p class="text-muted">
+                    El indirecto por unidad se suma al costo del producto que tenga
+                    este centro en su configuración. El indirecto por hora espera la
+                    ruta de proceso: el motor lo avisa mientras no exista.
+                </p>
+            </div>
+        </div>
+
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+
+    function limpiar() {
+        $('#fCentro')[0].reset();
+        $('#cCode').prop('readonly', false);
+        $('#tituloFormCentro').text('Nuevo centro');
+        $('#cActivo').prop('checked', true);
+    }
+
+    $('#btnNuevoCentro').on('click', limpiar);
+
+    $('.editarCentro').on('click', function (e) {
+        e.preventDefault();
+        var d = $(this).data();
+        $('#cCode').val(d.code).prop('readonly', true);
+        $('#cName').val(d.name);
+        $('#cType').val(d.type);
+        $('#cTasaUnidad').val(d.unidad);
+        $('#cTasaHora').val(d.hora);
+        $('#cActivo').prop('checked', Number(d.activo) === 1);
+        $('#tituloFormCentro').text('Editando ' + d.code);
+    });
+
+    $('#fCentro').on('submit', function (e) {
+        e.preventDefault();
+        var f = $(this);
+        var datos = f.serialize();
+        if (!$('#cActivo').is(':checked')) { datos += '&active=0'; }
+        $.post('/cost/center/save', datos)
+            .done(function (r) {
+                if (r.status === 1) {
+                    toastr.success(r.msg);
+                    window.location.reload();
+                } else {
+                    toastr.error(r.error || 'Error');
+                }
+            })
+            .fail(function (x) {
+                toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudo guardar');
+            });
+    });
+
+});
+</script>
+{{end}}

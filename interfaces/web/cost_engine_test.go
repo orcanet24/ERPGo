@@ -48,6 +48,7 @@ func tablasCostosPrueba(t *testing.T, db *sql.DB) {
 		)`,
 		`CREATE TABLE product_information (
 			product_id TEXT PRIMARY KEY,
+			product_name TEXT NOT NULL DEFAULT '',
 			cost REAL NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE product_recipe (
@@ -55,8 +56,11 @@ func tablasCostosPrueba(t *testing.T, db *sql.DB) {
 			product_id TEXT NOT NULL,
 			component_id TEXT NOT NULL,
 			quantity REAL NOT NULL DEFAULT 0,
+			unit TEXT NOT NULL DEFAULT '',
 			loss_factor REAL NOT NULL DEFAULT 0,
-			step_order INTEGER NOT NULL DEFAULT 0
+			step_order INTEGER NOT NULL DEFAULT 0,
+			labor_grade TEXT NOT NULL DEFAULT '',
+			hours REAL NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE product_yield (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -546,8 +550,290 @@ func TestCargarCostInputsHorasUsaProductividadDelGrado(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Guardián del esquema
+// Fase 1: composición, mano de obra en receta y pantallas de maestros
 // ---------------------------------------------------------------------------
+
+// TestCalcularCostoRecetaComponeMaterialYManufactura es el criterio de
+// aceptación de la Fase 1: una receta puede traer material Y mano de obra, y el
+// total es la suma de todo, no la parte que el método dejaba ver.
+func TestCalcularCostoRecetaComponeMaterialYManufactura(t *testing.T) {
+	b := calcularCosto(costInputs{
+		ProductID: "PAN",
+		Periodo:   "2026-11",
+		Metodo:    costRecipe,
+		Cantidad:  1,
+		Componentes: []costComponente{
+			{ComponentID: "harina", Cantidad: 1, UnitCost: 2},
+			{ComponentID: "levadura", Cantidad: 0.1, UnitCost: 5},
+		},
+		LaborReceta: []costHora{
+			{Grade: "panadero", Hours: 0.5, HourlyRate: 20, Productivity: 1},
+		},
+		OverheadPerUn: 1.5,
+		DegrPerUnidad: 0.5,
+	})
+
+	if !casiIgual(b.Material, 2.5) {
+		t.Errorf("material: %v; esperado 2.5", b.Material)
+	}
+	if !casiIgual(b.Labor, 10) {
+		t.Errorf("mano de obra: %v; esperado 10 (0.5 h × 20)", b.Labor)
+	}
+	if !casiIgual(b.Overhead, 1.5) || !casiIgual(b.Depreciation, 0.5) {
+		t.Errorf("indirecto/depreciación: %v/%v; esperados 1.5/0.5", b.Overhead, b.Depreciation)
+	}
+	if !casiIgual(b.Final, 14.5) {
+		t.Errorf("final: %v; esperado 14.5 (2.5 + 10 + 1.5 + 0.5)", b.Final)
+	}
+
+	materiales, labores := 0, 0
+	for _, tr := range b.Traces {
+		switch tr.Component {
+		case compMaterial:
+			materiales++
+		case compLabor:
+			labores++
+		}
+	}
+	if materiales != 2 || labores != 1 {
+		t.Errorf("trazas material/labor: %d/%d; esperadas 2/1", materiales, labores)
+	}
+}
+
+// TestCalcularCostoRendimientoSumaHorasDeDespiece fija la composición en el
+// método de carnicería: el material se reparte por rendimiento y la mano de
+// obra del despiece se suma encima. Antes, YIELD devolvía antes de leer horas.
+func TestCalcularCostoRendimientoSumaHorasDeDespiece(t *testing.T) {
+	b := calcularCosto(costInputs{
+		ProductID: "LOMO",
+		Periodo:   "2026-11",
+		Metodo:    costYield,
+		Cantidad:  100,
+		Salida:    1000,
+		YieldBase: costYieldRow{ExpectedPct: 80},
+		Horas: []costHora{
+			{Grade: "carnicero", Hours: 2, HourlyRate: 15, Productivity: 1},
+		},
+	})
+
+	// 1000 de canal / (100 kg × 80%) = 12.5 por kg de venta.
+	if !casiIgual(b.Material, 12.5) {
+		t.Errorf("material por rendimiento: %v; esperado 12.5", b.Material)
+	}
+	// 2 h × 15 / 100 unidades = 0.3 por unidad.
+	if !casiIgual(b.Labor, 0.3) {
+		t.Errorf("mano de obra por unidad: %v; esperado 0.3", b.Labor)
+	}
+	if !casiIgual(b.Final, 12.8) {
+		t.Errorf("final: %v; esperado 12.8", b.Final)
+	}
+}
+
+// TestCargarCostInputsRecetaConManoDeObraNoUsaHojaDeHoras protege la regla
+// contra el doble conteo: si la receta ya trae la hora estándar, la hoja de
+// horas no se suma y el cálculo lo dice.
+func TestCargarCostInputsRecetaConManoDeObraNoUsaHojaDeHoras(t *testing.T) {
+	s, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO product_cost_config
+		(product_id, costing_method) VALUES ('PAN', 'RECIPE')`); err != nil {
+		t.Fatalf("insertar configuración: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, cost) VALUES ('PAN', 0)`); err != nil {
+		t.Fatalf("insertar producto: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, cost) VALUES ('harina', 2)`); err != nil {
+		t.Fatalf("insertar insumo: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO labor_grade
+		(code, name, base_salary_annual, overhead_pct, hours_per_year, productivity_factor, active)
+		VALUES ('panadero', 'Panadero', 20800, 0, 2080, 1, 1)`); err != nil {
+		t.Fatalf("insertar grado: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_recipe
+		(product_id, component_id, quantity, unit, loss_factor, step_order, labor_grade, hours)
+		VALUES ('PAN', 'harina', 1, 'kg', 0, 1, '', 0)`); err != nil {
+		t.Fatalf("insertar material: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_recipe
+		(product_id, component_id, quantity, unit, loss_factor, step_order, labor_grade, hours)
+		VALUES ('PAN', 'MO:panadero', 0.5, 'h', 0, 2, 'panadero', 0.5)`); err != nil {
+		t.Fatalf("insertar mano de obra: %v", err)
+	}
+	// Horas reales del mismo producto: no deben sumarse a la receta.
+	if _, err := db.Exec(`INSERT INTO cost_timesheet
+		(employee_id, work_date, hours, billable, product_id, grade)
+		VALUES (1, '2026-11-05', 3, 1, 'PAN', 'panadero')`); err != nil {
+		t.Fatalf("insertar horas: %v", err)
+	}
+
+	in := s.cargarCostInputs(db, "PAN", "2026-11", 1)
+	if len(in.LaborReceta) != 1 {
+		t.Fatalf("mano de obra de receta: %d; esperada 1", len(in.LaborReceta))
+	}
+	if len(in.Horas) != 0 {
+		t.Errorf("horas de la hoja: %d; esperadas 0 (la receta manda)", len(in.Horas))
+	}
+	if !avisoContiene(in.Avisos, "dos veces") {
+		t.Errorf("falta el aviso de doble conteo en %v", in.Avisos)
+	}
+
+	b := calcularCosto(in)
+	// Material: 1 kg × 2. Mano de obra: 0.5 h × (20800/2080 = 10) = 5.
+	if !casiIgual(b.Material, 2) || !casiIgual(b.Labor, 5) {
+		t.Errorf("desglose: material %v, labor %v; esperados 2 y 5", b.Material, b.Labor)
+	}
+	if !casiIgual(b.Final, 7) {
+		t.Errorf("final: %v; esperado 7", b.Final)
+	}
+}
+
+// TestCargarCostInputsUsaHojaCuandoRecetaNoTieneLabor cierra el otro lado de la
+// regla: una receta sin mano de obra propia sí toma las horas registradas.
+func TestCargarCostInputsUsaHojaCuandoRecetaNoTieneLabor(t *testing.T) {
+	s, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO product_cost_config
+		(product_id, costing_method) VALUES ('PAN', 'RECIPE')`); err != nil {
+		t.Fatalf("insertar configuración: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, cost) VALUES ('PAN', 0)`); err != nil {
+		t.Fatalf("insertar producto: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, cost) VALUES ('harina', 2)`); err != nil {
+		t.Fatalf("insertar insumo: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO labor_grade
+		(code, name, base_salary_annual, overhead_pct, hours_per_year, productivity_factor, active)
+		VALUES ('panadero', 'Panadero', 20800, 0, 2080, 1, 1)`); err != nil {
+		t.Fatalf("insertar grado: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_recipe
+		(product_id, component_id, quantity, unit, loss_factor, step_order, labor_grade, hours)
+		VALUES ('PAN', 'harina', 1, 'kg', 0, 1, '', 0)`); err != nil {
+		t.Fatalf("insertar material: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO cost_timesheet
+		(employee_id, work_date, hours, billable, product_id, grade)
+		VALUES (1, '2026-11-05', 4, 1, 'PAN', 'panadero')`); err != nil {
+		t.Fatalf("insertar horas: %v", err)
+	}
+
+	in := s.cargarCostInputs(db, "PAN", "2026-11", 1)
+	if len(in.LaborReceta) != 0 {
+		t.Fatalf("mano de obra de receta: %d; esperada 0", len(in.LaborReceta))
+	}
+	if len(in.Horas) != 1 {
+		t.Fatalf("horas de la hoja: %d; esperada 1", len(in.Horas))
+	}
+	b := calcularCosto(in)
+	if !casiIgual(b.Labor, 40) {
+		t.Errorf("mano de obra: %v; esperada 40 (4 h × 10)", b.Labor)
+	}
+}
+
+// TestCargarCostInputsRendimientoNoPierdeHoras reproduce el return que cortaba
+// el cálculo de YIELD antes de leer la hoja de horas.
+func TestCargarCostInputsRendimientoNoPierdeHoras(t *testing.T) {
+	s, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO product_cost_config
+		(product_id, costing_method) VALUES ('LOMO', 'YIELD')`); err != nil {
+		t.Fatalf("insertar configuración: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, cost) VALUES ('LOMO', 0)`); err != nil {
+		t.Fatalf("insertar producto: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, cost) VALUES ('CANAL', 10)`); err != nil {
+		t.Fatalf("insertar entrada: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_yield
+		(input_product_id, output_product_id, expected_pct) VALUES ('CANAL', 'LOMO', 80)`); err != nil {
+		t.Fatalf("insertar rendimiento: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO labor_grade
+		(code, name, base_salary_annual, overhead_pct, hours_per_year, productivity_factor, active)
+		VALUES ('carnicero', 'Carnicero', 31200, 0, 2080, 1, 1)`); err != nil {
+		t.Fatalf("insertar grado: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO cost_timesheet
+		(employee_id, work_date, hours, billable, product_id, grade)
+		VALUES (1, '2026-11-05', 2, 1, 'LOMO', 'carnicero')`); err != nil {
+		t.Fatalf("insertar horas: %v", err)
+	}
+
+	in := s.cargarCostInputs(db, "LOMO", "2026-11", 100)
+	if len(in.Horas) != 1 {
+		t.Fatalf("horas leídas: %d; esperada 1 (YIELD no debe retornar antes)", len(in.Horas))
+	}
+	b := calcularCosto(in)
+	if !casiIgual(b.Labor, 0.3) {
+		t.Errorf("mano de obra: %v; esperada 0.3 (2 h × 15 / 100)", b.Labor)
+	}
+	if !casiIgual(b.Material, 12.5) {
+		t.Errorf("material: %v; esperado 12.5", b.Material)
+	}
+}
+
+// TestGuardarRecetaManoDeObraSeLeeComoHoras prueba el camino lector: se
+// insertan directamente un renglón de material y uno de mano de obra, y la
+// lectura los devuelve valorados cada uno a su modo (material con merma,
+// labor con tarifa del grado y horas en cantidad). El guardado por formulario
+// pasa por guardarReceta, que usa ON DUPLICATE KEY (sintaxis MySQL) y no se
+// puede ejecutar contra SQLite en los tests; la validación de ese camino vive
+// en cost_config_service.go y se ejerce en integración real.
+func TestGuardarRecetaManoDeObraSeLeeComoHoras(t *testing.T) {
+	s, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO labor_grade
+		(code, name, base_salary_annual, overhead_pct, hours_per_year, productivity_factor, active)
+		VALUES ('panadero', 'Panadero', 20800, 0, 2080, 1, 1)`); err != nil {
+		t.Fatalf("insertar grado: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information
+		(product_id, product_name, cost) VALUES ('harina', 'Harina', 2)`); err != nil {
+		t.Fatalf("insertar insumo: %v", err)
+	}
+	// Inserción directa porque ON DUPLICATE KEY no existe en SQLite.
+	if _, err := db.Exec(`INSERT INTO product_recipe
+		(product_id, component_id, quantity, unit, loss_factor, step_order, labor_grade, hours)
+		VALUES ('PAN', 'MO:panadero', 0.5, 'h', 0, 1, 'panadero', 0.5)`); err != nil {
+		t.Fatalf("insertar mano de obra: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_recipe
+		(product_id, component_id, quantity, unit, loss_factor, step_order, labor_grade, hours)
+		VALUES ('PAN', 'harina', 2, 'kg', 0, 2, '', 0)`); err != nil {
+		t.Fatalf("insertar material: %v", err)
+	}
+
+	receta, err := s.listarReceta(db, "PAN")
+	if err != nil {
+		t.Fatalf("listar receta: %v", err)
+	}
+	if len(receta) != 2 {
+		t.Fatalf("renglones: %d; esperado 2", len(receta))
+	}
+	// El material conserva su identidad y su merma.
+	if receta[0].ComponentID != "MO:panadero" || receta[0].LaborGrade != "panadero" {
+		t.Errorf("renglón 0 no es labor: %+v", receta[0])
+	}
+	if !casiIgual(receta[0].Hours, 0.5) || !casiIgual(receta[0].Cantidad, 0.5) || receta[0].Unit != "h" {
+		t.Errorf("horas/unidad del labor: %+v", receta[0])
+	}
+	if !casiIgual(receta[0].UnitCost, 10) || !casiIgual(receta[0].Total, 5) {
+		t.Errorf("valoración del labor: tarifa %v, total %v; esperados 10 y 5", receta[0].UnitCost, receta[0].Total)
+	}
+	if receta[1].ComponentID != "harina" || receta[1].LaborGrade != "" {
+		t.Errorf("renglón 1 no es material: %+v", receta[1])
+	}
+	if !casiIgual(receta[1].Total, 4) {
+		t.Errorf("total del material: %v; esperado 4 (2 kg × 2)", receta[1].Total)
+	}
+}
 
 // bloqueDeTabla extrae el CREATE TABLE de una tabla concreta. Se usa para
 // comprobar la definición y no una palabra suelta en cualquier parte del
@@ -609,5 +895,44 @@ func TestEsquemaCostComponentAdmiteVariosMateriales(t *testing.T) {
 	}
 	if !strings.Contains(string(migracion), "DROP INDEX `uq_cost_component`") {
 		t.Error("schema_z_costos.sql no rehace la clave única en bases existentes")
+	}
+}
+
+// TestEsquemaProductRecipeTieneManoDeObra es el guardián de la Fase 1: si
+// alguien vuelve a dejar la receta sin labor_grade/hours, el motor no puede
+// distinguir un renglón de mano de obra y la composición se rompe en silencio.
+func TestEsquemaProductRecipeTieneManoDeObra(t *testing.T) {
+	archivos := []string{
+		"../../migrations/schema_z_costos.sql",
+		"../../migrations/schema_reconstruido_02_inventory.sql",
+		"../../schema/esquema_canonico_mysql.sql",
+	}
+	for _, ruta := range archivos {
+		contenido, err := os.ReadFile(ruta)
+		if err != nil {
+			t.Fatalf("leer %s: %v", ruta, err)
+		}
+		bloque := bloqueDeTabla(string(contenido), "product_recipe")
+		if bloque == "" {
+			t.Errorf("%s no define product_recipe", ruta)
+			continue
+		}
+		if !strings.Contains(bloque, "labor_grade") {
+			t.Errorf("%s: product_recipe no declara labor_grade", ruta)
+		}
+		if !strings.Contains(bloque, "`hours`") {
+			t.Errorf("%s: product_recipe no declara hours", ruta)
+		}
+	}
+
+	// La migración del módulo debe además corregir las bases que ya existen.
+	migracion, err := os.ReadFile("../../migrations/schema_z_costos.sql")
+	if err != nil {
+		t.Fatalf("leer schema_z_costos.sql: %v", err)
+	}
+	for _, columna := range []string{"labor_grade", "hours"} {
+		if !strings.Contains(string(migracion), "ADD COLUMN `"+columna+"`") {
+			t.Errorf("schema_z_costos.sql no añade %s a las bases existentes", columna)
+		}
 	}
 }

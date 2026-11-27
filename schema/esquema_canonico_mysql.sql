@@ -2745,6 +2745,8 @@ CREATE TABLE `product_recipe` (
   `loss_factor` decimal(6,4) NOT NULL DEFAULT '0.0000',
   `step_order` int NOT NULL DEFAULT '0',
   `is_substitute` tinyint NOT NULL DEFAULT '0',
+  `labor_grade` varchar(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `hours` decimal(12,2) NOT NULL DEFAULT '0.00',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_recipe` (`product_id`,`component_id`,`step_order`),
   KEY `idx_recipe_producto` (`product_id`)

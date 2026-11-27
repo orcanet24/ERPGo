@@ -174,6 +174,10 @@ func metodoDeCosteoValido(m string) bool {
 // ---------------------------------------------------------------------------
 
 // CostReceta es un renglón de receta, con el costo del componente ya resuelto.
+//
+// Un renglón puede ser MATERIAL (component_id + cantidad) o MANO DE OBRA
+// (labor_grade + horas). La distinción es por labor_grade: si viene, el renglón
+// se paga por hora del grado y no por costo unitario del componente.
 type CostReceta struct {
 	ProductID   string  `json:"product_id"`
 	ComponentID string  `json:"component_id"`
@@ -184,6 +188,8 @@ type CostReceta struct {
 	LossFactor  float64 `json:"loss_factor"`
 	Total       float64 `json:"total"`
 	Step        int     `json:"step"`
+	LaborGrade  string  `json:"labor_grade"`
+	Hours       float64 `json:"hours"`
 }
 
 // listarReceta devuelve los componentes de un producto con su costo.
@@ -195,7 +201,8 @@ type CostReceta struct {
 func (s *Server) listarReceta(db *sql.DB, productID string) ([]CostReceta, error) {
 	rows, err := db.Query(`SELECT r.product_id, r.component_id,
 		IFNULL(p.product_name,''), r.quantity, r.unit,
-		IFNULL(p.cost,0), IFNULL(r.loss_factor,0), r.step_order
+		IFNULL(p.cost,0), IFNULL(r.loss_factor,0), r.step_order,
+		IFNULL(r.labor_grade,''), IFNULL(r.hours,0)
 		FROM product_recipe r
 		LEFT JOIN product_information p ON p.product_id = r.component_id
 		WHERE r.product_id = ?
@@ -209,8 +216,22 @@ func (s *Server) listarReceta(db *sql.DB, productID string) ([]CostReceta, error
 	for rows.Next() {
 		var r CostReceta
 		if err := rows.Scan(&r.ProductID, &r.ComponentID, &r.Nombre,
-			&r.Cantidad, &r.Unit, &r.UnitCost, &r.LossFactor, &r.Step); err != nil {
+			&r.Cantidad, &r.Unit, &r.UnitCost, &r.LossFactor, &r.Step,
+			&r.LaborGrade, &r.Hours); err != nil {
 			return nil, fmt.Errorf("leer renglón de receta: %w", err)
+		}
+		if strings.TrimSpace(r.LaborGrade) != "" {
+			// Mano de obra: la tarifa se calcula con el mismo motor que la hoja
+			// de horas, y la cantidad que se muestra son las horas. Sin esta
+			// rama, un renglón de labor se leería como un componente sin costo y
+			// la pantalla diría que falta el costo del grado.
+			r.Nombre = "Mano de obra: " + r.LaborGrade
+			r.UnitCost = s.tasaDeGrado(db, r.LaborGrade)
+			r.Cantidad = r.Hours
+			r.Unit = "h"
+			r.Total = r.Hours * r.UnitCost
+			out = append(out, r)
+			continue
 		}
 		// La merma va por COMPONENTE: la tela se pierde en el corte y el botón
 		// no. Una merma única sobre la receta entera carga la culpa a los que no
@@ -227,21 +248,46 @@ func (s *Server) listarReceta(db *sql.DB, productID string) ([]CostReceta, error
 // declara el UNIQUE de la tabla. Recalcular una receta no puede duplicar
 // renglones: un total que cuadra al doble es peor que uno que no cuadra.
 func guardarReceta(db *sql.DB, r CostReceta) error {
-	if strings.TrimSpace(r.ProductID) == "" || strings.TrimSpace(r.ComponentID) == "" {
-		return fmt.Errorf("el producto y el componente son obligatorios")
+	if strings.TrimSpace(r.ProductID) == "" {
+		return fmt.Errorf("el producto es obligatorio")
 	}
-	if r.Cantidad <= 0 {
-		return fmt.Errorf("la cantidad del componente debe ser mayor que cero")
-	}
-	if r.LossFactor < 0 || r.LossFactor > 1 {
-		return fmt.Errorf("la merma del componente va entre 0 y 1, y llegó %.4f", r.LossFactor)
+	r.LaborGrade = strings.TrimSpace(r.LaborGrade)
+	if r.LaborGrade != "" {
+		if r.Hours <= 0 {
+			return fmt.Errorf("las horas de mano de obra deben ser mayores que cero")
+		}
+		// La clave única de la tabla exige un component_id no vacío. Se usa un
+		// prefijo reservado para que un renglón de labor nunca choque con un
+		// material que se llame igual que el grado.
+		if strings.TrimSpace(r.ComponentID) == "" {
+			r.ComponentID = "MO:" + r.LaborGrade
+		}
+		// En un renglón de labor la cantidad ES la duración: se guardan las
+		// mismas horas en quantity para que una consulta vieja no lea cero.
+		r.Cantidad = r.Hours
+		r.Unit = "h"
+		r.LossFactor = 0
+	} else {
+		if strings.TrimSpace(r.ComponentID) == "" {
+			return fmt.Errorf("el componente es obligatorio para un renglón de material")
+		}
+		if r.Cantidad <= 0 {
+			return fmt.Errorf("la cantidad del componente debe ser mayor que cero")
+		}
+		if r.LossFactor < 0 || r.LossFactor > 1 {
+			return fmt.Errorf("la merma del componente va entre 0 y 1, y llegó %.4f", r.LossFactor)
+		}
+		r.Hours = 0
 	}
 	_, err := db.Exec(`INSERT INTO product_recipe
-		(product_id, component_id, quantity, unit, loss_factor, step_order)
-		VALUES (?,?,?,?,?,?)
+		(product_id, component_id, quantity, unit, loss_factor, step_order,
+		 labor_grade, hours)
+		VALUES (?,?,?,?,?,?,?,?)
 		ON DUPLICATE KEY UPDATE quantity=VALUES(quantity), unit=VALUES(unit),
-		 loss_factor=VALUES(loss_factor)`,
-		r.ProductID, r.ComponentID, r.Cantidad, r.Unit, r.LossFactor, r.Step)
+		 loss_factor=VALUES(loss_factor), labor_grade=VALUES(labor_grade),
+		 hours=VALUES(hours)`,
+		r.ProductID, r.ComponentID, r.Cantidad, r.Unit, r.LossFactor, r.Step,
+		r.LaborGrade, r.Hours)
 	if err != nil {
 		return fmt.Errorf("guardar componente de receta: %w", err)
 	}
