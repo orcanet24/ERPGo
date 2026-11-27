@@ -1,340 +1,95 @@
 package web
 
-// Pruebas de que Cuentas por Cobrar y Cuentas por Pagar son SECCIONES del menú.
+// Pruebas de que Cuentas por Cobrar y Cuentas por Pagar son SECCIONES del menú
+// y no el último renglón suelto de otro módulo.
 //
-// POR QUÉ SE PRUEBA LEYENDO LAS MIGRACIONES Y NO CON UNA LISTA A MANO. El menú
-// lateral no vive en una plantilla: vive en la tabla `menu`, y quien la llena son
-// los archivos de migrations/*.sql al arrancar. Un renglón que se cuelga del
-// grupo equivocado —o que pide un permiso que nadie tiene sembrado— no da ningún
-// error: simplemente la sección aparece escondida dentro de otro grupo, o no
-// aparece, y desde el código todo parece correcto. Fue exactamente lo que pasó:
-// las dos entradas quedaron como el último renglón DENTRO de Clientes y de
-// Proveedores. Por eso esta prueba mira el efecto real de las sentencias, en el
-// mismo orden en que las aplica el arranque, y después pasa el resultado por el
-// MISMO filtro que arma el sidebar (buildMenuItem).
+// POR QUÉ SE MIRAN LAS MIGRACIONES Y NO UNA LISTA. El menú lateral vive en la
+// tabla `menu`, y quien la llena son los archivos de migrations/*.sql al
+// arrancar. Una fila que queda colgada del grupo equivocado —o que pide un
+// permiso que nadie tiene sembrado— no da ningún error: la sección simplemente
+// aparece escondida dentro de otro grupo, o no aparece, y desde el código todo
+// parece correcto.
 //
-// LO QUE COMPRUEBA CADA CASO:
+// LA REGLA CAMBIÓ CON LOS DEPARTAMENTOS. Antes estas dos pantallas tenían que
+// estar en el PRIMER nivel. Ahora su sitio es el departamento de su función
+// («Clientes y cobros» y «Compras y proveedores»): colgando de él se llega en dos
+// clics y se leen junto a lo que les da sentido. Lo que la prueba sigue exigiendo
+// es lo que importa: que se vean, que pidan un permiso real, que ese permiso las
+// esconda a quien no lo tiene, y que no se conviertan en un grupo vacío.
 //
-//	1. que alguna migración inserte la fila — si no, nadie llega a la pantalla;
-//	2. que quede de primer nivel (parent_id NULL), no colgada de otro módulo;
-//	3. que esté activa y con su nombre;
-//	4. que su permiso exista en sub_module, porque si no el filtro la esconde
-//	    para todos, incluido el administrador de la empresa;
-//	5. que nadie cuelgue de ella: un nodo con hijos se pinta como grupo y su URL
-//	    deja de ser un enlace;
-//	6. y que el filtro real la muestre con el permiso concedido y la esconda sin
-//	    él —el menú es una promesa: no puede ofrecer lo que el middleware
-//	    responde 403—.
-//
-// Lo que NO se prueba, porque no se puede sin un MySQL: que las sentencias corran
-// contra el motor. Eso lo cubre el registro de migraciones del arranque.
+// Se aplican las sentencias REALES de las migraciones (ver menu_estructura_test.go
+// para el porqué de la simulación en vez de leer SQLite, donde la siembra grande
+// del menú no llega a la tabla).
 
-import (
-	"io/fs"
-	"regexp"
-	"sort"
-	"strconv"
-	"strings"
-	"testing"
+import "testing"
 
-	"erpgo"
-)
-
-var (
-	reInsertDeMenu = regexp.MustCompile("(?is)^\\s*INSERT\\s+(?:IGNORE\\s+)?INTO\\s+`?menu`?\\s*\\(([^)]*)\\)\\s*(VALUES|SELECT)\\b(.*)$")
-	reUpdateDeMenu = regexp.MustCompile("(?is)^\\s*UPDATE\\s+`?menu`?\\s+SET\\s+(.+?)\\s+WHERE\\s+`?url`?\\s*=\\s*'([^']*)'")
-	reInsertDeSub  = regexp.MustCompile("(?is)^\\s*INSERT\\s+(?:IGNORE\\s+)?INTO\\s+`?sub_module`?\\s*\\(([^)]*)\\)\\s*(VALUES|SELECT)\\b(.*)$")
-)
-
-// sentenciasDeMenuEnLasMigraciones devuelve, en orden alfabético de archivo —el
-// mismo que usa el arranque—, las sentencias que tocan `menu` o `sub_module`.
-func sentenciasDeMenuEnLasMigraciones(t *testing.T) []string {
-	t.Helper()
-	entradas, err := fs.ReadDir(erpgo.Migrations(), "migrations")
-	if err != nil {
-		t.Fatalf("no se pudieron listar las migraciones: %v", err)
-	}
-	nombres := make([]string, 0, len(entradas))
-	for _, e := range entradas {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-			nombres = append(nombres, e.Name())
-		}
-	}
-	sort.Strings(nombres)
-
-	var out []string
-	for _, nombre := range nombres {
-		b, err := fs.ReadFile(erpgo.Migrations(), "migrations/"+nombre)
-		if err != nil {
-			t.Fatalf("no se pudo leer %s: %v", nombre, err)
-		}
-		// Los comentarios se quitan primero: los archivos hablan del menú en sus
-		// cabeceras y esas palabras no son sentencias.
-		limpio := reComentarioBloque.ReplaceAllString(string(b), "")
-		limpio = reComentarioLinea.ReplaceAllString(limpio, "")
-		for _, s := range partirSentenciasSQL(limpio) {
-			u := strings.ToUpper(s)
-			if strings.Contains(u, "MENU") || strings.Contains(u, "SUB_MODULE") {
-				out = append(out, s)
-			}
-		}
-	}
-	return out
-}
-
-// partirSentenciasSQL parte por punto y coma fuera de los literales de texto.
-func partirSentenciasSQL(sql string) []string {
-	var out []string
-	var b strings.Builder
-	enTexto := false
-	for i := 0; i < len(sql); i++ {
-		c := sql[i]
-		switch {
-		case c == '\'':
-			enTexto = !enTexto
-			b.WriteByte(c)
-		case c == ';' && !enTexto:
-			out = append(out, b.String())
-			b.Reset()
-		default:
-			b.WriteByte(c)
-		}
-	}
-	if strings.TrimSpace(b.String()) != "" {
-		out = append(out, b.String())
-	}
-	return out
-}
-
-// gruposParentizados devuelve el contenido de cada (...) de primer nivel y se
-// detiene cuando lo que sigue ya no es otra tupla: así el `ON DUPLICATE KEY
-// UPDATE` que cierra los INSERT de siembra no se confunde con valores.
-func gruposParentizados(s string) []string {
-	var out []string
-	i := 0
-	for i < len(s) {
-		for i < len(s) && (s[i] == ' ' || s[i] == '\n' || s[i] == '\r' || s[i] == '\t' || s[i] == ',') {
-			i++
-		}
-		if i >= len(s) || s[i] != '(' {
-			break
-		}
-		desde := i
-		nivel := 0
-		enTexto := false
-		cerrado := false
-		for ; i < len(s); i++ {
-			c := s[i]
-			if c == '\'' {
-				enTexto = !enTexto
-				continue
-			}
-			if enTexto {
-				continue
-			}
-			if c == '(' {
-				nivel++
-			} else if c == ')' {
-				nivel--
-				if nivel == 0 {
-					i++
-					cerrado = true
-					break
-				}
-			}
-		}
-		if !cerrado {
-			break
-		}
-		out = append(out, s[desde+1:i-1])
-	}
-	return out
-}
-
-// camposDeFila parte una lista de valores por comas de primer nivel. Los
-// paréntesis se respetan porque `decimal(18,2)` es un valor, no dos.
-func camposDeFila(s string) []string {
-	var out []string
-	nivel := 0
-	enTexto := false
-	desde := 0
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c == '\'':
-			enTexto = !enTexto
-		case enTexto:
-		case c == '(' || c == '[':
-			nivel++
-		case c == ')' || c == ']':
-			nivel--
-		case c == ',' && nivel == 0:
-			out = append(out, s[desde:i])
-			desde = i + 1
-		}
-	}
-	out = append(out, s[desde:])
-	for i, v := range out {
-		out[i] = limpiarValorSQL(v)
-	}
-	return out
-}
-
-// limpiarValorSQL quita las comillas y traduce NULL a cadena vacía, que es como
-// se representa «sin valor» en estas comprobaciones. También quita el acento
-// grave: los nombres de columna vienen envueltos (“ `url` “) y sin sacarlo la
-// fila quedaría con la clave "`url`" y la comprobación no encontraría nada.
-func limpiarValorSQL(v string) string {
-	v = strings.TrimSpace(v)
-	if len(v) >= 2 && v[0] == '\'' && v[len(v)-1] == '\'' {
-		return strings.ReplaceAll(v[1:len(v)-1], "''", "'")
-	}
-	if len(v) >= 2 && v[0] == '`' && v[len(v)-1] == '`' {
-		return v[1 : len(v)-1]
-	}
-	if strings.EqualFold(v, "NULL") {
-		return ""
-	}
-	return v
-}
-
-// antesDeFrom corta en el FROM de primer nivel: en un INSERT ... SELECT los
-// valores son los literales que van entre SELECT y FROM.
-func antesDeFrom(s string) string {
-	up := strings.ToUpper(s)
-	nivel := 0
-	enTexto := false
-	for i := 0; i+5 <= len(s); i++ {
-		c := s[i]
-		switch {
-		case c == '\'':
-			enTexto = !enTexto
-		case enTexto:
-		case c == '(':
-			nivel++
-		case c == ')':
-			nivel--
-		case nivel == 0 && strings.HasPrefix(up[i:], "FROM "):
-			return s[:i]
-		}
-	}
-	return s
-}
-
-// filasDeInsert devuelve una fila por cada renglón que inserta la sentencia:
-// varias tuplas en un VALUES, o una sola en un INSERT ... SELECT.
-func filasDeInsert(columnas, modo, resto string) []map[string]string {
-	columnasLimpias := camposDeFila(columnas)
-	asociar := func(valores []string) map[string]string {
-		fila := map[string]string{}
-		for i, c := range columnasLimpias {
-			if i < len(valores) {
-				fila[strings.ToLower(c)] = valores[i]
-			}
-		}
-		return fila
-	}
-	if strings.EqualFold(modo, "VALUES") {
-		var out []map[string]string
-		for _, tupla := range gruposParentizados(resto) {
-			out = append(out, asociar(camposDeFila(tupla)))
-		}
-		return out
-	}
-	return []map[string]string{asociar(camposDeFila(antesDeFrom(resto)))}
-}
-
-// TestCxCYCxPSonSeccionesDelMenu recorre las migraciones, arma el menú que
-// quedaría en la base y comprueba que las dos secciones se ven.
 func TestCxCYCxPSonSeccionesDelMenu(t *testing.T) {
-	filas := map[string]map[string]string{} // por URL: última escritura del menú
-	directorios := map[string]bool{}        // sub_module.directory sembrados
+	filas := menuSimulado(t)
+	sembrados := subModuleSembrados(t)
 
-	for _, st := range sentenciasDeMenuEnLasMigraciones(t) {
-		switch {
-		case reInsertDeMenu.MatchString(st):
-			m := reInsertDeMenu.FindStringSubmatch(st)
-			// Un INSERT con su tabla derivada sólo entra si la fila no estaba
-			// (es el patrón que se usa para no duplicar entradas); el resto de
-			// los INSERT de siembra llevan ON DUPLICATE KEY UPDATE, así que
-			// reescriben la fila con los valores que traen.
-			soloSiFalta := strings.EqualFold(m[2], "SELECT")
-			for _, fila := range filasDeInsert(m[1], m[2], m[3]) {
-				url := fila["url"]
-				if url == "" {
-					continue
-				}
-				if _, ya := filas[url]; ya && soloSiFalta {
-					continue
-				}
-				filas[url] = fila
-			}
-		case reUpdateDeMenu.MatchString(st):
-			m := reUpdateDeMenu.FindStringSubmatch(st)
-			fila, existe := filas[m[2]]
-			if !existe {
-				continue // un UPDATE no crea la fila
-			}
-			for _, asig := range camposDeFila(m[1]) {
-				partes := strings.SplitN(asig, "=", 2)
-				if len(partes) != 2 {
-					continue
-				}
-				// La columna va con acento grave en el archivo (`parent_id`): si no
-				// se quita, la asignación escribe la clave "`parent_id`" y la fila
-				// conserva el valor viejo, con lo que el UPDATE parecería no correr.
-				fila[limpiarValorSQL(strings.ToLower(strings.TrimSpace(partes[0])))] = limpiarValorSQL(partes[1])
-			}
-			filas[m[2]] = fila
-		case reInsertDeSub.MatchString(st):
-			m := reInsertDeSub.FindStringSubmatch(st)
-			for _, fila := range filasDeInsert(m[1], m[2], m[3]) {
-				if dir := fila["directory"]; dir != "" {
-					directorios[dir] = true
-				}
-			}
+	porID := map[int]*filaMenu{}
+	porURL := map[string]*filaMenu{}
+	for id, f := range filas {
+		porID[id] = f
+		if f.url != "" && f.status == 1 {
+			porURL[f.url] = f
 		}
 	}
 
-	casos := []struct{ url, label, perm string }{
-		{"/cartera/list", "Cuentas por Cobrar", "customer_ledger"},
-		{"/pagar/list", "Cuentas por Pagar", "supplier_payment"},
+	casos := []struct {
+		url, label, perm, departamento string
+	}{
+		{"/cartera/list", "Cuentas por Cobrar", "customer_ledger", "Clientes y cobros"},
+		{"/pagar/list", "Cuentas por Pagar", "supplier_payment", "Compras y proveedores"},
 	}
+
 	for _, c := range casos {
-		fila, existe := filas[c.url]
+		fila, existe := porURL[c.url]
 		if !existe {
-			t.Errorf("ninguna migración inserta la entrada de menú %s: el módulo existe pero no hay forma de llegar a él desde la barra lateral", c.url)
+			t.Errorf("ninguna migración deja visible la entrada de menú %s: el módulo existe pero no hay forma de llegar a él desde la barra lateral", c.url)
 			continue
 		}
-		if fila["parent_id"] != "" {
-			t.Errorf("%s cuelga del menú con id %q: es una sección propia y tiene que estar en el primer nivel, como Devoluciones o Contabilidad; colgada de un grupo ajeno queda como el último renglón de otro módulo y no se encuentra",
-				c.url, fila["parent_id"])
+		if fila.label != c.label {
+			t.Errorf("la entrada %s se llama %q y se esperaba %q", c.url, fila.label, c.label)
 		}
-		if fila["status"] != "1" {
-			t.Errorf("la entrada %s queda con status=%q: el menú sólo lee las filas activas", c.url, fila["status"])
-		}
-		if fila["label"] != c.label {
-			t.Errorf("la entrada %s se llama %q y se esperaba %q", c.url, fila["label"], c.label)
-		}
-		if fila["perm"] != c.perm {
+		if fila.perm != c.perm {
 			t.Errorf("la entrada %s pide el permiso %q y se esperaba %q: es el que el módulo usa en Roles y Permisos",
-				c.url, fila["perm"], c.perm)
+				c.url, fila.perm, c.perm)
 		}
-		if !directorios[c.perm] {
-			t.Errorf("el permiso %q no lo siembra ninguna migración en sub_module: el filtro del menú lo pediría y nadie podría tenerlo, ni el administrador de la empresa", c.perm)
-		}
-		for url, otra := range filas {
-			if otra["parent_id"] != "" && otra["parent_id"] == fila["id"] {
-				t.Errorf("%s quedó como grupo porque %s (id %s) cuelga de ella: un nodo con hijos se pinta como grupo y su URL deja de ser un enlace",
-					fila["label"], url, otra["id"])
+
+		// Su sitio es el departamento de su función.
+		if fila.parentID == nil {
+			t.Errorf("%s quedó suelta en el primer nivel: su sitio es el departamento %q", c.url, c.departamento)
+		} else if padre, ok := porID[*fila.parentID]; !ok {
+			t.Errorf("%s cuelga del menú %d, que no existe: no se pintaría", c.url, *fila.parentID)
+		} else {
+			if padre.status != 1 {
+				t.Errorf("%s cuelga de %q, que está apagado: el enlace no se pinta", c.url, padre.label)
+			}
+			if padre.label != c.departamento {
+				t.Errorf("%s cuelga de %q y su departamento es %q", c.url, padre.label, c.departamento)
 			}
 		}
 
-		id, _ := strconv.Atoi(fila["id"])
-		nodo := &menuNode{id: id, label: fila["label"], url: c.url, perm: fila["perm"]}
+		// Un nodo con hijos se pinta como grupo y deja de ser un enlace.
+		for _, otra := range filas {
+			if otra.parentID != nil && *otra.parentID == fila.id {
+				t.Errorf("%s quedó como grupo porque %s cuelga de ella: su URL dejaría de ser un enlace",
+					fila.label, otra.label)
+			}
+		}
+
+		// El permiso tiene que existir para que alguien pueda tenerlo.
+		if !sembrados[c.perm] {
+			t.Errorf("el permiso %q no lo siembra ninguna migración en sub_module: el filtro del menú lo pediría y nadie podría tenerlo, ni el administrador de la empresa", c.perm)
+		}
+
+		// Con el permiso se ve; sin él, no. Es la promesa del menú: no ofrecer
+		// una pantalla que el middleware responde 403.
+		nodo := &menuNode{id: fila.id, label: fila.label, url: fila.url, perm: fila.perm}
 		item, visible := buildMenuItem(nodo, map[string]bool{c.perm: true}, c.url)
 		if !visible {
-			t.Errorf("con el permiso %q concedido el filtro sigue escondiendo %q: la sección no se pintaría en el menú", c.perm, c.label)
+			t.Errorf("con el permiso %q concedido el filtro sigue escondiendo %q", c.perm, c.label)
 		} else {
 			if item.URL != c.url {
 				t.Errorf("%q se pinta con la URL %q y se esperaba %q", c.label, item.URL, c.url)
