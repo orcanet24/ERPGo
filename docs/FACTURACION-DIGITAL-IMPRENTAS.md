@@ -34,6 +34,13 @@ En `Configuración → Facturación Digital` las imprentas se presentan como un
 emitiendo abre seleccionada; el panel se recuerda en la URL (`#di-thka`) para
 que al guardar no salte a otra.
 
+![Pantalla de Facturación Digital con el selector de imprentas](img/facturacion-digital-selector.png)
+
+Al cambiar de pestaña se abre el panel de esa imprenta, con sus campos, su
+documentación y sus propios botones:
+
+![Panel de The Factory HKA con sus campos](img/facturacion-digital-thka.png)
+
 Dentro del panel de cada imprenta:
 
 - **Guardar**: guarda su configuración (URL, credenciales, serie). No activa.
