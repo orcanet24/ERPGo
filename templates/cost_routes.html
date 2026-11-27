@@ -1,0 +1,187 @@
+{{define "content"}}
+{{/* recarga completa permitida */}}
+{{/* tras guardar una estación de ruta se recarga para que el nuevo tiempo se
+     vea de inmediato en el desglose de costos del producto. */}}
+{{/*
+  cost_routes.html — Rutas de proceso (Fase 3).
+
+  POR QUÉ EXISTE. El motor ya puede calcular el indirecto por hora usando
+  process_route, pero no había pantalla para definir las rutas: el indirecto
+  por hora se quedaba en cero y el motor avisaba que faltaban horas de ruta.
+
+  Reglas de esta pantalla:
+    - setup_time_min: tiempo de preparación del lote. NO se prorratea entre
+      unidades; se cobra completo aunque se fabrique una pieza (Fase 6 lo usa
+      en órdenes de producción).
+    - run_time_sec y machine_time_sec: tiempo por unidad. SÍ se prorratean.
+    - labor_grade: el grado que opera la estación; su tarifa se suma al costo
+      de mano de obra del producto.
+    - work_center: centro de costo de la estación; su overhead_rate_hour se
+      usa para el indirecto por hora.
+*/}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Rutas de proceso &mdash; <small>{{if .ProductID}}{{.ProductID}}{{else}}seleccionar producto{{end}}</small></h4>
+        </div>
+        <div class="panel-tools pull-right">
+            <a href="/cost" class="btn btn-default">Volver a costos</a>
+        </div>
+    </div>
+    <div class="panel-body">
+
+        <div class="row">
+            <div class="col-md-4">
+                <h5 id="tituloFormRuta">Nueva estación</h5>
+                <form id="fRuta">
+                    <input type="hidden" name="product_id" id="rProducto" value="{{.ProductID}}">
+                    <div class="form-group">
+                        <label>Secuencia</label>
+                        <input type="number" name="sequence" id="rSecuencia"
+                               class="form-control input-small" value="1" style="width:80px;">
+                    </div>
+                    <div class="form-group">
+                        <label>Centro de trabajo</label>
+                        <select name="work_center_id" id="rCentro" class="form-control">
+                            <option value="">Seleccionar centro...</option>
+                            {{range .Centros}}
+                            <option value="{{.ID}}">{{.Code}} &mdash; {{.Name}}</option>
+                            {{end}}
+                        </select>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-4"><div class="form-group">
+                            <label>Setup (min)</label>
+                            <input type="number" step="0.01" min="0" name="setup_time_min"
+                                   id="rSetup" class="form-control" value="0">
+                            <p class="help-block">No se prorratea por unidad.</p>
+                        </div></div>
+                        <div class="col-md-4"><div class="form-group">
+                            <label>Run (seg/u)</label>
+                            <input type="number" step="0.0001" min="0" name="run_time_sec"
+                                   id="rRun" class="form-control" value="0">
+                            <p class="help-block">Se prorratea por unidad.</p>
+                        </div></div>
+                        <div class="col-md-4"><div class="form-group">
+                            <label>Máquina (seg/u)</label>
+                            <input type="number" step="0.0001" min="0" name="machine_time_sec"
+                                   id="rMachine" class="form-control" value="0">
+                            <p class="help-block">Se prorratea por unidad.</p>
+                        </div></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Grado de mano de obra</label>
+                        <select name="labor_grade" id="rGrado" class="form-control">
+                            <option value="">Ninguno</option>
+                            {{range .Grados}}
+                            <option value="{{.Code}}">{{.Code}} &mdash; {{.Name}} ({{printf "%.4f" .Tasa}}/h)</option>
+                            {{end}}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" name="active" value="1" id="rActivo" checked>
+                            Estación activa</label>
+                    </div>
+                    <button class="btn btn-primary">Guardar estación</button>
+                    <button type="button" class="btn btn-default" id="btnNuevaRuta">Limpiar</button>
+                </form>
+            </div>
+
+            <div class="col-md-8">
+                <h5>Estaciones definidas</h5>
+                <table class="table">
+                    <thead><tr>
+                        <th>Seq.</th><th>Centro</th>
+                        <th class="text-right">Setup (min)</th>
+                        <th class="text-right">Run (seg/u)</th>
+                        <th class="text-right">Máquina (seg/u)</th>
+                        <th>Grado</th>
+                        <th class="text-right">Tarifa/h</th>
+                        <th>Activo</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                    {{range .Rutas}}
+                        <tr>
+                            <td>{{.Sequence}}</td>
+                            <td>{{.WorkCenter}}</td>
+                            <td class="text-right">{{printf "%.2f" .SetupTimeMin}}</td>
+                            <td class="text-right">{{printf "%.4f" .RunTimeSec}}</td>
+                            <td class="text-right">{{printf "%.4f" .MachineTimeSec}}</td>
+                            <td>{{if .LaborGrade}}{{.LaborGrade}} ({{.LaborGradeName}}){{else}}&mdash;{{end}}</td>
+                            <td class="text-right">{{printf "%.4f" (index $.GradosMap .LaborGrade)}}</td>
+                            <td>{{if .Active}}Sí{{else}}No{{end}}</td>
+                            <td><a href="#" class="editarRuta"
+                                   data-id="{{.ID}}" data-seq="{{.Sequence}}"
+                                   data-centro="{{.WorkCenterID}}"
+                                   data-setup="{{printf "%.2f" .SetupTimeMin}}"
+                                   data-run="{{printf "%.4f" .RunTimeSec}}"
+                                   data-machine="{{printf "%.4f" .MachineTimeSec}}"
+                                   data-grado="{{.LaborGrade}}"
+                                   data-activo="{{.Active}}">editar</a></td>
+                        </tr>
+                    {{else}}
+                        <tr><td colspan="9" class="text-muted">Sin estaciones definidas.</td></tr>
+                    {{end}}
+                    </tbody>
+                </table>
+                <p class="text-muted">
+                    El indirecto por hora del centro se aplica a run_time +
+                    machine_time (prorrateado por unidad). setup_time se cobra
+                    completo por lote en la orden de producción (Fase 6).
+                </p>
+            </div>
+        </div>
+
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+
+    function limpiar() {
+        $('#fRuta')[0].reset();
+        $('#rProducto').val('{{.ProductID}}');
+        $('#rSecuencia').val(1);
+        $('#rActivo').prop('checked', true);
+        $('#tituloFormRuta').text('Nueva estación');
+    }
+
+    $('#btnNuevaRuta').on('click', limpiar);
+
+    $('.editarRuta').on('click', function (e) {
+        e.preventDefault();
+        var d = $(this).data();
+        $('#rSecuencia').val(d.seq);
+        $('#rCentro').val(d.centro);
+        $('#rSetup').val(d.setup);
+        $('#rRun').val(d.run);
+        $('#rMachine').val(d.machine);
+        $('#rGrado').val(d.grado);
+        $('#rActivo').prop('checked', Number(d.activo) === 1);
+        $('#tituloFormRuta').text('Editando estación ' + d.seq);
+    });
+
+    $('#fRuta').on('submit', function (e) {
+        e.preventDefault();
+        var f = $(this);
+        var datos = f.serialize();
+        if (!$('#rActivo').is(':checked')) { datos += '&active=0'; }
+        $.post('/cost/routes/save', datos)
+            .done(function (r) {
+                if (r.status === 1) {
+                    toastr.success(r.msg);
+                    window.location.reload();
+                } else {
+                    toastr.error(r.error || 'Error');
+                }
+            })
+            .fail(function (x) {
+                toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudo guardar');
+            });
+    });
+
+});
+</script>
+{{end}}

@@ -138,6 +138,10 @@ type costInputs struct {
 	OverheadPerUn float64 // indirecto por unidad
 	Salida        float64 // stock saliente del kardex (para PP)
 
+	// Mano de obra de la ruta de proceso (Fase 3). Se calcula en
+	// cargarCostInputs desde process_route y se suma al costo de mano de obra.
+	LaborRuta float64
+
 	// IsAssembled indica que el producto se fabrica/ensambla. Sirve para no
 	// callar la depreciación: mientras no existan activos fijos (Fase 2), un
 	// producto ensamblado recibe una advertencia explícita en vez de un cero
@@ -244,6 +248,10 @@ func calcularCosto(in costInputs) CostBreakdown {
 	// Si la receta no la define, se usa la hoja. Nunca las dos: cobrar la misma
 	// hora dos veces es el error que más caro sale y el más difícil de ver,
 	// porque el total sigue pareciendo razonable.
+	//
+	// La mano de obra de la ruta de proceso (process_route, labor_grade por
+	// estación) se suma siempre: es el tiempo que el operario dedica en cada
+	// estación, independientemente de de dónde venga el material.
 	if len(in.LaborReceta) > 0 {
 		labor, traces, avisos := laborPorHoras(costInputs{
 			Cantidad: in.Cantidad,
@@ -257,6 +265,15 @@ func calcularCosto(in costInputs) CostBreakdown {
 		b.Labor = labor
 		b.Traces = append(b.Traces, traces...)
 		b.Advertencias = append(b.Advertencias, avisos...)
+	}
+	if in.LaborRuta > 0 {
+		b.Labor += in.LaborRuta
+		b.Traces = append(b.Traces, CostTrace{
+			Component: compLabor,
+			Regla:     fmt.Sprintf("mano de obra de ruta de proceso: %.4f por unidad", in.LaborRuta),
+			Importe:   in.LaborRuta,
+			Fuente:    "process_route",
+		})
 	}
 
 	// --- 3. La merma SOLO al material (ver 0.1) --------------------------
@@ -618,9 +635,15 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 		case tasaUnidad.Valid && tasaUnidad.Float64 > 0:
 			in.OverheadPerUn = tasaUnidad.Float64
 		case tasaHora.Valid && tasaHora.Float64 > 0:
-			in.Faltantes = append(in.Faltantes, fmt.Sprintf(
-				"el centro de costo %s solo tiene tarifa por hora: el indirecto por unidad necesita las horas de process_route (Fase 3)",
-				codigo))
+			// Fase 3: el indirecto por hora se convierte en indirecto por
+			// unidad usando las horas de run_time y machine_time de
+			// process_route. setup_time no se prorratea (va a orden de
+			// producción, Fase 6).
+			in.OverheadPerUn = s.indirectoPorRuta(db, productID, in.Cantidad)
+			if in.OverheadPerUn <= 0 {
+				in.Faltantes = append(in.Faltantes, fmt.Sprintf(
+					"el centro de costo %s tiene tarifa por hora pero no hay rutas de proceso activas para este producto: el indirecto saldrá en cero", codigo))
+			}
 		}
 	}
 
@@ -817,6 +840,13 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 			}
 		}
 	}
+
+	// --- Mano de obra de la ruta de proceso (Fase 3) -------------------------
+	//
+	// El labor_grade de cada estación de process_route se suma al costo de
+	// mano de obra. Se aplica a cualquier método que tenga rutas definidas:
+	// la panadería paga al panadero, la carnicería paga al despiezador.
+	in.LaborRuta, _ = costoManoDeObraRuta(db, productID, in.Cantidad)
 
 	return in
 }

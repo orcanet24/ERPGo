@@ -159,6 +159,17 @@ func tablasCostosPrueba(t *testing.T, db *sql.DB) {
 			created_at TEXT NOT NULL DEFAULT '',
 			UNIQUE (asset_id, period)
 		)`,
+		`CREATE TABLE process_route (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			product_id TEXT NOT NULL,
+			sequence INTEGER NOT NULL DEFAULT 0,
+			work_center_id INTEGER NOT NULL DEFAULT 1,
+			setup_time_min REAL NOT NULL DEFAULT 0,
+			run_time_sec REAL NOT NULL DEFAULT 0,
+			machine_time_sec REAL NOT NULL DEFAULT 0,
+			labor_grade TEXT NOT NULL DEFAULT '',
+			active INTEGER NOT NULL DEFAULT 1
+		)`,
 	}
 	for _, d := range ddl {
 		if _, err := db.Exec(d); err != nil {
@@ -1297,5 +1308,195 @@ func TestRecalcularDepreciacionConMotivoEscribeAuditoria(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("registros de auditoría: %d; esperado 1", n)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fase 3: rutas de proceso e indirecto por hora
+// ---------------------------------------------------------------------------
+
+// TestHorasRutaPorUnidad verifica que setup no se prorratea y run/machine sí.
+func TestHorasRutaPorUnidad(t *testing.T) {
+	_, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO cost_center (id, code, name, overhead_rate_hour, overhead_rate_unit, active)
+		VALUES (1, 'PROD', 'Producción', 10, 0, 1)`); err != nil {
+		t.Fatalf("insertar centro: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO process_route
+		(product_id, sequence, work_center_id, setup_time_min, run_time_sec, machine_time_sec, active)
+		VALUES ('PAN', 1, 1, 30, 360, 180, 1)`); err != nil {
+		t.Fatalf("insertar ruta: %v", err)
+	}
+
+	setup, run, machine, err := horasRutaPorUnidad(db, "PAN", 10)
+	if err != nil {
+		t.Fatalf("horas de ruta: %v", err)
+	}
+	// setup: 30 min = 0.5 h (NO se prorratea)
+	if !casiIgual(setup, 0.5) {
+		t.Errorf("setup: %v; esperado 0.5", setup)
+	}
+	// run: 360 seg = 0.1 h, /10 unidades = 0.01 h/unidad
+	if !casiIgual(run, 0.01) {
+		t.Errorf("run: %v; esperado 0.01", run)
+	}
+	// machine: 180 seg = 0.05 h, /10 unidades = 0.005 h/unidad
+	if !casiIgual(machine, 0.005) {
+		t.Errorf("machine: %v; esperado 0.005", machine)
+	}
+}
+
+// TestIndirectoPorRuta calcula overhead_rate_hour × (run + machine) / 3600 / cantidad.
+func TestIndirectoPorRuta(t *testing.T) {
+	s, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO cost_center (id, code, name, overhead_rate_hour, overhead_rate_unit, active)
+		VALUES (1, 'PROD', 'Producción', 36, 0, 1)`); err != nil {
+		t.Fatalf("insertar centro: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO process_route
+		(product_id, sequence, work_center_id, setup_time_min, run_time_sec, machine_time_sec, active)
+		VALUES ('PAN', 1, 1, 30, 360, 180, 1)`); err != nil {
+		t.Fatalf("insertar ruta: %v", err)
+	}
+
+	// run + machine = 540 seg = 0.15 h. × 36 $/h = 5.4 por lote. /10 = 0.54 por unidad.
+	ind := s.indirectoPorRuta(db, "PAN", 10)
+	if !casiIgual(ind, 0.54) {
+		t.Errorf("indirecto por ruta: %v; esperado 0.54", ind)
+	}
+
+	// Con cantidad 1: 5.4 por unidad.
+	ind1 := s.indirectoPorRuta(db, "PAN", 1)
+	if !casiIgual(ind1, 5.4) {
+		t.Errorf("indirecto qty 1: %v; esperado 5.4", ind1)
+	}
+
+	// Sin rutas: cero.
+	indVacio := s.indirectoPorRuta(db, "SINRUTA", 10)
+	if !casiIgual(indVacio, 0) {
+		t.Errorf("indirecto sin rutas: %v; esperado 0", indVacio)
+	}
+}
+
+// TestCostoManoDeObraRuta valúa run_time con la tarifa del grado.
+func TestCostoManoDeObraRuta(t *testing.T) {
+	_, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO labor_grade
+		(code, name, base_salary_annual, overhead_pct, hours_per_year, productivity_factor, active)
+		VALUES ('panadero', 'Panadero', 20800, 0, 2080, 1, 1)`); err != nil {
+		t.Fatalf("insertar grado: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO process_route
+		(product_id, sequence, work_center_id, setup_time_min, run_time_sec, machine_time_sec, labor_grade, active)
+		VALUES ('PAN', 1, 1, 30, 720, 0, 'panadero', 1)`); err != nil {
+		t.Fatalf("insertar ruta: %v", err)
+	}
+
+	// run: 720 seg = 0.2 h. Tarifa: 20800/2080 = 10 $/h. Costo: 10 × 0.2 = 2 por lote.
+	// /10 unidades = 0.2 por unidad.
+	costo, err := costoManoDeObraRuta(db, "PAN", 10)
+	if err != nil {
+		t.Fatalf("mano de obra de ruta: %v", err)
+	}
+	if !casiIgual(costo, 0.2) {
+		t.Errorf("mano de obra ruta: %v; esperado 0.2", costo)
+	}
+
+	// Sin grado: cero.
+	if _, err := db.Exec(`INSERT INTO process_route
+		(product_id, sequence, work_center_id, setup_time_min, run_time_sec, machine_time_sec, labor_grade, active)
+		VALUES ('PAN', 2, 1, 0, 360, 0, '', 1)`); err != nil {
+		t.Fatalf("insertar ruta sin grado: %v", err)
+	}
+	costo2, _ := costoManoDeObraRuta(db, "PAN", 10)
+	// Solo la primera ruta tiene grado: 0.2.
+	if !casiIgual(costo2, 0.2) {
+		t.Errorf("mano de obra ruta con una sin grado: %v; esperado 0.2", costo2)
+	}
+}
+
+// TestCostoConIndirectoYManoDeObraDeRuta integra el motor: el desglose
+// incluye indirecto por ruta y mano de obra de ruta.
+func TestCostoConIndirectoYManoDeObraDeRuta(t *testing.T) {
+	s, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO product_cost_config
+		(product_id, costing_method, cost_center_id, is_assembled)
+		VALUES ('PAN', 'RECIPE', 1, 1)`); err != nil {
+		t.Fatalf("insertar config: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, cost) VALUES ('PAN', 10)`); err != nil {
+		t.Fatalf("insertar producto: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, cost) VALUES ('harina', 2)`); err != nil {
+		t.Fatalf("insertar insumo: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO cost_center (id, code, name, overhead_rate_hour, overhead_rate_unit, active)
+		VALUES (1, 'PROD', 'Producción', 36, 0, 1)`); err != nil {
+		t.Fatalf("insertar centro: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO labor_grade
+		(code, name, base_salary_annual, overhead_pct, hours_per_year, productivity_factor, active)
+		VALUES ('panadero', 'Panadero', 20800, 0, 2080, 1, 1)`); err != nil {
+		t.Fatalf("insertar grado: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO process_route
+		(product_id, sequence, work_center_id, setup_time_min, run_time_sec, machine_time_sec, labor_grade, active)
+		VALUES ('PAN', 1, 1, 30, 720, 360, 'panadero', 1)`); err != nil {
+		t.Fatalf("insertar ruta: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_recipe
+		(product_id, component_id, quantity, unit, loss_factor, step_order, labor_grade, hours)
+		VALUES ('PAN', 'harina', 1, 'kg', 0, 1, '', 0)`); err != nil {
+		t.Fatalf("insertar receta: %v", err)
+	}
+
+	in := s.cargarCostInputs(db, "PAN", "2026-01", 10)
+	// Indirecto: (720+360) seg = 0.3 h × 36 = 10.8 / 10 = 1.08 por unidad.
+	if !casiIgual(in.OverheadPerUn, 1.08) {
+		t.Errorf("indirecto por unidad: %v; esperado 1.08", in.OverheadPerUn)
+	}
+	// Mano de obra de ruta: 720 seg = 0.2 h × 10 $/h = 2 / 10 = 0.2 por unidad.
+	if !casiIgual(in.LaborRuta, 0.2) {
+		t.Errorf("mano de obra de ruta: %v; esperado 0.2", in.LaborRuta)
+	}
+
+	b := calcularCosto(in)
+	if !casiIgual(b.Overhead, 1.08) {
+		t.Errorf("overhead en desglose: %v; esperado 1.08", b.Overhead)
+	}
+	if !casiIgual(b.Labor, 0.2) {
+		t.Errorf("labor en desglose: %v; esperado 0.2", b.Labor)
+	}
+	if !casiIgual(b.Material, 2) {
+		t.Errorf("material: %v; esperado 2", b.Material)
+	}
+	if !casiIgual(b.Final, 3.28) {
+		t.Errorf("final: %v; esperado 3.28 (2 material + 0.2 labor + 1.08 overhead)", b.Final)
+	}
+
+	// Verificar trazas.
+	tieneOverhead := false
+	tieneLaborRuta := false
+	for _, tr := range b.Traces {
+		if tr.Component == compOverhead {
+			tieneOverhead = true
+		}
+		if tr.Component == compLabor && strings.Contains(tr.Fuente, "process_route") {
+			tieneLaborRuta = true
+		}
+	}
+	if !tieneOverhead {
+		t.Error("falta traza de overhead")
+	}
+	if !tieneLaborRuta {
+		t.Error("falta traza de labor por ruta de proceso")
 	}
 }

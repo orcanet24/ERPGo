@@ -25,6 +25,12 @@ func (s *Server) registerAssetsRoutes() {
 	s.mux.HandleFunc("POST /cost/assets/save", s.costAssetSave)
 	s.mux.HandleFunc("POST /cost/assets/recalcular", s.costAssetRecalcular)
 	s.mux.HandleFunc("POST /cost/assets/cerrar-periodo", s.costAssetsCerrarPeriodo)
+
+	// Rutas de proceso (Fase 3)
+	s.mux.HandleFunc("GET /cost/routes", s.costRoutesView)
+	s.mux.HandleFunc("GET /cost/routes/data", s.costRoutesData)
+	s.mux.HandleFunc("POST /cost/routes/save", s.costRouteSave)
+	s.mux.HandleFunc("POST /cost/routes/delete", s.costRouteDelete)
 }
 
 // costAssetsView pinta la lista de activos fijos con su estado y valor de libro.
