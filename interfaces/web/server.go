@@ -516,6 +516,8 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	// Costos: método de costeo por producto, receta, rendimiento, hoja de horas,
 	// desglose y cierre de período.
 	s.registerCostRoutes()
+	// Activos fijos y depreciación (Fase 2).
+	s.registerAssetsRoutes()
 	// Inventario avanzado: FEFO y caducidades, punto de pedido y conteo cíclico
 	s.registerInventoryExpiryRoutes()
 	s.registerReorderRoutes()

@@ -624,12 +624,26 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 		}
 	}
 
-	// La depreciación no se puede inventar. Si el producto se fabrica, el cero
-	// se dice en voz alta: un costo sin depreciación presentado como completo
-	// es más peligroso que un costo con una advertencia.
+	// --- Depreciación del período (Fase 2) ---------------------------------
+	//
+	// La depreciación de activos fijos se carga como compDepreciation. Se suma:
+	//   - activos asignados directamente al producto: cuota completa del mes;
+	//   - activos globales del cost_center del producto: cuota prorrateada
+	//     entre los productos ensamblados del centro.
+	// El resultado es la depreciación TOTAL del período; el motor la divide
+	// entre cantidad para obtener DegrPerUnidad (costo por unidad).
+	//
+	// Si no hay activos fijos todavía (la tabla existe pero está vacía), el
+	// cero se dice en voz alta para los productos ensamblados.
 	if in.IsAssembled {
-		in.Faltantes = append(in.Faltantes,
-			"el producto está marcado como ensamblado, pero la depreciación de activos fijos todavía no está implementada (Fase 2): el costo de depreciación saldrá en cero")
+		deprTotal := s.depreciacionProductoPeriodo(db, productID,
+			int(centroID.Int64), in.Periodo, now())
+		if deprTotal > 0 {
+			in.DegrPerUnidad = deprTotal / in.Cantidad
+		} else {
+			in.Faltantes = append(in.Faltantes,
+				"el producto está marcado como ensamblado pero no hay activos fijos con cuota en este período: la depreciación saldrá en cero")
+		}
 	}
 
 	// --- Costo vigente (PP) -----------------------------------------------

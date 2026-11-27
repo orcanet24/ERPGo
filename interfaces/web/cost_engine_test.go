@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"math"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -119,6 +120,44 @@ func tablasCostosPrueba(t *testing.T, db *sql.DB) {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			purchase_id INTEGER NOT NULL,
 			product_id TEXT NOT NULL
+		)`,
+		`CREATE TABLE fixed_asset (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			code VARCHAR(40) NOT NULL UNIQUE,
+			name VARCHAR(150) NOT NULL,
+			type VARCHAR(40) NOT NULL DEFAULT 'equipo',
+			is_global INTEGER NOT NULL DEFAULT 0,
+			product_id VARCHAR(100),
+			cost_center_id INTEGER,
+			purchase_price REAL NOT NULL DEFAULT 0,
+			residual_value REAL NOT NULL DEFAULT 0,
+			purchase_date TEXT NOT NULL,
+			useful_life_months INTEGER NOT NULL DEFAULT 0,
+			active INTEGER NOT NULL DEFAULT 1,
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE TABLE fixed_asset_depreciation (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			asset_id INTEGER NOT NULL,
+			period VARCHAR(7) NOT NULL,
+			month_amount REAL NOT NULL DEFAULT 0,
+			accumulated REAL NOT NULL DEFAULT 0,
+			book_value REAL NOT NULL DEFAULT 0,
+			status VARCHAR(20) NOT NULL DEFAULT 'calculado',
+			created_at TEXT NOT NULL DEFAULT '',
+			UNIQUE (asset_id, period)
+		)`,
+		`CREATE TABLE fixed_asset_depreciation_movement (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			asset_id INTEGER NOT NULL,
+			period VARCHAR(7) NOT NULL,
+			month_amount REAL NOT NULL DEFAULT 0,
+			accumulated REAL NOT NULL DEFAULT 0,
+			book_value REAL NOT NULL DEFAULT 0,
+			status VARCHAR(20) NOT NULL DEFAULT 'calculado',
+			created_at TEXT NOT NULL DEFAULT '',
+			UNIQUE (asset_id, period)
 		)`,
 	}
 	for _, d := range ddl {
@@ -934,5 +973,329 @@ func TestEsquemaProductRecipeTieneManoDeObra(t *testing.T) {
 		if !strings.Contains(string(migracion), "ADD COLUMN `"+columna+"`") {
 			t.Errorf("schema_z_costos.sql no añade %s a las bases existentes", columna)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fase 2: activos fijos y depreciación
+// ---------------------------------------------------------------------------
+
+// TestCalcularCuota es pura: (precio - residual) / vida en meses.
+func TestCalcularCuota(t *testing.T) {
+	casos := []struct {
+		nombre   string
+		precio   float64
+		residual float64
+		vida     int
+		esperado float64
+	}{
+		{"horno 12000, residual 0, vida 60", 12000, 0, 60, 200},
+		{"con valor residual", 10000, 1000, 60, 150},
+		{"vida cero no divide entre cero", 10000, 0, 0, 0},
+		{"precio menor que residual: cuota cero", 1000, 2000, 60, 0},
+		{"precio igual a residual: cuota cero", 5000, 5000, 60, 0},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			got := calcularCuota(c.precio, c.residual, c.vida)
+			if !casiIgual(got, c.esperado) {
+				t.Errorf("calcularCuota(%v, %v, %d) = %v; esperado %v", c.precio, c.residual, c.vida, got, c.esperado)
+			}
+		})
+	}
+}
+
+// TestMesesEntre cuenta meses entre fecha de compra y período.
+func TestMesesEntre(t *testing.T) {
+	casos := []struct {
+		nombre   string
+		compra   string
+		periodo  string
+		esperado int
+	}{
+		{"misma compra y periodo", "2026-01-15", "2026-01", 0},
+		{"compra enero, periodo febrero", "2026-01-15", "2026-02", 1},
+		{"compra enero, periodo marzo del año siguiente", "2026-01-15", "2027-03", 14},
+		{"periodo antes que compra", "2026-06-01", "2026-03", -3},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			got := mesesEntre(c.compra, c.periodo)
+			if got != c.esperado {
+				t.Errorf("mesesEntre(%q, %q) = %d; esperado %d", c.compra, c.periodo, got, c.esperado)
+			}
+		})
+	}
+}
+
+// TestDepreciacionDelPeriodo calcula cuota, acumulado y valor de libro.
+func TestDepreciacionDelPeriodo(t *testing.T) {
+	_, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	// Horno: 12000, residual 0, vida 60, compra enero 2026. Cuota = 200/mes.
+	if _, err := db.Exec(`INSERT INTO fixed_asset
+		(code, name, type, is_global, product_id, cost_center_id,
+		 purchase_price, residual_value, purchase_date, useful_life_months,
+		 active, created_by, created_at)
+		VALUES ('HORNO-01', 'Horno', 'equipo', 0, 'PAN', 1,
+		 12000, 0, '2026-01-01', 60, 1, 'admin', '2026-01-01 00:00:00')`); err != nil {
+		t.Fatalf("insertar activo: %v", err)
+	}
+
+	// Enero 2026: primera cuota.
+	ma, ac, bv, calc, err := depreciacionDelPeriodo(db, 1, "2026-01", now())
+	if err != nil {
+		t.Fatalf("calcular depreciación: %v", err)
+	}
+	if !calc {
+		t.Fatal("esperaba cálculo en enero")
+	}
+	if !casiIgual(ma, 200) {
+		t.Errorf("cuota enero: %v; esperado 200", ma)
+	}
+	if !casiIgual(ac, 200) {
+		t.Errorf("acumulado enero: %v; esperado 200", ac)
+	}
+	if !casiIgual(bv, 11800) {
+		t.Errorf("libro enero: %v; esperado 11800", bv)
+	}
+
+	// Febrero 2026: segunda cuota, acumulado 400.
+	ma2, ac2, bv2, calc2, err := depreciacionDelPeriodo(db, 1, "2026-02", now())
+	if err != nil {
+		t.Fatalf("calcular depreciación febrero: %v", err)
+	}
+	if !calc2 {
+		t.Fatal("esperaba cálculo en febrero")
+	}
+	if !casiIgual(ma2, 200) || !casiIgual(ac2, 400) || !casiIgual(bv2, 11600) {
+		t.Errorf("febrero: cuota %v, acumulado %v, libro %v; esperados 200, 400, 11600", ma2, ac2, bv2)
+	}
+
+	// Activo inactivo no deprecia.
+	if _, err := db.Exec(`UPDATE fixed_asset SET active = 0 WHERE code = 'HORNO-01'`); err != nil {
+		t.Fatalf("desactivar activo: %v", err)
+	}
+	_, _, _, calcInactivo, err := depreciacionDelPeriodo(db, 1, "2026-03", now())
+	if err != nil {
+		t.Fatalf("calcular depreciación marzo: %v", err)
+	}
+	if calcInactivo {
+		t.Error("activo inactivo no debería depreciar, pero sí lo hizo")
+	}
+
+	// Vida vencida: después de 60 meses no hay más cuota.
+	if _, err := db.Exec(`UPDATE fixed_asset SET useful_life_months = 2 WHERE code = 'HORNO-01'`); err != nil {
+		t.Fatalf("actualizar vida: %v", err)
+	}
+	_, _, _, calcVencido, _ := depreciacionDelPeriodo(db, 1, "2026-03", now())
+	if calcVencido {
+		t.Error("activo con vida vencida no debería depreciar")
+	}
+}
+
+// TestDepreciacionDelPeriodoRespetaResidual corta la cuota si el valor de libro
+// bajaría por debajo del residual.
+func TestDepreciacionDelPeriodoRespetaResidual(t *testing.T) {
+	_, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	// 1000, residual 800, vida 10. Cuota = 20/mes. Después de 9 meses, acumulado 180, libro 820.
+	// La décima cuota sería 20, pero libro 820 - 20 = 800 = residual, OK.
+	// Si vida fuera 11, la undécima intentaría 800 - 20 = 780 < residual, se corta.
+	if _, err := db.Exec(`INSERT INTO fixed_asset
+		(code, name, purchase_price, residual_value, purchase_date, useful_life_months, active)
+		VALUES ('A1', 'Activo', 1000, 800, '2026-01-01', 10, 1)`); err != nil {
+		t.Fatalf("insertar activo: %v", err)
+	}
+	_, ac, bv, calc, _ := depreciacionDelPeriodo(db, 1, "2026-10", now())
+	if !calc {
+		t.Fatal("esperaba cálculo en el décimo mes")
+	}
+	if !casiIgual(ac, 1000-800) {
+		t.Errorf("acumulado: %v; esperado 200", ac)
+	}
+	if !casiIgual(bv, 800) {
+		t.Errorf("libro: %v; esperado 800 (residual)", bv)
+	}
+}
+
+// TestDepreciacionProductoPeriodoSumaActivosDirectos y globales.
+func TestDepreciacionProductoPeriodo(t *testing.T) {
+	s, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	// Producto PAN con centro 1.
+	if _, err := db.Exec(`INSERT INTO product_cost_config
+		(product_id, costing_method, cost_center_id, is_assembled)
+		VALUES ('PAN', 'RECIPE', 1, 1)`); err != nil {
+		t.Fatalf("insertar config: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_cost_config
+		(product_id, costing_method, cost_center_id, is_assembled)
+		VALUES ('PAN2', 'RECIPE', 1, 1)`); err != nil {
+		t.Fatalf("insertar config PAN2: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, cost) VALUES ('PAN', 10)`); err != nil {
+		t.Fatalf("insertar producto: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, cost) VALUES ('PAN2', 10)`); err != nil {
+		t.Fatalf("insertar producto PAN2: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO cost_center (id, code, name, overhead_rate_unit, overhead_rate_hour, active)
+		VALUES (1, 'PROD', 'Producción', 0, 0, 1)`); err != nil {
+		t.Fatalf("insertar centro: %v", err)
+	}
+
+	// Activo directo a PAN: cuota 100/mes.
+	if _, err := db.Exec(`INSERT INTO fixed_asset
+		(code, name, product_id, purchase_price, residual_value, purchase_date, useful_life_months, active)
+		VALUES ('DIRECTO', 'Directo PAN', 'PAN', 6000, 0, '2026-01-01', 60, 1)`); err != nil {
+		t.Fatalf("insertar activo directo: %v", err)
+	}
+	// Activo global del centro 1: cuota 300/mes, se reparte entre PAN y PAN2 (2 productos).
+	if _, err := db.Exec(`INSERT INTO fixed_asset
+		(code, name, is_global, cost_center_id, purchase_price, residual_value, purchase_date, useful_life_months, active)
+		VALUES ('GLOBAL', 'Global centro', 1, 1, 18000, 0, '2026-01-01', 60, 1)`); err != nil {
+		t.Fatalf("insertar activo global: %v", err)
+	}
+
+	depr := s.depreciacionProductoPeriodo(db, "PAN", 1, "2026-01", now())
+	// Directo: 100. Global: 300/2 = 150. Total: 250.
+	if !casiIgual(depr, 250) {
+		t.Errorf("depreciación PAN: %v; esperado 250 (100 directo + 150 global prorrateado)", depr)
+	}
+
+	// PAN2 recibe solo la parte global: 150.
+	depr2 := s.depreciacionProductoPeriodo(db, "PAN2", 1, "2026-01", now())
+	if !casiIgual(depr2, 150) {
+		t.Errorf("depreciación PAN2: %v; esperado 150 (solo global prorrateado)", depr2)
+	}
+}
+
+// TestCostoSubeConDepreciacion integra el motor: el desglose de un producto
+// ensamblado incluye la depreciación del activo asignado.
+func TestCostoSubeConDepreciacion(t *testing.T) {
+	s, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO product_cost_config
+		(product_id, costing_method, cost_center_id, is_assembled)
+		VALUES ('PAN', 'RECIPE', 1, 1)`); err != nil {
+		t.Fatalf("insertar config: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, cost) VALUES ('PAN', 10)`); err != nil {
+		t.Fatalf("insertar producto: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, cost) VALUES ('harina', 2)`); err != nil {
+		t.Fatalf("insertar insumo: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO cost_center (id, code, name, overhead_rate_unit, overhead_rate_hour, active)
+		VALUES (1, 'PROD', 'Producción', 0, 0, 1)`); err != nil {
+		t.Fatalf("insertar centro: %v", err)
+	}
+	// Activo directo: cuota 200/mes en enero 2026.
+	if _, err := db.Exec(`INSERT INTO fixed_asset
+		(code, name, product_id, purchase_price, residual_value, purchase_date, useful_life_months, active)
+		VALUES ('HORNO', 'Horno', 'PAN', 12000, 0, '2026-01-01', 60, 1)`); err != nil {
+		t.Fatalf("insertar activo: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_recipe
+		(product_id, component_id, quantity, unit, loss_factor, step_order, labor_grade, hours)
+		VALUES ('PAN', 'harina', 1, 'kg', 0, 1, '', 0)`); err != nil {
+		t.Fatalf("insertar receta: %v", err)
+	}
+
+	in := s.cargarCostInputs(db, "PAN", "2026-01", 1)
+	if !casiIgual(in.DegrPerUnidad, 200) {
+		t.Errorf("depreciación por unidad: %v; esperado 200", in.DegrPerUnidad)
+	}
+	b := calcularCosto(in)
+	if !casiIgual(b.Depreciation, 200) {
+		t.Errorf("depreciación en desglose: %v; esperado 200", b.Depreciation)
+	}
+	if !casiIgual(b.Material, 2) {
+		t.Errorf("material: %v; esperado 2", b.Material)
+	}
+	if !casiIgual(b.Final, 202) {
+		t.Errorf("final: %v; esperado 202 (2 material + 200 depreciación)", b.Final)
+	}
+}
+
+// TestCerrarDepreciacionIdempotente verifica que depreciacionDelPeriodo es
+// determinista: mismo activo, mismo período, mismo resultado. El cierre real
+// con ON DUPLICATE KEY se prueba contra MySQL en integración.
+func TestCerrarDepreciacionIdempotente(t *testing.T) {
+	_, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO fixed_asset
+		(code, name, purchase_price, residual_value, purchase_date, useful_life_months, active)
+		VALUES ('A1', 'Activo', 10000, 1000, '2026-01-01', 60, 1)`); err != nil {
+		t.Fatalf("insertar activo: %v", err)
+	}
+
+	ma1, ac1, bv1, c1, _ := depreciacionDelPeriodo(db, 1, "2026-06", now())
+	ma2, ac2, bv2, c2, _ := depreciacionDelPeriodo(db, 1, "2026-06", now())
+	if !casiIgual(ma1, ma2) || !casiIgual(ac1, ac2) || !casiIgual(bv1, bv2) || c1 != c2 {
+		t.Errorf("no es idempotente: %v/%v/%v/%v vs %v/%v/%v/%v", ma1, ac1, bv1, c1, ma2, ac2, bv2, c2)
+	}
+	if !casiIgual(ma1, 150) {
+		t.Errorf("cuota: %v; esperado 150 ((10000-1000)/60)", ma1)
+	}
+}
+
+// TestRecalcularDepreciacionRechazaSinMotivo protege la regla: cambiar precio,
+// vida, residual o fecha sin motivo se rechaza.
+func TestRecalcularDepreciacionRechazaSinMotivo(t *testing.T) {
+	s, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO fixed_asset
+		(code, name, purchase_price, residual_value, purchase_date, useful_life_months, active)
+		VALUES ('A1', 'Activo', 10000, 1000, '2026-01-01', 60, 1)`); err != nil {
+		t.Fatalf("insertar activo: %v", err)
+	}
+	r := httptest.NewRequest("POST", "/cost/assets/recalcular", nil)
+	r = withScope(r, &scope{tenant: defaultTenantCode, db: db, sess: sessPrueba("admin")})
+
+	err := s.recalcularDepreciacion(db, r, "A1", "", "admin", now())
+	if err == nil {
+		t.Error("esperaba error por motivo vacío, pero no hubo error")
+	}
+}
+
+// TestRecalcularDepreciacionConMotivoEscribeAuditoria verifica que con motivo
+// el recálculo queda en audit_log.
+func TestRecalcularDepreciacionConMotivoEscribeAuditoria(t *testing.T) {
+	s, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO fixed_asset
+		(code, name, purchase_price, residual_value, purchase_date, useful_life_months, active)
+		VALUES ('A1', 'Activo', 10000, 1000, '2026-01-01', 60, 1)`); err != nil {
+		t.Fatalf("insertar activo: %v", err)
+	}
+	// Cambiar precio.
+	if _, err := db.Exec(`UPDATE fixed_asset SET purchase_price = 15000 WHERE code = 'A1'`); err != nil {
+		t.Fatalf("actualizar precio: %v", err)
+	}
+
+	r := httptest.NewRequest("POST", "/cost/assets/recalcular", nil)
+	r = withScope(r, &scope{tenant: defaultTenantCode, db: db, sess: sessPrueba("admin")})
+
+	if err := s.recalcularDepreciacion(db, r, "A1", "subió el precio del proveedor", "admin", now()); err != nil {
+		t.Fatalf("recalcular con motivo: %v", err)
+	}
+
+	// Verificar que quedó en audit_log.
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM audit_log
+		WHERE action = 'recalcular_depreciacion' AND module = 'cost_assets'`).Scan(&n); err != nil {
+		t.Fatalf("contar auditoría: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("registros de auditoría: %d; esperado 1", n)
 	}
 }

@@ -1,0 +1,286 @@
+{{define "content"}}
+{{/* recarga completa permitida */}}
+{{/* tras guardar un activo se recarga para que la nueva cuota se vea de
+     inmediato en la tabla y en el desglose de costos de los productos. */}}
+{{/*
+  cost_assets.html — Activos fijos y depreciación (Fase 2).
+
+  POR QUÉ EXISTE. El motor ya lee la depreciación del período y la pone como
+  compDepreciation en el costo del producto, pero no había pantalla para dar
+  de alta los activos: la depreciación valía siempre cero. Un activo sin
+  pantalla es un activo que no existe.
+
+  La cuota mensual se calcula con (precio − residual) ÷ vida en meses. Se
+  muestra pero no se edita: editarla a mano rompería la trazabilidad. Si hay
+  que cambiar precio, vida, residual o fecha, se usa "Recalcular" con motivo,
+  que queda en audit_log.
+*/}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Activos fijos</h4></div>
+        <div class="panel-tools pull-right">
+            <a href="/cost" class="btn btn-default">Volver a costos</a>
+        </div>
+    </div>
+    <div class="panel-body">
+
+        <div class="row">
+            <div class="col-md-6">
+                <h5 id="tituloFormActivo">Nuevo activo</h5>
+                <form id="fActivo">
+                    <div class="form-group">
+                        <label>Código</label>
+                        <input type="text" name="code" id="aCode" class="form-control"
+                               placeholder="HORNO-01" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Nombre</label>
+                        <input type="text" name="name" id="aName" class="form-control"
+                               placeholder="Horno de convección">
+                    </div>
+                    <div class="form-group">
+                        <label>Tipo</label>
+                        <select name="type" id="aType" class="form-control">
+                            <option value="equipo">Equipo / maquinaria</option>
+                            <option value="edificio">Edificio / local</option>
+                            <option value="vehiculo">Vehículo</option>
+                            <option value="mobiliario">Mobiliario y enseres</option>
+                        </select>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6"><div class="form-group">
+                            <label>Producto (opcional)</label>
+                            <input type="text" name="product_id" id="aProducto"
+                                   class="form-control" placeholder="Código del producto">
+                            <p class="help-block">
+                                Si se deja vacío y el activo es global, su cuota se
+                                reparte entre los productos del centro de costo.
+                            </p>
+                        </div></div>
+                        <div class="col-md-6"><div class="form-group">
+                            <label>Centro de costo</label>
+                            <select name="cost_center_id" id="aCentro" class="form-control">
+                                <option value="">Sin centro</option>
+                                {{range .Centros}}
+                                <option value="{{.ID}}">{{.Code}} &mdash; {{.Name}}</option>
+                                {{end}}
+                            </select>
+                        </div></div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-4"><div class="form-group">
+                            <label>Precio de compra</label>
+                            <input type="number" step="0.0001" min="0" name="purchase_price"
+                                   id="aPrecio" class="form-control" value="0">
+                        </div></div>
+                        <div class="col-md-4"><div class="form-group">
+                            <label>Valor residual</label>
+                            <input type="number" step="0.0001" min="0" name="residual_value"
+                                   id="aResidual" class="form-control" value="0">
+                        </div></div>
+                        <div class="col-md-4"><div class="form-group">
+                            <label>Vida útil (meses)</label>
+                            <input type="number" min="1" name="useful_life_months"
+                                   id="aVida" class="form-control" value="60">
+                        </div></div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6"><div class="form-group">
+                            <label>Fecha de compra</label>
+                            <input type="date" name="purchase_date" id="aFecha"
+                                   class="form-control" value="{{.Hoy}}" required>
+                        </div></div>
+                        <div class="col-md-6"><div class="form-group">
+                            <label class="d-block">Activo</label>
+                            <label><input type="checkbox" name="active" value="1" id="aActivo" checked>
+                                Sí, está en uso</label>
+                            <p class="help-block">
+                                Un activo inactivo no sigue depreciando.
+                            </p>
+                        </div></div>
+                    </div>
+                    <div class="form-group">
+                        <div class="checkbox">
+                            <label><input type="checkbox" name="is_global" value="1" id="aGlobal">
+                                Activo global (se reparte por centro de costo)</label>
+                        </div>
+                    </div>
+                    <div id="cuotaPreview" class="alert alert-info" style="display:none;"></div>
+                    <button class="btn btn-primary">Guardar activo</button>
+                    <button type="button" class="btn btn-default" id="btnNuevoActivo">Limpiar</button>
+                </form>
+            </div>
+
+            <div class="col-md-6">
+                <h5>Activos definidos</h5>
+                <table class="table">
+                    <thead><tr>
+                        <th>Código</th><th>Nombre</th><th>Tipo</th>
+                        <th class="text-right">Precio</th>
+                        <th class="text-right">Residual</th>
+                        <th class="text-right">Vida (meses)</th>
+                        <th class="text-right">Cuota/mes</th>
+                        <th>Estado</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                    {{range .Activos}}
+                        <tr>
+                            <td><strong>{{.Code}}</strong></td>
+                            <td>{{.Name}}</td>
+                            <td>{{.Type}}</td>
+                            <td class="text-right">{{printf "%.2f" .PurchasePrice}}</td>
+                            <td class="text-right">{{printf "%.2f" .ResidualValue}}</td>
+                            <td class="text-right">{{.UsefulLifeMonth}}</td>
+                            <td class="text-right">{{printf "%.4f" .MonthlyFee}}</td>
+                            <td>{{if .Active}}Activo{{else}}Inactivo{{end}}</td>
+                            <td><a href="#" class="editarActivo"
+                                   data-code="{{.Code}}" data-name="{{.Name}}"
+                                   data-type="{{.Type}}" data-producto="{{.ProductID}}"
+                                   data-centro="{{.CostCenterID}}"
+                                   data-precio="{{printf "%.4f" .PurchasePrice}}"
+                                   data-residual="{{printf "%.4f" .ResidualValue}}"
+                                   data-vida="{{.UsefulLifeMonth}}"
+                                   data-fecha="{{.PurchaseDate}}"
+                                   data-activo="{{.Active}}"
+                                   data-global="{{.IsGlobal}}">editar</a></td>
+                        </tr>
+                    {{else}}
+                        <tr><td colspan="9" class="text-muted">Sin activos definidos.</td></tr>
+                    {{end}}
+                    </tbody>
+                </table>
+                <p class="text-muted">
+                    La cuota mensual es <em>(precio − residual) ÷ vida en meses</em>.
+                    Un activo global se reparte entre los productos del centro;
+                    uno asignado a un producto carga su cuota completa a ese
+                    producto. El cierre de período congela el movimiento.
+                </p>
+            </div>
+        </div>
+
+        <hr>
+
+        <div class="row">
+            <div class="col-md-6">
+                <h5>Cierre de depreciación del mes</h5>
+                <form id="fCierre" class="form-inline">
+                    <label>Período</label>
+                    <input type="text" name="period" id="cPeriodo" class="form-control input-small"
+                           value="{{.Periodo}}" style="width:100px;">
+                    <button class="btn btn-primary" id="btnCerrar">Cerrar depreciación del mes</button>
+                    <span id="msgCierre" class="text-muted ml-2"></span>
+                </form>
+                <p class="help-block">
+                    Calcula la cuota de todos los activos activos para el
+                    período y la deja lista para que el motor la cargue como
+                    depreciación en el costo de los productos. Correrlo dos
+                    veces no duplica nada (idempotente).
+                </p>
+            </div>
+        </div>
+
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+
+    var hoy = new Date().toISOString().slice(0, 10);
+    $('#aFecha').val(hoy);
+
+    function limpiar() {
+        $('#fActivo')[0].reset();
+        $('#aCode').prop('readonly', false);
+        $('#tituloFormActivo').text('Nuevo activo');
+        $('#aActivo').prop('checked', true);
+        $('#aGlobal').prop('checked', false);
+        $('#cuotaPreview').hide().text('');
+    }
+
+    $('#btnNuevoActivo').on('click', limpiar);
+
+    $('.editarActivo').on('click', function (e) {
+        e.preventDefault();
+        var d = $(this).data();
+        $('#aCode').val(d.code).prop('readonly', true);
+        $('#aName').val(d.name);
+        $('#aType').val(d.type);
+        $('#aProducto').val(d.producto);
+        $('#aCentro').val(d.centro);
+        $('#aPrecio').val(d.precio);
+        $('#aResidual').val(d.residual);
+        $('#aVida').val(d.vida);
+        $('#aFecha').val(d.fecha);
+        $('#aActivo').prop('checked', Number(d.activo) === 1);
+        $('#aGlobal').prop('checked', Number(d.global) === 1);
+        $('#tituloFormActivo').text('Editando ' + d.code);
+        actualizarCuota();
+    });
+
+    // Vista previa de la cuota al cambiar precio/residual/vida.
+    function actualizarCuota() {
+        var precio = Number($('#aPrecio').val()) || 0;
+        var residual = Number($('#aResidual').val()) || 0;
+        var vida = Number($('#aVida').val()) || 0;
+        var cuota = vida > 0 ? (precio - residual) / vida : 0;
+        if (cuota < 0) cuota = 0;
+        $('#cuotaPreview').show().text(
+            'Cuota mensual estimada: ' + cuota.toFixed(4) +
+            '  (= (' + precio.toFixed(2) + ' − ' + residual.toFixed(2) + ') ÷ ' + vida + ' meses)'
+        );
+    }
+    $('#aPrecio, #aResidual, #aVida').on('input', actualizarCuota);
+    actualizarCuota();
+
+    $('#fActivo').on('submit', function (e) {
+        e.preventDefault();
+        var f = $(this);
+        var datos = f.serialize();
+        if (!$('#aActivo').is(':checked')) { datos += '&active=0'; }
+        if (!$('#aGlobal').is(':checked')) { datos += '&is_global=0'; }
+        $.post('/cost/assets/save', datos)
+            .done(function (r) {
+                if (r.status === 1) {
+                    toastr.success(r.msg + ' (cuota ' + Number(r.cuota).toFixed(4) + '/mes)');
+                    window.location.reload();
+                } else {
+                    toastr.error(r.error || 'Error');
+                }
+            })
+            .fail(function (x) {
+                toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudo guardar');
+            });
+    });
+
+    // ---------- Cierre de depreciación ----------
+    $('#btnCerrar').on('click', function (e) {
+        e.preventDefault();
+        var btn = $(this);
+        btn.prop('disabled', true).text('Calculando...');
+        $('#msgCierre').text('');
+        $.post('/cost/assets/cerrar-periodo',
+            'period=' + encodeURIComponent($('#cPeriodo').val()))
+            .done(function (r) {
+                if (r.status === 1) {
+                    toastr.success(r.msg);
+                    $('#msgCierre').text(r.msg).removeClass('text-danger').addClass('text-success');
+                } else {
+                    toastr.error(r.error || 'Error');
+                    $('#msgCierre').text(r.error || 'Error').removeClass('text-success').addClass('text-danger');
+                }
+            })
+            .fail(function (x) {
+                var m = (x.responseJSON && x.responseJSON.error) || 'No se pudo cerrar';
+                toastr.error(m);
+                $('#msgCierre').text(m).removeClass('text-success').addClass('text-danger');
+            })
+            .always(function () {
+                btn.prop('disabled', false).text('Cerrar depreciación del mes');
+            });
+    });
+
+});
+</script>
+{{end}}
