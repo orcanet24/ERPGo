@@ -70,11 +70,12 @@ type CostTrace struct {
 	Cantidad  float64 `json:"cantidad"`  // horas, unidades, lo que corresponda
 	Importe   float64 `json:"importe"`
 	Fuente    string  `json:"source"` // referencia al dato de origen (tabla, id)
-	// Grade solo se llena en las trazas de mano de obra. Va aquí y no en una
-	// tabla aparte porque es lo que permite guardar en cost_component el rol
-	// con el que se calculó la hora; sin él, el renglón de labor se guardaba
-	// con grade vacío y no se podía reconstruir de dónde salió la tarifa.
+	// Grade solo se llena en las trazas de mano de obra.
 	Grade string `json:"grade,omitempty"`
+	// Level es el nivel del BOM (0 = producto pedido, 1 = primer subconjunto, etc.).
+	Level int `json:"level"`
+	// Path es la ruta desde la raíz hasta este componente (pan > masa > harina).
+	Path string `json:"path"`
 }
 
 // CostBreakdown es el resultado: el desglose completo de un costo.
@@ -156,6 +157,11 @@ type costInputs struct {
 	// que la receta ya traía mano de obra y se ignoró la hoja de horas para no
 	// cobrarla dos veces. No son faltantes: no impiden calcular.
 	Avisos []string
+
+	// SubTraces son trazas de sub-ensamblados resueltos recursivamente en el
+	// BOM multinivel (Fase 5). Se incorporan al desglose final con su nivel y
+	// path correspondiente.
+	SubTraces []CostTrace
 }
 
 type costComponente struct {
@@ -164,6 +170,13 @@ type costComponente struct {
 	UnitCost    float64 `json:"unit_cost"`
 	LossFactor  float64 `json:"loss_factor"`
 	Step        int     `json:"step"`
+	UOM         string  `json:"uom"` // unidad de medida de la línea de receta
+	// SubLevel y SubPath rastrean la posición en el BOM multinivel (Fase 5).
+	// Un componente que es a su vez un producto ensamblado tiene su costo
+	// unitario resuelto recursivamente; SubLevel y SubPath permiten mostrar
+	// la trazabilidad completa (pan > masa > harina).
+	SubLevel int    `json:"sub_level"`
+	SubPath  string `json:"sub_path"`
 }
 
 type costYieldRow struct {
@@ -332,6 +345,10 @@ func calcularCosto(in costInputs) CostBreakdown {
 	for _, a := range in.Avisos {
 		b.Advertencias = append(b.Advertencias, a)
 	}
+	// Incorporar trazas de sub-ensamblados del BOM multinivel (nivel 1+).
+	for _, st := range in.SubTraces {
+		b.Traces = append(b.Traces, st)
+	}
 	return b
 }
 
@@ -363,6 +380,8 @@ func materialPorReceta(in costInputs) (float64, []CostTrace) {
 			Cantidad: c.Cantidad,
 			Importe:  neto,
 			Fuente:   "product_recipe",
+			Level:    c.SubLevel,
+			Path:     c.SubPath,
 		})
 	}
 	if len(in.Componentes) > 0 {
@@ -473,6 +492,68 @@ func materialPorImportacion(in costInputs) (float64, float64, []CostTrace, []str
 		Fuente:   "import_cost",
 	})
 	return material, customs, traces, avisos
+}
+
+// maxBOMDepth limita la profundidad de explosión del BOM para evitar ciclos
+// infinitos (A usa B, B usa A). 10 niveles es suficiente para cualquier
+// fabricación real y el motor avisa si se supera.
+const maxBOMDepth = 10
+
+// resolverCostoUnitarioProducto calcula el costo unitario de un producto
+// ensamblado para usarlo como componente de un BOM superior.
+//
+// Es recursiva: si el componente es a su vez un producto fabricado (RECIPE,
+// YIELD o IMPORT), calcula su costo desglosando su propia receta, hasta
+// maxBOMDepth. Detecta ciclos con el mapa visitados y retorna 0 con advertencia
+// si se encuentra uno.
+//
+// No guarda en cost_component: solo devuelve el número para usarlo como
+// UnitCost del componente padre. El resultado se memoiza implícitamente por
+// la cadena de llamadas (no hay cache global para evitar complejidad; el BOM
+// suele ser pequeño).
+func (s *Server) resolverCostoUnitarioProducto(db *sql.DB, productID, periodo string, cantidad float64, nivel int, path string, visitados map[string]bool) (float64, []CostTrace, []string) {
+	if nivel > maxBOMDepth {
+		return 0, nil, []string{fmt.Sprintf("BOM superó %d niveles en %s: posible ciclo, se corta", maxBOMDepth, path)}
+	}
+	if visitados[productID] {
+		return 0, nil, []string{fmt.Sprintf("ciclo en BOM detectado en %s: %s ya está en la ruta", path, productID)}
+	}
+
+	// Copiar visitados para esta rama (no modificar el mapa del caller).
+	v := make(map[string]bool)
+	for k := range visitados {
+		v[k] = true
+	}
+	v[productID] = true
+
+	nuevoPath := path
+	if path == "" {
+		nuevoPath = productID
+	} else {
+		nuevoPath = path + " > " + productID
+	}
+
+	in := s.cargarCostInputs(db, productID, periodo, cantidad)
+	b := calcularCostoConNivel(in, nivel, nuevoPath)
+
+	return b.Final, b.Traces, in.Faltantes
+}
+
+// calcularCostoConNivel es calcularCosto con nivel y path para trazabilidad
+// de BOM multinivel. Los niveles 0+ se usan cuando el producto es un
+// subcomponente de otro.
+func calcularCostoConNivel(in costInputs, nivel int, path string) CostBreakdown {
+	b := calcularCosto(in)
+	// Etiquetar todas las trazas con el nivel y path del BOM.
+	for i := range b.Traces {
+		if b.Traces[i].Level == 0 {
+			b.Traces[i].Level = nivel
+		}
+		if b.Traces[i].Path == "" {
+			b.Traces[i].Path = path
+		}
+	}
+	return b
 }
 
 // laborPorHoras suma horas × tarifa × productividad.
@@ -694,7 +775,7 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 	rows, err := db.Query(`SELECT component_id, quantity,
 		IFNULL((SELECT cost FROM product_information p WHERE p.product_id = r.component_id),0),
 		IFNULL(loss_factor,0), step_order,
-		IFNULL(labor_grade,''), IFNULL(hours,0)
+		IFNULL(labor_grade,''), IFNULL(hours,0), IFNULL(r.uom,'')
 		FROM product_recipe r WHERE product_id = ? ORDER BY step_order, component_id`, productID)
 	if err != nil {
 		if in.Metodo == costRecipe {
@@ -707,7 +788,7 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 			var grade string
 			var horas float64
 			if err := rows.Scan(&c.ComponentID, &c.Cantidad, &c.UnitCost,
-				&c.LossFactor, &c.Step, &grade, &horas); err == nil {
+				&c.LossFactor, &c.Step, &grade, &horas, &c.UOM); err == nil {
 				if strings.TrimSpace(grade) != "" {
 					in.LaborReceta = append(in.LaborReceta, costHora{
 						Grade:        grade,
@@ -721,6 +802,46 @@ func (s *Server) cargarCostInputs(db *sql.DB, productID, periodo string, cantida
 			}
 		}
 		rows.Close()
+	}
+	// Convertir cantidades de material a la unidad base del componente antes
+	// de calcular. Una receta en gramos sobre un costo por kilo sale 1.000
+	// veces mal si no se convierte.
+	for i := range in.Componentes {
+		c := &in.Componentes[i]
+		if strings.TrimSpace(c.UOM) != "" {
+			c.Cantidad = cantidadEnUoMBase(db, c.ComponentID, c.UOM, c.Cantidad)
+		}
+	}
+	// BOM multinivel (Fase 5): si un componente es un producto ensamblado
+	// (RECIPE, YIELD o IMPORT), resolver su costo unitario recursivamente.
+	// El costo resuelto se usa como UnitCost; las trazas del sub-ensamblado
+	// se guardan en SubTraces para incorporarlas al desglose final.
+	for i := range in.Componentes {
+		c := &in.Componentes[i]
+		if c.SubLevel > 0 {
+			continue // ya resuelto por una llamada anterior
+		}
+		var metodo string
+		_ = db.QueryRow(`SELECT costing_method FROM product_cost_config
+			WHERE product_id = ?`, c.ComponentID).Scan(&metodo)
+		if metodo == "" {
+			metodo = costPP
+		}
+		if metodo != costPP {
+			subCosto, subTraces, subAvisos := s.resolverCostoUnitarioProducto(
+				db, c.ComponentID, in.Periodo, c.Cantidad, 1, in.ProductID+" > "+c.ComponentID, map[string]bool{in.ProductID: true})
+			c.UnitCost = subCosto
+			c.SubLevel = 1
+			c.SubPath = in.ProductID + " > " + c.ComponentID
+			for _, st := range subTraces {
+				st.Level = 1
+				st.Path = c.SubPath + " > " + st.Component
+				in.SubTraces = append(in.SubTraces, st)
+			}
+			for _, sa := range subAvisos {
+				in.Faltantes = append(in.Faltantes, sa)
+			}
+		}
 	}
 	if in.Metodo == costRecipe && len(in.Componentes) == 0 {
 		in.Faltantes = append(in.Faltantes,

@@ -179,17 +179,22 @@ func metodoDeCosteoValido(m string) bool {
 // (labor_grade + horas). La distinción es por labor_grade: si viene, el renglón
 // se paga por hora del grado y no por costo unitario del componente.
 type CostReceta struct {
-	ProductID   string  `json:"product_id"`
-	ComponentID string  `json:"component_id"`
-	Nombre      string  `json:"nombre"`
-	Cantidad    float64 `json:"cantidad"`
-	Unit        string  `json:"unit"`
-	UnitCost    float64 `json:"unit_cost"`
-	LossFactor  float64 `json:"loss_factor"`
-	Total       float64 `json:"total"`
-	Step        int     `json:"step"`
-	LaborGrade  string  `json:"labor_grade"`
-	Hours       float64 `json:"hours"`
+	ProductID      string  `json:"product_id"`
+	ComponentID    string  `json:"component_id"`
+	Nombre         string  `json:"nombre"`
+	Cantidad       float64 `json:"cantidad"`
+	Unit           string  `json:"unit"`
+	UOM            string  `json:"uom"`
+	UnitCost       float64 `json:"unit_cost"`
+	LossFactor     float64 `json:"loss_factor"`
+	Total          float64 `json:"total"`
+	Step           int     `json:"step"`
+	Version        int     `json:"version"`
+	Active         int     `json:"active"`
+	BatchReference string  `json:"batch_reference"`
+	YieldPct       float64 `json:"yield_pct"`
+	LaborGrade     string  `json:"labor_grade"`
+	Hours          float64 `json:"hours"`
 }
 
 // listarReceta devuelve los componentes de un producto con su costo.
@@ -199,14 +204,18 @@ type CostReceta struct {
 // kardex otra, el costo de la receta y el del inventario no cuadrarían y no
 // habría forma de saber cuál de los dos mente.
 func (s *Server) listarReceta(db *sql.DB, productID string) ([]CostReceta, error) {
+	// Solo la versión activa (active=1 y la más alta). Si hay varias activas,
+	// se toma la de mayor número de versión.
 	rows, err := db.Query(`SELECT r.product_id, r.component_id,
-		IFNULL(p.product_name,''), r.quantity, r.unit,
+		IFNULL(p.product_name,''), r.quantity, r.unit, r.uom,
 		IFNULL(p.cost,0), IFNULL(r.loss_factor,0), r.step_order,
-		IFNULL(r.labor_grade,''), IFNULL(r.hours,0)
+		IFNULL(r.labor_grade,''), IFNULL(r.hours,0),
+		IFNULL(r.version,1), IFNULL(r.active,1), IFNULL(r.batch_reference,''),
+		IFNULL(r.yield_pct,0)
 		FROM product_recipe r
 		LEFT JOIN product_information p ON p.product_id = r.component_id
-		WHERE r.product_id = ?
-		ORDER BY r.step_order, r.component_id`, productID)
+		WHERE r.product_id = ? AND r.active = 1
+		ORDER BY r.version DESC, r.step_order, r.component_id`, productID)
 	if err != nil {
 		return nil, fmt.Errorf("leer receta de %s: %w", productID, err)
 	}
@@ -216,8 +225,9 @@ func (s *Server) listarReceta(db *sql.DB, productID string) ([]CostReceta, error
 	for rows.Next() {
 		var r CostReceta
 		if err := rows.Scan(&r.ProductID, &r.ComponentID, &r.Nombre,
-			&r.Cantidad, &r.Unit, &r.UnitCost, &r.LossFactor, &r.Step,
-			&r.LaborGrade, &r.Hours); err != nil {
+			&r.Cantidad, &r.Unit, &r.UOM, &r.UnitCost, &r.LossFactor, &r.Step,
+			&r.LaborGrade, &r.Hours, &r.Version, &r.Active,
+			&r.BatchReference, &r.YieldPct); err != nil {
 			return nil, fmt.Errorf("leer renglón de receta: %w", err)
 		}
 		if strings.TrimSpace(r.LaborGrade) != "" {
@@ -252,6 +262,15 @@ func guardarReceta(db *sql.DB, r CostReceta) error {
 		return fmt.Errorf("el producto es obligatorio")
 	}
 	r.LaborGrade = strings.TrimSpace(r.LaborGrade)
+	if r.UOM == "" {
+		r.UOM = r.Unit
+	}
+	if r.Version <= 0 {
+		r.Version = 1
+	}
+	if r.Active == 0 {
+		r.Active = 1
+	}
 	if r.LaborGrade != "" {
 		if r.Hours <= 0 {
 			return fmt.Errorf("las horas de mano de obra deben ser mayores que cero")
@@ -280,14 +299,16 @@ func guardarReceta(db *sql.DB, r CostReceta) error {
 		r.Hours = 0
 	}
 	_, err := db.Exec(`INSERT INTO product_recipe
-		(product_id, component_id, quantity, unit, loss_factor, step_order,
-		 labor_grade, hours)
-		VALUES (?,?,?,?,?,?,?,?)
+		(product_id, component_id, quantity, unit, uom, loss_factor, step_order,
+		 labor_grade, hours, version, active, batch_reference, yield_pct)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON DUPLICATE KEY UPDATE quantity=VALUES(quantity), unit=VALUES(unit),
-		 loss_factor=VALUES(loss_factor), labor_grade=VALUES(labor_grade),
-		 hours=VALUES(hours)`,
-		r.ProductID, r.ComponentID, r.Cantidad, r.Unit, r.LossFactor, r.Step,
-		r.LaborGrade, r.Hours)
+		 uom=VALUES(uom), loss_factor=VALUES(loss_factor),
+		 labor_grade=VALUES(labor_grade), hours=VALUES(hours),
+		 version=VALUES(version), active=VALUES(active),
+		 batch_reference=VALUES(batch_reference), yield_pct=VALUES(yield_pct)`,
+		r.ProductID, r.ComponentID, r.Cantidad, r.Unit, r.UOM, r.LossFactor, r.Step,
+		r.LaborGrade, r.Hours, r.Version, r.Active, r.BatchReference, r.YieldPct)
 	if err != nil {
 		return fmt.Errorf("guardar componente de receta: %w", err)
 	}

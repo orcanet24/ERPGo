@@ -1,0 +1,72 @@
+{{define "content"}}
+{{/* recarga completa permitida */}}
+{{/*
+  cost_margin.html — Informe de costo vs precio vs margen (Fase 7).
+*/}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Costo vs precio vs margen</h4></div>
+        <div class="panel-tools pull-right">
+            <a href="/cost" class="btn btn-default">Volver a costos</a>
+        </div>
+    </div>
+    <div class="panel-body">
+
+        <div class="form-inline" style="margin-bottom:15px;">
+            <label>Lista de precio</label>
+            <select name="lista" id="fLista" class="form-control input-small">
+                <option value="0">Todas (costo del kardex)</option>
+            </select>
+        </div>
+
+        <table class="table">
+            <thead><tr>
+                <th>Producto</th><th>Nombre</th>
+                <th class="text-right">Costo</th>
+                <th class="text-right">Precio</th>
+                <th class="text-right">Margen</th>
+                <th class="text-right">Margen %</th>
+            </tr></thead>
+            <tbody>
+            {{range .Informe}}
+                <tr>
+                    <td><strong>{{.ProductID}}</strong></td>
+                    <td>{{.ProductName}}</td>
+                    <td class="text-right">{{printf "%.4f" .Costo}}</td>
+                    <td class="text-right">{{printf "%.4f" .Precio}}</td>
+                    <td class="text-right">{{printf "%.4f" .Margen}}</td>
+                    <td class="text-right">{{printf "%.2f" .MargenPct}}%</td>
+                </tr>
+            {{else}}
+                <tr><td colspan="6" class="text-muted">Sin datos.</td></tr>
+            {{end}}
+            </tbody>
+        </table>
+        <p class="text-muted">
+            El costo se toma de product_information.cost (CPP del kardex).
+            El precio se toma de la lista seleccionada o de product_price_list.
+            El margen = precio − costo.
+        </p>
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    // Cargar listas de precio para el selector.
+    $.get('/cost/lists').done(function (r) {
+        var h = '<option value="0">Todas (costo del kardex)</option>';
+        $.each(r.rows, function (i, l) {
+            h += '<option value="' + l.id + '">' + l.name + '</option>';
+        });
+        $('#fLista').html(h);
+    });
+
+    $('#fLista').on('change', function () {
+        var lista = $(this).val();
+        window.location = '/cost/report/cost-margin?lista=' + lista;
+    });
+});
+</script>
+{{end}}

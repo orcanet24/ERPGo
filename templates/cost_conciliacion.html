@@ -1,0 +1,81 @@
+{{define "content"}}
+{{/* recarga completa permitida */}}
+{{/*
+  cost_conciliacion.html — Conciliación costo vs kardex (Fase 7).
+*/}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Conciliación costo vs kardex</h4></div>
+        <div class="panel-tools pull-right">
+            <a href="/cost" class="btn btn-default">Volver a costos</a>
+        </div>
+    </div>
+    <div class="panel-body">
+
+        <div class="form-inline" style="margin-bottom:15px;">
+            <label>Período</label>
+            <input type="text" name="periodo" id="fPeriodo" class="form-control input-small"
+                   value="{{.Periodo}}" style="width:100px;">
+        </div>
+
+        {{if .Conciliacion}}
+        <div class="alert {{if .Conciliacion.Cuadrada}}alert-success{{else}}alert-warning{{end}}">
+            <strong>Período {{.Conciliacion.Periodo}}:</strong>
+            {{if .Conciliacion.Cuadrada}}
+                Los costos del snapshot cuadran con las salidas del kardex.
+            {{else}}
+                Hay una diferencia entre el costo del snapshot y el kardex.
+                Revisar los productos con diferencia.
+            {{end}}
+        </div>
+
+        <table class="table">
+            <thead><tr>
+                <th>Concepto</th><th class="text-right">Valor</th>
+            </tr></thead>
+            <tbody>
+                <tr>
+                    <td>Costo de ventas (cost_snapshot)</td>
+                    <td class="text-right">{{printf "%.4f" .Conciliacion.CostoSnapshot}}</td>
+                </tr>
+                <tr>
+                    <td>Valor de salidas (kardex)</td>
+                    <td class="text-right">{{printf "%.4f" .Conciliacion.ValorKardex}}</td>
+                </tr>
+                <tr>
+                    <td><strong>Diferencia</strong></td>
+                    <td class="text-right"><strong>{{printf "%.4f" .Conciliacion.Diferencia}}</strong></td>
+                </tr>
+            </tbody>
+        </table>
+
+        {{if .Conciliacion.ProductoDiferente}}
+        <div class="alert alert-warning">
+            Producto con mayor diferencia: <strong>{{.Conciliacion.ProductoDiferente}}</strong>.
+            Revisar su receta, costo de insumos y salidas del kardex.
+        </div>
+        {{end}}
+
+        <p class="text-muted">
+            La conciliación compara la suma de cost_snapshot (costos congelados
+            al cerrar el período) con las salidas del kardex. Si no cuadran,
+            el informe indica el producto con mayor diferencia.
+        </p>
+        {{else}}
+        <div class="alert alert-warning">
+            No se pudo conciliar el período <strong>{{.Periodo}}</strong>.
+        </div>
+        {{end}}
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#fPeriodo').on('change', function () {
+        window.location = '/cost/report/conciliacion?periodo=' + $(this).val();
+    });
+});
+</script>
+{{end}}

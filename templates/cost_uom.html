@@ -1,0 +1,118 @@
+{{define "content"}}
+{{/* recarga completa permitida */}}
+{{/* tras guardar una UoM o una conversión se recarga para que los datos
+     estén disponibles inmediatamente en la receta y el cálculo. */}}
+{{/*
+  cost_uom.html — Unidades de medida (Fase 4).
+
+  POR QUÉ EXISTE. product_information.unit es texto libre: cada quien escribe
+  "kg", "Kg", "kilogramo", etc. Sin un catálogo y sin conversiones, una receta
+  en gramos sobre un costo por kilo sale 1.000 veces mal. Esta pantalla da el
+  catálogo de UoM y cada producto puede definir sus conversiones en la pestaña
+  de conversiones.
+*/}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Unidades de medida</h4></div>
+        <div class="panel-tools pull-right">
+            <a href="/cost" class="btn btn-default">Volver a costos</a>
+        </div>
+    </div>
+    <div class="panel-body">
+
+        <div class="row">
+            <div class="col-md-5">
+                <h5 id="tituloFormUoM">Nueva unidad</h5>
+                <form id="fUoM">
+                    <div class="form-group">
+                        <label>Código</label>
+                        <input type="text" name="code" id="uCode" class="form-control"
+                               placeholder="kg" required>
+                        <p class="help-block">Código corto: kg, g, un, lt, ml.</p>
+                    </div>
+                    <div class="form-group">
+                        <label>Nombre</label>
+                        <input type="text" name="name" id="uName" class="form-control"
+                               placeholder="Kilogramo">
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" name="allows_decimal" value="1" id="uDecimal" checked>
+                            Permite decimales</label>
+                        <p class="help-block">
+                            Si no se marca, la cantidad debe ser entera (por ejemplo, "unidades").
+                        </p>
+                    </div>
+                    <button class="btn btn-primary">Guardar unidad</button>
+                    <button type="button" class="btn btn-default" id="btnNuevaUoM">Limpiar</button>
+                </form>
+            </div>
+
+            <div class="col-md-7">
+                <h5>Unidades definidas</h5>
+                <table class="table">
+                    <thead><tr>
+                        <th>Código</th><th>Nombre</th><th>Decimales</th><th>Conversiones</th>
+                    </tr></thead>
+                    <tbody>
+                    {{range .UoMs}}
+                        <tr>
+                            <td><strong>{{.Code}}</strong></td>
+                            <td>{{.Name}}</td>
+                            <td class="text-center">{{if .AllowsDecimal}}Sí{{else}}No{{end}}</td>
+                            <td><a href="/cost/uom/{{.Code}}/conversions" class="btn btn-default btn-sm">
+                                Ver conversiones
+                            </a></td>
+                        </tr>
+                    {{else}}
+                        <tr><td colspan="4" class="text-muted">Sin unidades definidas.</td></tr>
+                    {{end}}
+                    </tbody>
+                </table>
+                <p class="text-muted">
+                    Cada producto puede definir conversiones entre sus unidades
+                    (por ejemplo, harina: g → kg con factor 0.001). El motor las
+                    usa para convertir a la unidad base antes de calcular el costo
+                    de la receta.
+                </p>
+            </div>
+        </div>
+
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+
+    function limpiar() {
+        $('#fUoM')[0].reset();
+        $('#uCode').prop('readonly', false);
+        $('#tituloFormUoM').text('Nueva unidad');
+        $('#uDecimal').prop('checked', true);
+    }
+
+    $('#btnNuevaUoM').on('click', limpiar);
+
+    $('#fUoM').on('submit', function (e) {
+        e.preventDefault();
+        var f = $(this);
+        var datos = f.serialize();
+        if (!$('#uDecimal').is(':checked')) { datos += '&allows_decimal=0'; }
+        $.post('/cost/uom/save', datos)
+            .done(function (r) {
+                if (r.status === 1) {
+                    toastr.success(r.msg);
+                    window.location.reload();
+                } else {
+                    toastr.error(r.error || 'Error');
+                }
+            })
+            .fail(function (x) {
+                toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudo guardar');
+            });
+    });
+
+});
+</script>
+{{end}}

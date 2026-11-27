@@ -1,0 +1,67 @@
+{{define "content"}}
+{{/* recarga completa permitida */}}
+{{/*
+  cost_ventas.html — Costo de ventas del período (Fase 7).
+*/}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Costo de ventas del período</h4></div>
+        <div class="panel-tools pull-right">
+            <a href="/cost" class="btn btn-default">Volver a costos</a>
+        </div>
+    </div>
+    <div class="panel-body">
+
+        <div class="form-inline" style="margin-bottom:15px;">
+            <label>Período</label>
+            <input type="text" name="periodo" id="fPeriodo" class="form-control input-small"
+                   value="{{.Periodo}}" style="width:100px;">
+        </div>
+
+        {{if .CostoVentas}}
+        <table class="table">
+            <thead><tr>
+                <th>Período</th><th>Productos</th>
+                <th class="text-right">Costo total</th>
+                <th class="text-right">Material</th>
+                <th class="text-right">Mano de obra</th>
+                <th class="text-right">Depreciación</th>
+                <th class="text-right">Indirecto</th>
+                <th class="text-right">Aduana</th>
+            </tr></thead>
+            <tbody>
+                <tr>
+                    <td><strong>{{.CostoVentas.Periodo}}</strong></td>
+                    <td>{{.CostoVentas.Productos}}</td>
+                    <td class="text-right">{{printf "%.4f" .CostoVentas.CostoTotal}}</td>
+                    <td class="text-right">{{printf "%.4f" .CostoVentas.CostoMaterial}}</td>
+                    <td class="text-right">{{printf "%.4f" .CostoVentas.CostoLabor}}</td>
+                    <td class="text-right">{{printf "%.4f" .CostoVentas.CostoDepr}}</td>
+                    <td class="text-right">{{printf "%.4f" .CostoVentas.CostoIndirect}}</td>
+                    <td class="text-right">{{printf "%.4f" .CostoVentas.CostoAduana}}</td>
+                </tr>
+            </tbody>
+        </table>
+        <p class="text-muted">
+            Los costos se toman de cost_snapshot (los valores congelados al
+            cerrar el período). Un período cerrado no se reescribe.
+        </p>
+        {{else}}
+        <div class="alert alert-warning">
+            No hay costos congelados para el período <strong>{{.Periodo}}</strong>.
+            Cierre el período primero desde /cost/period.
+        </div>
+        {{end}}
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+    $('#fPeriodo').on('change', function () {
+        window.location = '/cost/report/cost-ventas?periodo=' + $(this).val();
+    });
+});
+</script>
+{{end}}

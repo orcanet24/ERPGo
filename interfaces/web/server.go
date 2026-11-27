@@ -518,6 +518,12 @@ func NewServer(cfg *configs.Config, db *sql.DB) *Server {
 	s.registerCostRoutes()
 	// Activos fijos y depreciación (Fase 2).
 	s.registerAssetsRoutes()
+	// Unidades de medida y conversiones (Fase 4).
+	s.registerUomRoutes()
+	// Órdenes de producción (Fase 6).
+	s.registerProductionRoutes()
+	// Informes e integración contable (Fase 7).
+	s.registerCostReportRoutes()
 	// Inventario avanzado: FEFO y caducidades, punto de pedido y conteo cíclico
 	s.registerInventoryExpiryRoutes()
 	s.registerReorderRoutes()

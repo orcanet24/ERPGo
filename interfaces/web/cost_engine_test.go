@@ -50,6 +50,7 @@ func tablasCostosPrueba(t *testing.T, db *sql.DB) {
 		`CREATE TABLE product_information (
 			product_id TEXT PRIMARY KEY,
 			product_name TEXT NOT NULL DEFAULT '',
+			unit TEXT NOT NULL DEFAULT '',
 			cost REAL NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE product_recipe (
@@ -58,10 +59,15 @@ func tablasCostosPrueba(t *testing.T, db *sql.DB) {
 			component_id TEXT NOT NULL,
 			quantity REAL NOT NULL DEFAULT 0,
 			unit TEXT NOT NULL DEFAULT '',
+			uom TEXT NOT NULL DEFAULT '',
 			loss_factor REAL NOT NULL DEFAULT 0,
 			step_order INTEGER NOT NULL DEFAULT 0,
 			labor_grade TEXT NOT NULL DEFAULT '',
-			hours REAL NOT NULL DEFAULT 0
+			hours REAL NOT NULL DEFAULT 0,
+			version INTEGER NOT NULL DEFAULT 1,
+			active INTEGER NOT NULL DEFAULT 1,
+			batch_reference TEXT NOT NULL DEFAULT '',
+			yield_pct REAL NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE product_yield (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,6 +175,19 @@ func tablasCostosPrueba(t *testing.T, db *sql.DB) {
 			machine_time_sec REAL NOT NULL DEFAULT 0,
 			labor_grade TEXT NOT NULL DEFAULT '',
 			active INTEGER NOT NULL DEFAULT 1
+		)`,
+		`CREATE TABLE unit_of_measure (
+			code VARCHAR(10) NOT NULL PRIMARY KEY,
+			name VARCHAR(60) NOT NULL,
+			allows_decimal INTEGER NOT NULL DEFAULT 1
+		)`,
+		`CREATE TABLE product_uom_conversion (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			product_id VARCHAR(100) NOT NULL,
+			from_uom VARCHAR(10) NOT NULL,
+			to_uom VARCHAR(10) NOT NULL,
+			factor REAL NOT NULL DEFAULT 0,
+			UNIQUE (product_id, from_uom, to_uom)
 		)`,
 	}
 	for _, d := range ddl {
@@ -1500,3 +1519,132 @@ func TestCostoConIndirectoYManoDeObraDeRuta(t *testing.T) {
 		t.Error("falta traza de labor por ruta de proceso")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Fase 4: unidades de medida y conversiones
+// ---------------------------------------------------------------------------
+
+// TestConvertirUoM verifica la conversión directa de unidades.
+func TestConvertirUoM(t *testing.T) {
+	_, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO unit_of_measure (code, name, allows_decimal)
+		VALUES ('g', 'Gramo', 1), ('kg', 'Kilogramo', 1)`); err != nil {
+		t.Fatalf("insertar UoM: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_uom_conversion
+		(product_id, from_uom, to_uom, factor)
+		VALUES ('harina', 'g', 'kg', 0.001)`); err != nil {
+		t.Fatalf("insertar conversión: %v", err)
+	}
+
+	// 500 g → 0.5 kg.
+	convertido, err := convertirUoM(db, "harina", "g", "kg", 500)
+	if err != nil {
+		t.Fatalf("convertir: %v", err)
+	}
+	if !casiIgual(convertido, 0.5) {
+		t.Errorf("conversión: %v; esperado 0.5", convertido)
+	}
+
+	// Misma unidad: sin conversión.
+	misma, err := convertirUoM(db, "harina", "kg", "kg", 500)
+	if err != nil || !casiIgual(misma, 500) {
+		t.Errorf("misma unidad: %v, err %v; esperado 500, nil", misma, err)
+	}
+
+	// Sin conversión registrada: devuelve la cantidad original y error.
+	sinConv, err := convertirUoM(db, "harina", "kg", "g", 1)
+	if err == nil || !casiIgual(sinConv, 1) {
+		t.Errorf("sin conversión: %v, err %v; esperado 1, error", sinConv, err)
+	}
+}
+
+// TestCantidadEnUoMBase convierte a la unidad base del producto.
+func TestCantidadEnUoMBase(t *testing.T) {
+	_, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO unit_of_measure (code, name, allows_decimal)
+		VALUES ('g', 'Gramo', 1), ('kg', 'Kilogramo', 1)`); err != nil {
+		t.Fatalf("insertar UoM: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_uom_conversion
+		(product_id, from_uom, to_uom, factor)
+		VALUES ('harina', 'g', 'kg', 0.001)`); err != nil {
+		t.Fatalf("insertar conversión: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, unit, cost)
+		VALUES ('harina', 'kg', 2)`); err != nil {
+		t.Fatalf("insertar producto: %v", err)
+	}
+
+	// La unidad base es kg; 500 g se convierte a 0.5 kg.
+	cantidad := cantidadEnUoMBase(db, "harina", "g", 500)
+	if !casiIgual(cantidad, 0.5) {
+		t.Errorf("cantidad en base: %v; esperado 0.5", cantidad)
+	}
+
+	// Sin unidad base definida: devuelve la cantidad original.
+	cantidad2 := cantidadEnUoMBase(db, "sal", "g", 100)
+	if !casiIgual(cantidad2, 100) {
+		t.Errorf("cantidad sin base: %v; esperado 100", cantidad2)
+	}
+}
+
+// TestCostoConConversionUoM integra el motor: una receta en gramos sobre un
+// costo por kilo se convierte correctamente a unidad base.
+func TestCostoConConversionUoM(t *testing.T) {
+	s, db := basePrueba(t)
+	tablasCostosPrueba(t, db)
+
+	if _, err := db.Exec(`INSERT INTO product_cost_config
+		(product_id, costing_method, cost_center_id, is_assembled)
+		VALUES ('PAN', 'RECIPE', 1, 1)`); err != nil {
+		t.Fatalf("insertar config: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, unit, cost)
+		VALUES ('PAN', 'un', 0)`); err != nil {
+		t.Fatalf("insertar producto: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_information (product_id, unit, cost)
+		VALUES ('harina', 'kg', 2)`); err != nil {
+		t.Fatalf("insertar insumo: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO cost_center (id, code, name, overhead_rate_unit, overhead_rate_hour, active)
+		VALUES (1, 'PROD', 'Producción', 0, 0, 1)`); err != nil {
+		t.Fatalf("insertar centro: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO unit_of_measure (code, name, allows_decimal)
+		VALUES ('g', 'Gramo', 1), ('kg', 'Kilogramo', 1)`); err != nil {
+		t.Fatalf("insertar UoM: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO product_uom_conversion
+		(product_id, from_uom, to_uom, factor)
+		VALUES ('harina', 'g', 'kg', 0.001)`); err != nil {
+		t.Fatalf("insertar conversión: %v", err)
+	}
+	// 500 g de harina a $2/kg = 1.0 (no 1000).
+	if _, err := db.Exec(`INSERT INTO product_recipe
+		(product_id, component_id, quantity, unit, uom, loss_factor, step_order, labor_grade, hours)
+		VALUES ('PAN', 'harina', 500, 'g', 'g', 0, 1, '', 0)`); err != nil {
+		t.Fatalf("insertar receta: %v", err)
+	}
+
+	in := s.cargarCostInputs(db, "PAN", "2026-01", 1)
+	if !casiIgual(in.Componentes[0].Cantidad, 0.5) {
+		t.Errorf("cantidad convertida: %v; esperado 0.5 kg", in.Componentes[0].Cantidad)
+	}
+	b := calcularCosto(in)
+	if !casiIgual(b.Material, 1.0) {
+		t.Errorf("material: %v; esperado 1.0 (0.5 kg × 2)", b.Material)
+	}
+	if !casiIgual(b.Final, 1.0) {
+		t.Errorf("final: %v; esperado 1.0", b.Final)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fase 5: BOM multinivel
+// ---------------------------------------------------------------------------

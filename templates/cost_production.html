@@ -1,0 +1,234 @@
+{{define "content"}}
+{{/* recarga completa permitida */}}
+{{/* tras guardar o cerrar una orden se recarga para ver el costo actualizado. */}}
+{{/*
+  cost_production.html — Órdenes de producción (Fase 6).
+
+  POR QUÉ EXISTE. El motor ya costea recetas, rutas, activos y UoM, pero no
+  había forma de producir: una orden de producción convierte insumos en
+  producto terminado, registra el consumo real y calcula el costo real por
+  unidad producido.
+
+  Flujo:
+    1. Crear orden desde la receta activa (copia el BOM planificado).
+    2. Registrar consumo real por línea (cantidad real vs planificada).
+    3. Cerrar la orden: calcula el costo real, lo guarda en cost_component y
+       deja el costo unitario del producto producido.
+*/}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title"><h4>Órdenes de producción</h4></div>
+        <div class="panel-tools pull-right">
+            <a href="/cost" class="btn btn-default">Volver a costos</a>
+        </div>
+    </div>
+    <div class="panel-body">
+
+        <div class="row">
+            <div class="col-md-5">
+                <h5 id="tituloFormOrden">Nueva orden</h5>
+                <form id="fOrden">
+                    <div class="form-group">
+                        <label>Código de la orden</label>
+                        <input type="text" name="code" id="pCode" class="form-control"
+                               placeholder="OP-001" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Producto</label>
+                        <input type="text" name="product_id" id="pProducto"
+                               class="form-control" placeholder="Código del producto" required>
+                        <p class="help-block">
+                            El producto debe tener una receta activa para poder
+                            planificar la orden.
+                        </p>
+                    </div>
+                    <div class="form-group">
+                        <label>Cantidad a producir</label>
+                        <input type="number" step="0.0001" min="0.0001" name="quantity"
+                               id="pCantidad" class="form-control" value="1" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Período</label>
+                        <input type="text" name="period" id="pPeriodo"
+                               class="form-control" value="{{.Periodo}}" required>
+                    </div>
+                    <button class="btn btn-primary">Crear orden</button>
+                    <button type="button" class="btn btn-default" id="btnNuevaOrden">Limpiar</button>
+                </form>
+            </div>
+
+            <div class="col-md-7">
+                <h5>Órdenes definidas</h5>
+                <table class="table">
+                    <thead><tr>
+                        <th>Código</th><th>Producto</th><th class="text-right">Cantidad</th>
+                        <th>Período</th><th>Estado</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                    {{range .Ordenes}}
+                        <tr>
+                            <td><strong>{{.Code}}</strong></td>
+                            <td>{{.ProductID}}</td>
+                            <td class="text-right">{{printf "%.4f" .Quantity}}</td>
+                            <td>{{.Periodo}}</td>
+                            <td>{{if eq .Status "cerrada"}}<span class="text-success">Cerrada</span>{{else}}Abierta{{end}}</td>
+                            <td>
+                                <a href="#" class="verLineas" data-id="{{.ID}}" data-producto="{{.ProductID}}">ver líneas</a>
+                                {{if eq .Status "abierta"}}
+                                <button class="btn btn-default btn-sm cerrarOrden" data-id="{{.ID}}">Cerrar</button>
+                                {{end}}
+                            </td>
+                        </tr>
+                    {{else}}
+                        <tr><td colspan="6" class="text-muted">Sin órdenes definidas.</td></tr>
+                    {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <hr>
+
+        <div class="row" id="lineasContainer" style="display:none;">
+            <div class="col-md-12">
+                <h5>Líneas de la orden <span id="lineasOrdenCodigo"></span></h5>
+                <table class="table" id="tblLineas">
+                    <thead><tr>
+                        <th>Componente</th><th class="text-right">Planificado</th>
+                        <th class="text-right">Real</th><th class="text-right">Costo unit.</th>
+                        <th class="text-right">Costo total</th><th>Acciones</th>
+                    </tr></thead>
+                    <tbody id="lineasTbody"></tbody>
+                </table>
+                <form id="fConsumo" class="form-inline" style="margin-top:10px;">
+                    <input type="hidden" name="order_id" id="cOrderId">
+                    <label>Línea</label>
+                    <select name="linea_id" id="cLineaId" class="form-control input-small"></select>
+                    <label>Cantidad real</label>
+                    <input type="number" step="0.0001" min="0" name="actual_qty"
+                           id="cActualQty" class="form-control input-small" required>
+                    <button class="btn btn-default">Registrar consumo</button>
+                </form>
+                <button class="btn btn-primary cerrarOrden" id="btnCerrarOrden" style="margin-top:10px;">
+                    Cerrar orden y calcular costo
+                </button>
+                <span id="msgCosto" class="text-muted ml-2"></span>
+            </div>
+        </div>
+
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+
+    var ordenIdSeleccionada = null;
+    var ordenProducto = null;
+
+    $('.verLineas').on('click', function (e) {
+        e.preventDefault();
+        var d = $(this).data();
+        ordenIdSeleccionada = d.id;
+        ordenProducto = d.producto;
+        $('#lineasContainer').show();
+        $('#lineasOrdenCodigo').text('OP #' + d.id);
+        $('#cOrderId').val(d.id);
+        $('#btnCerrarOrden').data('id', d.id);
+        cargarLineas();
+    });
+
+    function cargarLineas() {
+        if (!ordenIdSeleccionada) return;
+        $.get('/cost/production/' + ordenIdSeleccionada + '/lines/data')
+            .done(function (r) {
+                var h = '';
+                if (!r.rows.length) {
+                    h = '<tr><td colspan="6" class="text-muted">Sin líneas.</td></tr>';
+                }
+                var costoTotal = 0;
+                var lineaOpts = '';
+                $.each(r.rows, function (i, l) {
+                    var total = l.actual_qty * l.unit_cost;
+                    costoTotal += total;
+                    lineaOpts += '<option value="' + l.id + '">' + l.component_id + '</option>';
+                    h += '<tr>' +
+                        '<td>' + l.component_id + '</td>' +
+                        '<td class="text-right">' + parseFloat(l.planned_qty || 0).toFixed(4) + '</td>' +
+                        '<td class="text-right">' + parseFloat(l.actual_qty || 0).toFixed(4) + '</td>' +
+                        '<td class="text-right">' + parseFloat(l.unit_cost || 0).toFixed(4) + '</td>' +
+                        '<td class="text-right">' + total.toFixed(2) + '</td>' +
+                        '<td></td></tr>';
+                });
+                $('#lineasTbody').html(h);
+                $('#cLineaId').html(lineaOpts);
+                $('#msgCosto').text('Costo total estimado: ' + costoTotal.toFixed(2));
+            })
+            .fail(function () {
+                toastr.error('No se pudieron cargar las líneas');
+            });
+    }
+
+    $('#fOrden').on('submit', function (e) {
+        e.preventDefault();
+        var f = $(this);
+        $.post('/cost/production/save', f.serialize())
+            .done(function (r) {
+                if (r.status === 1) {
+                    toastr.success(r.msg);
+                    window.location.reload();
+                } else {
+                    toastr.error(r.error || 'Error');
+                }
+            })
+            .fail(function (x) {
+                toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudo guardar');
+            });
+    });
+
+    $('#fConsumo').on('submit', function (e) {
+        e.preventDefault();
+        var f = $(this);
+        $.post('/cost/production/' + ordenIdSeleccionada + '/consume', f.serialize())
+            .done(function (r) {
+                if (r.status === 1) {
+                    toastr.success(r.msg);
+                    cargarLineas();
+                } else {
+                    toastr.error(r.error || 'Error');
+                }
+            })
+            .fail(function (x) {
+                toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudo registrar');
+            });
+    });
+
+    $('.cerrarOrden').on('click', function (e) {
+        e.preventDefault();
+        var id = $(this).data('id') || $('#btnCerrarOrden').data('id');
+        if (!id) return;
+        if (!confirm('¿Cerrar la orden ' + id + ' y calcular el costo real?')) return;
+        var btn = $(this);
+        btn.prop('disabled', true).text('Calculando...');
+        $.post('/cost/production/' + id + '/close', 'order_id=' + id)
+            .done(function (r) {
+                if (r.status === 1) {
+                    toastr.success(r.msg + ' - Costo unitario: ' + parseFloat(r.costo_unitario).toFixed(4));
+                    $('#msgCosto').text('Costo unitario cerrado: ' + parseFloat(r.costo_unitario).toFixed(4));
+                    window.location.reload();
+                } else {
+                    toastr.error(r.error || 'Error');
+                    btn.prop('disabled', false).text('Cerrar orden y calcular costo');
+                }
+            })
+            .fail(function (x) {
+                var m = (x.responseJSON && x.responseJSON.error) || 'No se pudo cerrar';
+                toastr.error(m);
+                btn.prop('disabled', false).text('Cerrar orden y calcular costo');
+            });
+    });
+
+});
+</script>
+{{end}}

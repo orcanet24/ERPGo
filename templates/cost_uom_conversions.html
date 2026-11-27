@@ -1,0 +1,131 @@
+{{define "content"}}
+{{/* recarga completa permitida */}}
+{{/* tras guardar una conversión se recarga para que el motor use el nuevo
+     factor al calcular el costo del producto. */}}
+{{/*
+  cost_uom_conversions.html — Conversiones de UoM por producto (Fase 4).
+
+  POR QUÉ EXISTE. El motor convierte cada línea de receta a la unidad base del
+  componente antes de multiplicar por su costo. Sin esta conversión, una receta
+  en gramos sobre un costo por kilo sale 1.000 veces mal.
+*/}}
+<div class="panel panel-bd">
+    <div class="panel-heading">
+        <div class="panel-title">
+            <h4>Conversiones de UoM &mdash; <small>{{.ProductID}}</small></h4>
+        </div>
+        <div class="panel-tools pull-right">
+            <a href="/cost/uom" class="btn btn-default">Volver a unidades</a>
+            <a href="/cost/product/{{.ProductID}}" class="btn btn-default">Ver producto</a>
+        </div>
+    </div>
+    <div class="panel-body">
+
+        <div class="row">
+            <div class="col-md-5">
+                <h5 id="tituloFormConversion">Nueva conversión</h5>
+                <form id="fConversion">
+                    <input type="hidden" name="product_id" value="{{.ProductID}}">
+                    <div class="form-group">
+                        <label>De unidad</label>
+                        <input type="text" name="from_uom" id="cFrom" class="form-control"
+                               placeholder="g" required>
+                        <p class="help-block">Unidad en la que se escribe la receta.</p>
+                    </div>
+                    <div class="form-group">
+                        <label>A unidad</label>
+                        <input type="text" name="to_uom" id="cTo" class="form-control"
+                               placeholder="kg" required>
+                        <p class="help-block">Unidad base del producto (la de su costo).</p>
+                    </div>
+                    <div class="form-group">
+                        <label>Factor</label>
+                        <input type="number" step="0.000001" min="0.000001" name="factor"
+                               id="cFactor" class="form-control" value="0.001" required>
+                        <p class="help-block">
+                            Ejemplo: 1 g = 0.001 kg. El motor multiplica la cantidad
+                            de la receta por este factor para usar la unidad base.
+                        </p>
+                    </div>
+                    <button class="btn btn-primary">Guardar conversión</button>
+                    <button type="button" class="btn btn-default" id="btnNuevaConversion">Limpiar</button>
+                </form>
+            </div>
+
+            <div class="col-md-7">
+                <h5>Conversiones definidas</h5>
+                <table class="table">
+                    <thead><tr>
+                        <th>De</th><th>A</th><th class="text-right">Factor</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                    {{range .Conversions}}
+                        <tr>
+                            <td><strong>{{.FromUOM}}</strong></td>
+                            <td>{{.ToUOM}}</td>
+                            <td class="text-right">{{printf "%.6f" .Factor}}</td>
+                            <td><a href="#" class="borrarConv" data-id="{{.ID}}">borrar</a></td>
+                        </tr>
+                    {{else}}
+                        <tr><td colspan="4" class="text-muted">Sin conversiones definidas.</td></tr>
+                    {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+</div>
+{{end}}
+
+{{define "pagejs"}}
+<script>
+$(function () {
+
+    function limpiar() {
+        $('#fConversion')[0].reset();
+        $('#cFactor').val(0.001);
+        $('#tituloFormConversion').text('Nueva conversión');
+    }
+
+    $('#btnNuevaConversion').on('click', limpiar);
+
+    $('#fConversion').on('submit', function (e) {
+        e.preventDefault();
+        var f = $(this);
+        $.post('/cost/uom/' + encodeURIComponent('{{.ProductID}}') + '/conversions/save', f.serialize())
+            .done(function (r) {
+                if (r.status === 1) {
+                    toastr.success(r.msg);
+                    window.location.reload();
+                } else {
+                    toastr.error(r.error || 'Error');
+                }
+            })
+            .fail(function (x) {
+                toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudo guardar');
+            });
+    });
+
+    $('#tblConversion').on('click', '.borrarConv', function (e) {
+        e.preventDefault();
+        var id = $(this).data('id');
+        if (!confirm('¿Borrar esta conversión?')) return;
+        $.post('/cost/uom/' + encodeURIComponent('{{.ProductID}}') + '/conversions/delete',
+            'id=' + id)
+            .done(function (r) {
+                if (r.status === 1) {
+                    toastr.success(r.msg);
+                    window.location.reload();
+                } else {
+                    toastr.error(r.error || 'Error');
+                }
+            })
+            .fail(function (x) {
+                toastr.error((x.responseJSON && x.responseJSON.error) || 'No se pudo borrar');
+            });
+    });
+
+});
+</script>
+{{end}}
