@@ -107,7 +107,14 @@ func (s *Server) contingenciaRelacion(r *http.Request, desde, hasta string, limi
 	// Estado en la cola de facturación digital. Vive en la base de CONTROL, por
 	// eso se consulta aparte: en la base de la empresa no está.
 	if ctl, cerr := s.controlStore(); cerr == nil && len(ids) > 0 {
-		q := `SELECT invoice_id, COALESCE(status,''), COALESCE(nro_control,0), COALESCE(error_message,'')
+		// El número de control completo, cuando la base ya tiene la columna:
+		// CG lo entrega con su serie ("00-00000056") y la columna entera no
+		// puede guardarla. Ver diColumnaControlTexto.
+		colControl := ""
+		if diColumnaControlTexto(ctl) {
+			colControl = ", COALESCE(nro_control_texto,'')"
+		}
+		q := `SELECT invoice_id, COALESCE(status,''), COALESCE(nro_control,0), COALESCE(error_message,'')` + colControl + `
 			FROM digital_invoice_log
 			WHERE company_id = ? AND invoice_id IN (?` + strings.Repeat(",?", len(ids)-1) + `)`
 		qargs := []interface{}{s.tenantOf(r)}
@@ -119,13 +126,21 @@ func (s *Server) contingenciaRelacion(r *http.Request, desde, hasta string, limi
 				var invID int64
 				var estado, errMsg string
 				var nro int64
-				if rs.Scan(&invID, &estado, &nro, &errMsg) != nil {
+				destinos := []interface{}{&invID, &estado, &nro, &errMsg}
+				var texto string
+				if colControl != "" {
+					destinos = append(destinos, &texto)
+				}
+				if rs.Scan(destinos...) != nil {
 					continue
 				}
 				if i, ok := porInvoice[invID]; ok {
 					filas[i].EstadoDI = estado
 					filas[i].ErrorDI = errMsg
-					if nro > 0 {
+					switch {
+					case strings.TrimSpace(texto) != "":
+						filas[i].NroControl = strings.TrimSpace(texto)
+					case nro > 0:
 						filas[i].NroControl = strconv.FormatInt(nro, 10)
 					}
 					filas[i].Transmitida = estado == "sent"

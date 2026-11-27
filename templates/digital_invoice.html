@@ -5,111 +5,100 @@
         <p class="erp-caption">
             Providencia SNAT/2024/000102 (G.O. 43.032 del 19-dic-2024): la factura
             digital sustituye al comprobante en las operaciones autorizadas.
-            Configure aquí su imprenta digital autorizada.
+            Esta empresa puede emitir por <strong>una</strong> imprenta digital autorizada
+            o, si no tiene ninguna activa, facturar con su impresora fiscal.
         </p>
     </div>
 
-    {{if .Active}}
+    {{if .ModoDigital}}
     <div class="ai_provider_alert alert_ok">
-        Proveedor activo: <strong>{{.ProviderName}}</strong>
+        Modo actual: <strong>{{.ProveedorActivo}}</strong>. Las facturas nuevas se
+        emiten por esta imprenta digital.
     </div>
     {{else}}
     <div class="ai_provider_alert alert_error">
-        No hay ningún proveedor de facturación digital activo.
-        Configure uno a continuación.
+        Modo actual: <strong>Facturación por impresora fiscal</strong>. No hay ninguna
+        imprenta digital activa: las ventas nuevas no se envían a ninguna casa de
+        facturación digital.
     </div>
     {{end}}
 
-    <!-- Configuración del proveedor -->
     <div class="update_ai_setting_section">
-        <p class="section_titles">Configuración del proveedor</p>
-
-        <form id="diProviderForm" class="form_container">
-            <input type="hidden" name="provider_code" id="di_provider_code" value="{{if .ProviderCode}}{{.ProviderCode}}{{else}}unidigital{{end}}" />
-
-            <div class="input_label">
-                <label class="label_name" for="di_name">Proveedor</label>
-                <select name="name" id="di_name" class="input_section" style="width:100%">
-                    {{if .Catalogo}}
-                    {{range .Catalogo}}
-                    <option value="{{.name}}" {{if eq $.ProviderCode .code}}selected{{end}}>{{.name}}</option>
-                    {{end}}
-                    {{else}}
-                    <option value="Unidigital">Unidigital (Corporación Unidigital 1220 C.A.)</option>
-                    {{end}}
-                </select>
-                <small class="erp-caption">
-                    La ley permite UNA imprenta digital activa por empresa. Al activar una nueva, la anterior se desactiva automáticamente y verás la alerta.
-                </small>
-            </div>
-
-            <div class="input_label">
-                <label class="label_name" for="di_base_url">URL base de la API</label>
-                <input type="text" name="base_url" id="di_base_url"
-                    value="{{if .Config.BaseURL}}{{.Config.BaseURL}}{{else}}https://api.unidigital.ve/v1{{end}}"
-                    class="input_section" style="width:100%" autocomplete="off">
-            </div>
-
-            <div class="input_label">
-                <label class="label_name" for="di_bearer_token">Bearer Token</label>
-                <input type="password" name="bearer_token" id="di_bearer_token"
-                    placeholder="Token de autenticación de la imprenta"
-                    class="input_section" style="width:100%" autocomplete="off">
-                <small class="erp-caption">
-                    <a href="#" id="toggleBearer">Mostrar / ocultar token</a>
-                </small>
-            </div>
-
-            <div class="input_label">
-                <label class="label_name" for="di_serie_id">Serie Strong ID</label>
-                <input type="text" name="serie_id" id="di_serie_id"
-                    value="{{if .Config.SerieStrongID}}{{.Config.SerieStrongID}}{{end}}"
-                    class="input_section" style="width:100%" autocomplete="off">
-            </div>
-
-            <div class="input_label">
-                <label class="label_name" for="di_sucursal_id">Sucursal ID (opcional)</label>
-                <input type="text" name="sucursal_id" id="di_sucursal_id"
-                    value="{{if .Config.SucursalID}}{{.Config.SucursalID}}{{end}}"
-                    class="input_section" style="width:100%" autocomplete="off">
-            </div>
-
-            <div class="input_label">
-                <label class="label_name" for="di_moneda">Moneda por defecto</label>
-                <select name="moneda" id="di_moneda" class="input_section" style="width:100%">
-                    <option value="VES" {{if eq .Config.Moneda "VES"}}selected{{end}}>VES (Bolívar)</option>
-                    <option value="USD" {{if eq .Config.Moneda "USD"}}selected{{end}}>USD (Dólar)</option>
-                    <option value="EUR" {{if eq .Config.Moneda "EUR"}}selected{{end}}>EUR (Euro)</option>
-                </select>
-            </div>
-
-            <div class="input_label">
-                <label class="label_name" for="di_doc_type">Tipo de documento por defecto</label>
-                <select name="doc_type" id="di_doc_type" class="input_section" style="width:100%">
-                    <option value="FA" {{if eq .Config.DocumentoTipo "FA"}}selected{{end}}>Factura (FA)</option>
-                    <option value="NC" {{if eq .Config.DocumentoTipo "NC"}}selected{{end}}>Nota de Crédito (NC)</option>
-                    <option value="ND" {{if eq .Config.DocumentoTipo "ND"}}selected{{end}}>Nota de Débito (ND)</option>
-                </select>
-            </div>
-
-            <div class="input_label">
-                <label class="label_name">
-                    <input type="checkbox" name="enabled" id="di_enabled" value="1" {{if .Active}}checked{{end}}>
-                    Habilitar proveedor
-                </label>
-            </div>
-
-            <div class="submit_button_section">
-                <button type="submit" class="btn btn-primary">Guardar y activar</button>
-                <button type="button" class="btn btn-default" id="diPing">Probar conexión</button>
-                <button type="button" class="btn_cancel" id="diCancel">Cancelar</button>
-            </div>
-        </form>
-
-        <p class="provider_hint">
-            <strong>Importante:</strong> Cada proveedor requiere sus propias credenciales (Bearer Token, Serie).
-            Póngase en contacto con la imprenta digital para obtenerlas. Solo se permite un proveedor activo a la vez.
+        <p class="section_titles">Imprentas disponibles</p>
+        <p class="erp-caption">
+            La ley permite UNA imprenta digital activa por empresa. Activar una
+            desactiva automáticamente la otra y verá la alerta. Desactivar no borra
+            la configuración: puede cambiar de imprenta y volver cuando quiera sin
+            teclear las credenciales otra vez.
         </p>
+
+        {{range $imp := .Imprentas}}
+        <div class="update_ai_setting_section" style="margin-top:18px;padding:12px;border:1px solid #e3e6ea;border-radius:6px">
+            <p class="section_titles" style="margin:0 0 4px">
+                {{$imp.Nombre}}
+                {{if $imp.Activa}}
+                <span class="label label-success">ACTIVA</span>
+                {{else if $imp.Configurada}}
+                <span class="label label-default">CONFIGURADA</span>
+                {{else}}
+                <span class="label label-warning">SIN CONFIGURAR</span>
+                {{end}}
+            </p>
+            <p class="erp-caption" style="margin:0 0 10px">{{$imp.Descripcion}}</p>
+
+            <form class="diProviderForm form_container" data-code="{{$imp.Code}}">
+                <input type="hidden" name="provider_code" value="{{$imp.Code}}" />
+
+                {{range $campo := $imp.Campos}}
+                <div class="input_label">
+                    <label class="label_name" for="di_{{$imp.Code}}_{{$campo.Nombre}}">
+                        {{$campo.Etiqueta}}{{if $campo.Obligatorio}} <span style="color:#c0392b">*</span>{{end}}
+                    </label>
+                    {{if eq $campo.Tipo "password"}}
+                    <input type="password" name="{{$campo.Nombre}}" id="di_{{$imp.Code}}_{{$campo.Nombre}}"
+                        value="" class="input_section" style="width:100%" autocomplete="new-password"
+                        placeholder="{{if index $imp.Guardados $campo.Nombre}}Guardado — deje vacío para conservarlo{{else}}Sin configurar{{end}}" />
+                    {{else}}
+                    <input type="{{$campo.Tipo}}" name="{{$campo.Nombre}}" id="di_{{$imp.Code}}_{{$campo.Nombre}}"
+                        value="{{index $imp.Valores $campo.Nombre}}" class="input_section" style="width:100%" autocomplete="off" />
+                    {{end}}
+                    {{if $campo.Ayuda}}<small class="erp-caption">{{$campo.Ayuda}}</small>{{end}}
+                </div>
+                {{end}}
+
+                <div class="submit_button_section">
+                    <button type="submit" class="btn btn-primary">Guardar</button>
+                    <button type="button" class="btn btn-default diPing">Probar conexión</button>
+                    {{if $imp.Activa}}
+                    <button type="button" class="btn btn-danger diDeactivate">Desactivar</button>
+                    {{else}}
+                    <button type="button" class="btn btn-success diActivate">Activar</button>
+                    {{end}}
+                </div>
+            </form>
+
+            <p class="provider_hint" style="margin:8px 0 0">
+                <a href="{{$imp.Documentacion}}" target="_blank" rel="noopener">Documentación de {{$imp.Nombre}}</a>.
+                Las credenciales las entrega la imprenta al habilitar la integración.
+            </p>
+        </div>
+        {{end}}
+    </div>
+
+    <!-- Modo impresora fiscal: la tercera forma de facturar -->
+    <div class="update_ai_setting_section" style="margin-top:20px">
+        <p class="section_titles">Facturación por impresora fiscal</p>
+        <p class="erp-caption">
+            Si la empresa no usa imprenta digital, sus facturas salen por la impresora
+            fiscal y el sistema no transmite ningún documento. Dejar todas las imprentas
+            desactivadas es una decisión explícita: use este botón para que ninguna quede
+            activa por descuido.
+        </p>
+        <div class="submit_button_section">
+            <button type="button" class="btn btn-default" id="diFiscal" {{if not .ModoDigital}}disabled{{end}}>
+                Dejar la empresa solo con impresora fiscal
+            </button>
+        </div>
     </div>
 
     <!-- Entrega automática al cliente: la factura sale sola al emitirse -->
@@ -160,6 +149,9 @@
             <a class="btn btn-default btn-sm" style="margin-left:12px" href="/settings/digital-invoice/contingencia.csv">
                 <i class="fa fa-download"></i> Descargar relación (CSV)
             </a>
+            <button type="button" class="btn btn-default btn-sm" id="diRetry" {{if not .ContFall}}disabled{{end}}>
+                <i class="fa fa-refresh"></i> Reintentar rechazadas
+            </button>
         </p>
         {{if .Contingencia}}
         <table class="table table-condensed" style="font-size:12px">
@@ -194,57 +186,119 @@
 {{define "pagejs"}}
 <script>
 $(function () {
-    $('#toggleBearer').on('click', function (e) {
-        e.preventDefault();
-        var field = $('#di_bearer_token');
-        field.attr('type', field.attr('type') === 'password' ? 'text' : 'password');
-    });
+    // Una sola pareja de manejadores para todas las imprentas: el formulario
+    // que se envía dice cuál es (provider_code), y las respuestas se muestran
+    // con el mensaje REAL del servidor (incluido el del proveedor cuando la
+    // prueba de conexión falla).
+    function datosDe(form) {
+        return $(form).serialize();
+    }
 
-    $('#diCancel').on('click', function () {
-        $('#diProviderForm')[0].reset();
-    });
+    function avisar(r, exito) {
+        if (r && r.status === 1) {
+            if (r.deactivated && r.deactivated.length > 0) {
+                toastr.warning(r.msg || 'Imprenta activada', 'Solo puede existir UNA imprenta digital activa', { timeOut: 10000 });
+            } else {
+                toastr.success(r.msg || 'Listo');
+            }
+            ERPGo.refrescar();
+            return;
+        }
+        toastr.error((r && (r.error || r.message)) || 'No se pudo completar la operación');
+    }
 
-    $('#diProviderForm').on('submit', function (e) {
+    function fallo(x, porDefecto) {
+        var cuerpo = x && x.responseJSON;
+        toastr.error((cuerpo && (cuerpo.error || cuerpo.message)) || porDefecto);
+    }
+
+    $('.diProviderForm').on('submit', function (e) {
         e.preventDefault();
+        var form = this;
         $.ajax({
             url: '/settings/digital-invoice/save',
             type: 'POST',
-            data: $(this).serialize(),
+            data: datosDe(form),
             dataType: 'json',
-            success: function (r) {
-                if (r.status === 1) {
-                    if (r.deactivated && r.deactivated.length > 0) {
-                        toastr.warning(r.msg || 'Proveedor activado', 'Atención: quedó activada una sola imprenta digital', { timeOut: 10000 });
-                    } else {
-                        toastr.success(r.msg || 'Configuración guardada');
-                    }
-                    ERPGo.refrescar();
-                } else {
-                    toastr.error(r.error || 'Error al guardar');
-                }
-            },
-            error: function (x) {
-                toastr.error(x.responseJSON ? (x.responseJSON.error || x.responseJSON.message) : 'Error al guardar');
-            }
+            success: function (r) { avisar(r); },
+            error: function (x) { fallo(x, 'No se pudo guardar la configuración'); }
         });
     });
 
-    $('#diPing').on('click', function () {
+    $('.diPing').on('click', function () {
+        var form = $(this).closest('.diProviderForm');
         $.ajax({
             url: '/settings/digital-invoice/ping',
             type: 'POST',
-            data: { code: $('#di_provider_code').val(), base_url: $('#di_base_url').val(), bearer_token: $('#di_bearer_token').val(), serie_id: $('#di_serie_id').val() },
+            data: datosDe(form),
             dataType: 'json',
             success: function (r) {
                 if (r.ok) {
                     toastr.success('Conexión exitosa con ' + r.provider);
                 } else {
-                    toastr.error('Error de conexión: ' + (r.error || 'Sin respuesta'));
+                    toastr.error(r.error || 'La imprenta no respondió', 'Prueba de conexión', { timeOut: 12000 });
                 }
             },
-            error: function () {
-                toastr.error('Error al conectar con el proveedor');
-            }
+            error: function (x) { fallo(x, 'No se pudo probar la conexión'); }
+        });
+    });
+
+    $('.diActivate').on('click', function () {
+        var form = $(this).closest('.diProviderForm');
+        // Se guarda PRIMERO lo que hay en pantalla y después se activa: activar
+        // usa la configuración guardada, y obligar a dos clics con un error en
+        // medio sería peor experiencia que un solo botón que hace las dos cosas
+        // en orden y se detiene si el guardado falla.
+        $.ajax({
+            url: '/settings/digital-invoice/save',
+            type: 'POST',
+            data: datosDe(form),
+            dataType: 'json',
+            success: function () {
+                $.ajax({
+                    url: '/settings/digital-invoice/activate',
+                    type: 'POST',
+                    data: { provider_code: form.find('input[name="provider_code"]').val() },
+                    dataType: 'json',
+                    success: function (r) { avisar(r); },
+                    error: function (x) { fallo(x, 'No se pudo activar la imprenta'); }
+                });
+            },
+            error: function (x) { fallo(x, 'No se pudo guardar antes de activar'); }
+        });
+    });
+
+    $('.diDeactivate').on('click', function () {
+        var form = $(this).closest('.diProviderForm');
+        $.ajax({
+            url: '/settings/digital-invoice/deactivate',
+            type: 'POST',
+            data: { provider_code: form.find('input[name="provider_code"]').val() },
+            dataType: 'json',
+            success: function (r) { avisar(r); },
+            error: function (x) { fallo(x, 'No se pudo desactivar la imprenta'); }
+        });
+    });
+
+    $('#diFiscal').on('click', function () {
+        $.ajax({
+            url: '/settings/digital-invoice/fiscal',
+            type: 'POST',
+            data: {},
+            dataType: 'json',
+            success: function (r) { avisar(r); },
+            error: function (x) { fallo(x, 'No se pudo cambiar el modo de facturación'); }
+        });
+    });
+
+    $('#diRetry').on('click', function () {
+        $.ajax({
+            url: '/settings/digital-invoice/retry',
+            type: 'POST',
+            data: {},
+            dataType: 'json',
+            success: function (r) { avisar(r); },
+            error: function (x) { fallo(x, 'No se pudo devolver los documentos a la cola'); }
         });
     });
 
@@ -264,9 +318,7 @@ $(function () {
                 if (r.status === 1) { toastr.success(r.msg || 'Entrega guardada'); }
                 else { toastr.error(r.error || 'No se pudo guardar'); }
             },
-            error: function (x) {
-                toastr.error(x.responseJSON && x.responseJSON.error ? x.responseJSON.error : 'Error al guardar');
-            }
+            error: function (x) { fallo(x, 'Error al guardar'); }
         });
     });
 });

@@ -85,11 +85,15 @@ func diCompanyID(db *sql.DB) string {
 // Corre en su propio goroutine desde el runner (ver el llamante): es I/O contra
 // un tercero y no tiene por qué frenar la emisión de la cola.
 //
+// No recibe *http.Request a propósito: archivar es una tarea del runner, no una
+// acción de nadie, y pedir una petición sintética solo para descartarla obligaba
+// a resolver los ajustes de la empresa en un proceso que no los usa.
+//
 // Las cuatro razones por las que NO se archiva no rompen nada: sin columna, sin
 // enlace, sin peso o sin firma %PDF en el archivo, se registra y se sigue. La
 // única forma de que esto empeore una factura es archivar encima de otra, y
 // para eso la escritura de la columna exige que esté vacía.
-func (s *Server) diArchivarPDF(req *http.Request, db, ctl *sql.DB, tenant string, correlativo int64, pdfURL, pdfBase64 string) {
+func (s *Server) diArchivarPDF(db, ctl *sql.DB, tenant string, correlativo int64, pdfURL, pdfBase64 string) {
 	if db == nil || ctl == nil || correlativo <= 0 {
 		return
 	}

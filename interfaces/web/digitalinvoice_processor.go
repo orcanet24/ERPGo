@@ -3,21 +3,27 @@ package web
 // digitalinvoice_processor.go — cola de emisión de facturación digital.
 //
 // Para qué existe: el POS puede facturar OFFLINE (la caja ya cobró e imprimió)
-// y necesita que al volver la conexión la factura llegue al proveedor digital
-// que la empresa tenga activo (Unidigital u otro del catálogo). También las
-// ventas sincronizadas por gRPC pasan por aquí.
+// y necesita que al volver la conexión la factura llegue a la imprenta digital
+// que la empresa tenga activa (Unidigital, CG Imprenta Digital o la que venga).
+// También las ventas sincronizadas por gRPC y las facturas hechas desde el
+// panel pasan por aquí.
 //
 // Cómo funciona: cada venta apunta una fila pending en digital_invoice_log.
 // Un runner en segundo plano (arranca con el ERP) toma pendientes, monta el
-// DatosDocumento con los datos REALES de la factura y los detalles del
-// terminal, emite al proveedor y marca sent; si falla sube intentos con
-// límite, y deja error_message para el panel. Reintenta a sí solo: nadie tiene
-// que apretar nada.
+// DatosDocumento con los datos REALES de la factura y los renglones, emite al
+// proveedor y marca sent; si falla sube intentos con límite y deja
+// error_message para el panel. Reintenta solo: nadie tiene que apretar nada.
+//
+// LA REGLA DEL MODO FISCAL. Si la empresa no tiene ninguna imprenta digital
+// activa, factura por impresora fiscal y la venta NO se encola: encolarla
+// crearía un documento que nunca se transmite y que, el día que se active una
+// imprenta, se emitiría con números de control nuevos sobre una factura que ya
+// salió impresa. La venta a impresora fiscal se queda donde pertenece.
 //
 // La exclusividad quedó en digital_invoice_config (enabled=1 única por
-// empresa): el runner no usa el registry en memoria para emitir, sino la
+// empresa): el runner NO usa el registry en memoria para emitir, sino la
 // configuración persistida — así un reinicio del ERP emite con el proveedor
-// correcto sin pasos manuales.
+// correcto sin pasos manuales—.
 
 import (
 	"context"
@@ -32,15 +38,9 @@ import (
 	"erpgo/internal/digitalinvoice"
 )
 
-// diConfigBase es la configuración guardada de UN proveedor para UNA empresa.
-type diConfigBase struct {
-	Code string
-	Conf di.ProviderConfig
-}
-
 // ------------- ENCOLADO -------------
 
-// diEnqueueVenta registra unaventa para su emisión digital. Idempotente por
+// diEnqueueVenta registra una venta para su emisión digital. Idempotente por
 // (company_id, invoice_id) con la fila pending SIEMPRE en la base de CONTROL:
 // ahí vive digital_invoice_log, y ahí el runner la encuentra aunque la caja sea
 // de una empresa distinta a la activa.
@@ -54,6 +54,18 @@ func (s *Server) diEnqueueVenta(db *sql.DB, tenant, invoiceID string) {
 		return
 	}
 
+	// La empresa factura por impresora fiscal mientras no haya una imprenta
+	// digital activa. Se consulta ANTES de leer la factura: sin proveedor no
+	// hay documento digital que producir.
+	code, err := diProveedorActivoEnBase(ctl, tenant)
+	if err != nil {
+		log.Printf("facturación digital: no se pudo leer la imprenta activa de %s: %v", tenant, err)
+		return
+	}
+	if code == "" {
+		return
+	}
+
 	// Datos del documento desde la base de la EMPRESA. El correlativo numérico
 	// va en `invoice`; `control_no` es TEXTO ("00-00000001" en línea,
 	// "CONT-T01-000123" en contingencia).
@@ -63,30 +75,45 @@ func (s *Server) diEnqueueVenta(db *sql.DB, tenant, invoiceID string) {
 	// el error solo se logueaba y la venta quedaba cobrada sin transmitir
 	// nunca. El número que el proveedor necesita como correlativo es el de la
 	// factura, no el control.
-	var correlativo, serie, rif string
-	var total float64
-	err = db.QueryRow(`SELECT COALESCE(invoice, 0), COALESCE(series,''), COALESCE(customer_rif,''), total_amount
-		FROM invoice WHERE invoice = ? LIMIT 1`, invoiceID).Scan(&correlativo, &serie, &rif, &total)
+	var correlativo int64
+	err = db.QueryRow(`SELECT COALESCE(invoice, 0) FROM invoice WHERE invoice = ? LIMIT 1`, invoiceID).Scan(&correlativo)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			log.Printf("facturación digital: lectura de factura %s/%s: %v", tenant, invoiceID, err)
 		}
 		return
 	}
-	nroDoc := enteroDeTexto(correlativo)
 
-	// Fila pending; si ya existe la misma exploración, no se duplica.
-	var existing int
-	if err := ctl.QueryRow(`SELECT COUNT(*) FROM digital_invoice_log
-		WHERE company_id = ? AND invoice_id = ? AND status IN ('pending')`, tenant, invoiceID).Scan(&existing); err == nil && existing > 0 {
+	// UNA fila por venta, en cualquier estado. Dos filas de la misma factura
+	// son dos emisiones y dos números de control fiscales para el mismo
+	// documento: el duplicado que la ley prohíbe. Si la fila existe y no se
+	// transmitió, se devuelve a la cola; si ya se transmitió, no se toca.
+	var filaID int64
+	var estado string
+	err = ctl.QueryRow(`SELECT id, COALESCE(status,'') FROM digital_invoice_log
+		WHERE company_id = ? AND invoice_id = ? ORDER BY id DESC LIMIT 1`, tenant, correlativo).
+		Scan(&filaID, &estado)
+	switch {
+	case err == nil:
+		if estado == "sent" {
+			return
+		}
+		if _, err := ctl.Exec(`UPDATE digital_invoice_log
+			SET status='pending', intentos=0, ultimo_intento=NULL, error_message=NULL,
+			    addon_code=?, nro_documento=?
+			WHERE id=?`, code, correlativo, filaID); err != nil {
+			log.Printf("facturación digital: no se pudo devolver a la cola %s/%s: %v", tenant, invoiceID, err)
+		}
+		return
+	case err != sql.ErrNoRows:
+		log.Printf("facturación digital: consultando la cola de %s/%s: %v", tenant, invoiceID, err)
 		return
 	}
 
 	_, err = ctl.Exec(`INSERT INTO digital_invoice_log
 		(invoice_id, company_id, addon_code, strong_id, nro_documento, tipo_documento, serie, status)
-		VALUES (?, ?, ?, NULL, ?, 'FA', ?, 'pending')
-		ON DUPLICATE KEY UPDATE ultimo_intento=NULL, status='pending'`,
-		invoiceID, tenant, "", nroDoc, serie)
+		VALUES (?, ?, ?, NULL, ?, 'FA', '', 'pending')`,
+		correlativo, tenant, code, correlativo)
 	if err != nil && !diIsDupKey(err) {
 		log.Printf("facturación digital: encolando %s/%s: %v", tenant, invoiceID, err)
 	}
@@ -125,8 +152,10 @@ func diIsDupKey(err error) bool {
 const diIntervaloRunner = 30 * time.Second
 
 // diMaxIntentos es el número límite de reintento por fila: si no emite en
-// este rango, algo estructural falla (config rota, proveedor caído) y que
-// quede 'failed' avisa al admin en vez de reintentar para siempre.
+// este rango, algo estructural falla (config rota, proveedor caído, cliente sin
+// correo) y que quede 'failed' avisa al admin en vez de reintentar para
+// siempre. Corregida la causa, el botón «Reintentar» del panel la devuelve a la
+// cola.
 const diMaxIntentos = 8
 
 // startDigitalInvoiceRunner lanza el ciclo que emite pendientes. Un fallo aquí
@@ -203,8 +232,13 @@ func (s *Server) diEmitirFila(ctl *sql.DB, f struct {
 	err := ctl.QueryRow(`SELECT config_json FROM digital_invoice_config
 		WHERE company_id = ? AND enabled = 1 ORDER BY addon_code LIMIT 1`, f.tenant).Scan(&raw)
 	if err == sql.ErrNoRows {
-		// Sin proveedor configurado: se deja pending. Podría configurar mañana.
-		ctl.Exec(`UPDATE digital_invoice_log SET ultimo_intento=NOW() WHERE id=?`, f.id)
+		// La empresa quedó sin imprenta digital activa (pasó a impresora
+		// fiscal) pero este documento SE VENDIÓ como digital: no se puede
+		// transmitir ni se puede descartar en silencio. Se cuenta como intento
+		// fallido con el motivo, para que aparezca en el panel y el
+		// administrador decida (volver a activar una imprenta o reemitir).
+		s.diRegistrarFallo(ctl, f.id, f.intentos,
+			fmt.Errorf("la empresa no tiene ninguna imprenta digital activa: el documento no se puede transmitir hasta que active una"))
 		return
 	}
 	if err != nil {
@@ -228,9 +262,9 @@ func (s *Server) diEmitirFila(ctl *sql.DB, f struct {
 		log.Printf("facturación digital fila %d: base %s no disponible", f.id, f.tenant)
 		return
 	}
-	doc, err := s.diCargarDocumento(db, f.tenant, f.invoiceID, int(f.nroDoc))
+	doc, err := s.diCargarDocumento(db, f.invoiceID, int(f.nroDoc))
 	if err != nil {
-		log.Printf("facturación digital fila %d: documento %s: %v", f.id, f.invoiceID, err)
+		s.diRegistrarFallo(ctl, f.id, f.intentos, err)
 		return
 	}
 
@@ -244,25 +278,42 @@ func (s *Server) diEmitirFila(ctl *sql.DB, f struct {
 		return
 	}
 
-	// 4) Estado en la fila: Approval/Assigned o sent si ya con número.
+	// 4) Estado en la fila. La imprenta que emitió queda escrita (addon_code):
+	// es lo que permite auditar después con qué casa salió cada documento,
+	// incluso si la empresa cambió de imprenta al día siguiente.
+	//
+	// strong_id y nro_control se guardan como NULL cuando no vienen: la tabla
+	// tiene índice único sobre los dos, y un "" o un 0 repetido haría fallar la
+	// SEGUNDA factura de cualquier proveedor que no devuelva ese dato (CG no
+	// devuelve número de control entero, devuelve "00-00000056").
 	estado := "sent"
-	if strings.EqualFold(res.Status, "Approved") {
-		estado = "sent"
-	} else if strings.EqualFold(res.Status, "Assigned") && !res.EsAsignado {
-		estado = "sent"
+	consulta := `UPDATE digital_invoice_log
+		SET status=?, addon_code=?, strong_id=NULLIF(?,''), nro_control=NULLIF(?,0),
+		    pdf_url=NULLIF(?,''), xml_url=NULLIF(?,''), error_message=NULL`
+	args := []interface{}{estado, cfg.Code, res.StrongID, res.NroControl, res.PDFURL, res.XMLURL}
+	if diColumnaControlTexto(ctl) {
+		consulta += `, nro_control_texto=NULLIF(?,'')`
+		args = append(args, res.NroControlTexto)
 	}
-	_, err = ctl.Exec(`UPDATE digital_invoice_log
-		SET status=?, strong_id=?, nro_control=?, pdf_url=?, xml_url=?
-		WHERE id=?`, estado, res.StrongID, res.NroControl, res.PDFURL, res.XMLURL, f.id)
-	if err != nil {
+	consulta += ` WHERE id=?`
+	args = append(args, f.id)
+	if _, err := ctl.Exec(consulta, args...); err != nil {
 		log.Printf("facturación digital fila %d: actualización: %v", f.id, err)
 		return
 	}
-	log.Printf("facturación digital: factura %s/%s emitida (strong_id=%s)", f.tenant, f.invoiceID, res.StrongID)
+	log.Printf("facturación digital: factura %s/%s emitida por %s (control=%s)",
+		f.tenant, f.invoiceID, cfg.Code, primerNoVacio(res.NroControlTexto, fmt.Sprintf("%d", res.NroControl)))
+
+	// La copia propia del PDF: el enlace del proveedor caduca, el archivo del
+	// contribuyente no. Va en su propio goroutine porque es I/O contra un
+	// tercero y no debe frenar la cola.
+	if res.PDFURL != "" || res.PDFBase64 != "" {
+		go s.diArchivarPDF(db, ctl, f.tenant, enteroDeTexto(f.invoiceID), res.PDFURL, res.PDFBase64)
+	}
 
 	// LA ENTREGA AL CLIENTE. La factura ya salió con su documento: si la empresa
 	// tiene activada la entrega automática, el correo sale ahora —en su propio
-	// goroutine, porque un SMTP lento no debe atascar la cola de emisión. Si
+	// goroutine, porque un SMTP lento no debe atascar la cola de emisión—. Si
 	// está apagada, diEntregarAutomatica ni siquiera consulta el canal. Y si dos
 	// pasadas llegaran a cruzarse, la clave de idempotencia de finance_message
 	// deja pasar una sola.
@@ -280,76 +331,231 @@ func (s *Server) diRegistrarFallo(ctl *sql.DB, id, intentos int64, causa error) 
 		estado = "failed"
 	}
 	ctl.Exec(`UPDATE digital_invoice_log
-		SET intentos=?, ultimo_intento=NOW(), status=?, error_message=?
+		SET intentos=?, ultimo_intento=CURRENT_TIMESTAMP, status=?, error_message=?
 		WHERE id=?`, nuevo, estado, causa.Error(), id)
 }
 
-// diCargarDocumento construye el DatosDocumento leyendo la factura y sus
-// detalles en la base de la empresa del documento.
-func (s *Server) diCargarDocumento(db *sql.DB, tenant, invoiceID string, nroControl int) (*di.DatosDocumento, error) {
+// diCargarDocumento construye el DatosDocumento con los datos REALES de la
+// factura y sus renglones, leídos de la base de la empresa del documento.
+//
+// POR QUÉ NO BASTA CON LA CABECERA. La primera versión mandaba solo totales: el
+// proveedor recibía una factura sin renglones y las imprentas que validan el
+// detalle (CG rechaza una factura sin productos) no emitían nada. Aquí se lee
+// renglón por renglón, el producto del catálogo (código y nombre) y la ficha
+// del cliente (correo, teléfono y dirección, que también son obligatorios).
+func (s *Server) diCargarDocumento(db *sql.DB, invoiceID string, nroDocumento int) (*di.DatosDocumento, error) {
 	var (
-		fecha      time.Time
-		rif        string
-		total, iva float64
-		moneda     string
+		fecha            string
+		rifCabecera      string
+		total, iva, igtf float64
+		moneda           string
+		tasa             float64
+		customerID       int64
+		idInterno        int64
 	)
-	err := db.QueryRow(`SELECT date, COALESCE(customer_rif,''), total_vat_amnt, total_amount,
-		COALESCE(currency_code,'VES')
+	err := db.QueryRow(`SELECT COALESCE(date,''), COALESCE(customer_rif,''), COALESCE(total_amount,0),
+			COALESCE(total_vat_amnt,0), COALESCE(currency_code,'VES'), COALESCE(exchange_rate,0),
+			COALESCE(igtf_amount,0), COALESCE(customer_id,0), COALESCE(id,0)
 		FROM invoice WHERE invoice = ? LIMIT 1`, invoiceID).
-		Scan(&fecha, &rif, &iva, &total, &moneda)
+		Scan(&fecha, &rifCabecera, &total, &iva, &moneda, &tasa, &igtf, &customerID, &idInterno)
 	if err != nil {
 		return nil, fmt.Errorf("factura inexistente: %w", err)
 	}
-	// Nombre del cliente si la fila de invoice solo trae el RIF.
-	var nombreCliente string
-	if rif != "" {
-		_ = db.QueryRow(`SELECT customer_name FROM customer_information WHERE rif = ? LIMIT 1`, rif).Scan(&nombreCliente)
-	}
-	if nombreCliente == "" {
-		nombreCliente = "Cliente POS"
-	}
 
-	_ = moneda // DatosDocumento lleva su campo Moneda; el default del cfg ya es VES.
+	// La ficha del cliente: nombre, correo, teléfono y dirección. Sin correo o
+	// sin dirección CG no emite, así que se traen y el proveedor dirá qué falta.
+	cliente := di.DatosCliente{Nombre: "Cliente POS", FiscalRegistry: rifCabecera}
+	if customerID > 0 {
+		var nombre, correo, telefono, direccion, rif string
+		if err := db.QueryRow(`SELECT COALESCE(customer_name,''),
+				COALESCE(NULLIF(customer_email,''), email_address, ''),
+				COALESCE(NULLIF(customer_mobile,''), phone, ''),
+				COALESCE(NULLIF(customer_address,''), address2, ''),
+				COALESCE(rif,'')
+			FROM customer_information WHERE customer_id = ? LIMIT 1`, customerID).
+			Scan(&nombre, &correo, &telefono, &direccion, &rif); err == nil {
+			if strings.TrimSpace(nombre) != "" {
+				cliente.Nombre = nombre
+			}
+			cliente.Email = strings.TrimSpace(correo)
+			cliente.Telefono = strings.TrimSpace(telefono)
+			cliente.Direccion = strings.TrimSpace(direccion)
+			if strings.TrimSpace(rif) != "" {
+				cliente.FiscalRegistry = rif
+			}
+		}
+	}
+	if strings.TrimSpace(cliente.FiscalRegistry) == "" {
+		return nil, fmt.Errorf("la factura %s no tiene RIF de cliente: una factura fiscal no se puede emitir sin él", invoiceID)
+	}
+	cliente.TipoDocFiscal = diTipoDocDeRIF(cliente.FiscalRegistry)
+
+	fechaDoc := fechaDeTexto(fecha)
 
 	doc := &di.DatosDocumento{
 		Tipo:              di.DocFactura,
-		Numero:            nroControl,
-		FechaEmision:      fecha,
-		Moneda:            "VES",
+		Numero:            nroDocumento,
+		FechaEmision:      fechaDoc,
+		FechaTasa:         fechaDoc,
+		Moneda:            strings.ToUpper(strings.TrimSpace(moneda)),
+		TasaCambio:        tasa,
 		Total:             total,
 		IVA:               iva,
+		IGTF:              igtf,
 		TotalFinal:        total,
 		ReferenciaSistema: invoiceID,
-		Cliente: di.DatosCliente{
-			Nombre:         nombreCliente,
-			FiscalRegistry: rif,
-			TipoDocFiscal:  diTipoDocDeRIF(rif),
-		},
+		Cliente:           cliente,
+	}
+	if doc.Moneda == "" {
+		doc.Moneda = "VES"
+	}
+	// La tasa del día: la de la factura si la tiene; si no, la vigente para su
+	// fecha. CG rechaza la factura sin tasa, y mandar una inventada sería un
+	// documento fiscal falso.
+	if doc.TasaCambio <= 0 {
+		if t, _, err := s.ObtenerTasaHoy(db, fechaDoc.Format("2006-01-02"), "USD"); err == nil {
+			doc.TasaCambio = t
+		}
 	}
 
-	rows, err := db.Query(`SELECT description, quantity, rate, total_price, vat_amnt
-		FROM invoice_details WHERE invoice_id = ?`, invoiceID)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var desc string
-			var qty, price, total_item, vat float64
-			if rows.Scan(&desc, &qty, &price, &total_item, &vat) != nil {
-				continue
-			}
-			doc.Detalles = append(doc.Detalles, di.DetalleItem{
-				Descripcion:    desc,
-				Cantidad:       qty,
-				PrecioUnitario: price,
-				PorcentajeIVA:  vat / (total_item - vat),
-				EsExento:       vat == 0,
-				TipoProducto:   1,
-			})
-			doc.Subtotal += total_item - vat
-			doc.BaseImponible += total_item - vat
+	detalles, err := diRenglones(db, invoiceID, idInterno)
+	if err != nil {
+		return nil, err
+	}
+	if len(detalles) == 0 {
+		return nil, fmt.Errorf("la factura %s no tiene renglones: no hay documento fiscal que emitir", invoiceID)
+	}
+	doc.Detalles = detalles
+	// Subtotales por alícuota: es la misma cuenta que hará la imprenta, pero el
+	// ERP devuelve sus propias bases y así el documento que se archiva coincide.
+	for _, d := range detalles {
+		base := d.Cantidad * d.PrecioUnitario * (1 - d.DescuentoPct/100)
+		doc.Subtotal += base
+		switch {
+		case d.PorcentajeIVA >= 30:
+			doc.BaseSuntuario += base
+		case d.PorcentajeIVA >= 15:
+			doc.BaseImponible += base
+		case d.PorcentajeIVA >= 7:
+			doc.BaseReducida += base
+		default:
+			doc.MontoExento += base
 		}
 	}
 	return doc, nil
+}
+
+// diRenglones lee los renglones de la factura con el producto del catálogo.
+//
+// EL CAMPO invoice_details.invoice_id NO ES SIEMPRE EL MISMO. El panel guarda
+// ahí el `id` interno de la factura y el terminal del POS guardó el correlativo
+// ("invoice"). Se consulta primero por el id interno y, si no aparece nada, por
+// el correlativo: con una sola de las dos llaves, la mitad de las facturas del
+// sistema saldría sin renglones y la imprenta la rechazaría.
+func diRenglones(db *sql.DB, invoiceID string, idInterno int64) ([]di.DetalleItem, error) {
+	consulta := `SELECT d.product_id, COALESCE(p.product_name,''), COALESCE(d.description,''),
+			COALESCE(d.quantity,0), COALESCE(d.rate,0), COALESCE(d.total_price,0),
+			COALESCE(d.vat_amnt,0), COALESCE(d.vat_amnt_per,''), COALESCE(d.discount_per,''),
+			COALESCE(d.discount_pct,0)
+		FROM invoice_details d
+		LEFT JOIN product_information p ON p.product_id = d.product_id
+		WHERE d.invoice_id = ? ORDER BY d.id`
+
+	leer := func(llave interface{}) ([]di.DetalleItem, error) {
+		rows, err := db.Query(consulta, llave)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var salida []di.DetalleItem
+		for rows.Next() {
+			var codigo, nombre, descripcion, vatPer, descPer string
+			var cantidad, precio, totalRenglon, vat, descPct float64
+			if rows.Scan(&codigo, &nombre, &descripcion, &cantidad, &precio, &totalRenglon,
+				&vat, &vatPer, &descPer, &descPct) != nil {
+				continue
+			}
+			porcentaje := porcentajeDeTexto(vatPer)
+			if porcentaje <= 0 && vat > 0 {
+				base := totalRenglon - vat
+				if base > 0 {
+					porcentaje = vat / base * 100
+				}
+			}
+			descuento := porcentajeDeTexto(descPer)
+			if descuento <= 0 {
+				descuento = descPct
+			}
+			// Un renglón es exento cuando no genera IVA por alícuota, no cuando
+			// el importe de IVA da cero: una base diminuta puede redondear el
+			// IVA a 0,00 y eso NO convierte la venta en exenta.
+			exento := porcentaje <= 0
+			salida = append(salida, di.DetalleItem{
+				Codigo:         strings.TrimSpace(codigo),
+				Nombre:         strings.TrimSpace(nombre),
+				Descripcion:    strings.TrimSpace(descripcion),
+				Cantidad:       cantidad,
+				PrecioUnitario: precio,
+				DescuentoPct:   descuento,
+				PorcentajeIVA:  porcentaje,
+				EsExento:       exento,
+				CodigoImpuesto: codigoImpuestoDe(porcentaje, exento),
+				TipoProducto:   1,
+			})
+		}
+		return salida, rows.Err()
+	}
+
+	if idInterno > 0 {
+		if filas, err := leer(idInterno); err == nil && len(filas) > 0 {
+			return filas, nil
+		}
+	}
+	return leer(invoiceID)
+}
+
+// porcentajeDeTexto lee un porcentaje guardado como texto ("16.00", "16,00",
+// "16 %"). No se usa parseMoney porque esa función interpreta la coma como
+// separador de miles: "16,00" quedaría en 1600 y el renglón se emitiría con la
+// alícuota de lujo (31 %) en vez de la general.
+func porcentajeDeTexto(s string) float64 {
+	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "%"))
+	if s == "" {
+		return 0
+	}
+	var f float64
+	fmt.Sscanf(strings.ReplaceAll(s, ",", "."), "%f", &f)
+	return f
+}
+
+// codigoImpuestoDe traduce el porcentaje de IVA del renglón al código que usan
+// las imprentas (E exento, G 16 %, R 8 %, A 31 %).
+func codigoImpuestoDe(porcentaje float64, exento bool) string {
+	if exento && porcentaje <= 0 {
+		return "E"
+	}
+	switch {
+	case porcentaje >= 30:
+		return "A"
+	case porcentaje >= 15:
+		return "G"
+	case porcentaje >= 7:
+		return "R"
+	default:
+		return "E"
+	}
+}
+
+// fechaDeTexto interpreta la fecha de la factura, que el ERP guarda como texto
+// (varchar) en formato ISO, con o sin hora.
+func fechaDeTexto(s string) time.Time {
+	s = strings.TrimSpace(s)
+	for _, formato := range []string{"2006-01-02", "2006-01-02 15:04:05", time.RFC3339, "02-01-2006"} {
+		if t, err := time.ParseInLocation(formato, s, time.Local); err == nil {
+			return t
+		}
+	}
+	return time.Now()
 }
 
 // diTipoDocDeRIF saca el tipo persona del RIF venezolano (J = jurídica,
@@ -365,4 +571,3 @@ func diTipoDocDeRIF(rif string) string {
 	}
 	return "V"
 }
-

@@ -43,7 +43,7 @@ func TestLaCopiaPropiaDelPdfSeArchivaUnaVezYSeSirve(t *testing.T) {
 
 	insertarDocDigital(t, ctl, 10, "https://docs.test/factura-10.pdf", "")
 	// La copia llega por el base64 de la respuesta, sin tocar la red.
-	s.diArchivarPDF(nil, db, ctl, "empresa1", 10, "", b64)
+	s.diArchivarPDF(db, ctl, "empresa1", 10, "", b64)
 
 	var relativa string
 	if err := ctl.QueryRow(`SELECT COALESCE(pdf_path,'') FROM digital_invoice_log
@@ -85,7 +85,7 @@ func TestLaCopiaPropiaDelPdfSeArchivaUnaVezYSeSirve(t *testing.T) {
 
 	// Una segunda pasada no reescribe ni duplica: la columna ya escrita es el
 	// aviso de que hay copia.
-	s.diArchivarPDF(nil, db, ctl, "empresa1", 10, "", b64)
+	s.diArchivarPDF(db, ctl, "empresa1", 10, "", b64)
 	var filas int
 	_ = ctl.QueryRow(`SELECT COUNT(*) FROM digital_invoice_log WHERE invoice_id=10`).Scan(&filas)
 	if filas != 1 {
@@ -110,7 +110,7 @@ func TestLaCopiaSeNiegaSiLoQueBajaNoEsUnPdf(t *testing.T) {
 	insertarDocDigital(t, ctl, 11, "https://docs.test/factura-11.pdf", "")
 
 	html := base64.StdEncoding.EncodeToString([]byte("<html><body>404</body></html>"))
-	s.diArchivarPDF(nil, db, ctl, "empresa1", 11, "", html)
+	s.diArchivarPDF(db, ctl, "empresa1", 11, "", html)
 
 	var relativa string
 	_ = ctl.QueryRow(`SELECT COALESCE(pdf_path,'') FROM digital_invoice_log WHERE invoice_id=11`).Scan(&relativa)
@@ -118,7 +118,7 @@ func TestLaCopiaSeNiegaSiLoQueBajaNoEsUnPdf(t *testing.T) {
 		t.Errorf("se archivó algo que no es un PDF: %s", relativa)
 	}
 	// Y sin enlace no se intenta siquiera.
-	s.diArchivarPDF(nil, db, ctl, "empresa1", 11, "", "")
+	s.diArchivarPDF(db, ctl, "empresa1", 11, "", "")
 	_ = ctl.QueryRow(`SELECT COALESCE(pdf_path,'') FROM digital_invoice_log WHERE invoice_id=11`).Scan(&relativa)
 	if relativa != "" {
 		t.Errorf("sin enlace ni base64 no puede haber copia; quedó %s", relativa)
@@ -151,7 +151,7 @@ func TestSinLaColumnaDeLaMigracionElArchivadoSeCalla(t *testing.T) {
 	db := nuevaBaseDeCartera(t)
 	s := &Server{db: db, uploadMgr: upload.NewManager(t.TempDir())}
 	completarFacturaDigital(t, db)
-	s.diArchivarPDF(nil, db, ctl, "empresa1", 12, "",
+	s.diArchivarPDF(db, ctl, "empresa1", 12, "",
 		base64.StdEncoding.EncodeToString([]byte("%PDF-1.4\n%%EOF")))
 	var relativa string
 	_ = ctl.QueryRow(`SELECT COALESCE(pdf_url,'') FROM digital_invoice_log WHERE invoice_id=12`).Scan(&relativa)
@@ -159,4 +159,3 @@ func TestSinLaColumnaDeLaMigracionElArchivadoSeCalla(t *testing.T) {
 		t.Error("la fila original se tocó sin columna de destino")
 	}
 }
-

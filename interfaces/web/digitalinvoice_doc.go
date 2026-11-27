@@ -38,14 +38,15 @@ import (
 
 // diDocFila es lo que la imprenta digital sabe de UNA factura.
 type diDocFila struct {
-	InvoiceNo  int64  // correlativo de la factura (invoice.invoice)
-	Estado     string // pending | sent | failed | "" (no encolado)
-	StrongID   string
-	NroControl int64 // número de control asignado por la imprenta
-	PDF        string
-	XML        string
-	PDFPath    string // copia propia en el directorio de la empresa (vacía si no hay)
-	Error      string
+	InvoiceNo    int64  // correlativo de la factura (invoice.invoice)
+	Estado       string // pending | sent | failed | "" (no encolado)
+	StrongID     string
+	NroControl   int64  // número de control entero (imprentas que lo dan así)
+	ControlTexto string // número de control completo, con su serie ("00-00000056")
+	PDF          string
+	XML          string
+	PDFPath      string // copia propia en el directorio de la empresa (vacía si no hay)
+	Error        string
 }
 
 // diLoteDocs es el tamaño del lote de la consulta IN. La lista de facturas trae
@@ -109,12 +110,17 @@ func diDocsDeFacturas(ctl *sql.DB, tenant string, numeros []int64) map[int64]diD
 		lote = append(lote, n)
 	}
 
-	// La columna de la copia propia solo se pide si existe en ESTA base: una
-	// base anterior a esa migración no puede ver cómo se cae la consulta entera
-	// por una columna que aún no tiene. Ver diColumnaPDFPath.
+	// Las columnas de la copia propia y del control textual solo se piden si
+	// existen en ESTA base: una base anterior a esas migraciones no puede ver
+	// cómo se cae la consulta entera por una columna que aún no tiene. Ver
+	// diColumnaPDFPath y diColumnaControlTexto.
 	colPDFPath := ""
 	if diColumnaPDFPath(ctl) {
 		colPDFPath = ", COALESCE(pdf_path,'')"
+	}
+	colControl := ""
+	if diColumnaControlTexto(ctl) {
+		colControl = ", COALESCE(nro_control_texto,'')"
 	}
 
 	for inicio := 0; inicio < len(lote); inicio += diLoteDocs {
@@ -125,7 +131,7 @@ func diDocsDeFacturas(ctl *sql.DB, tenant string, numeros []int64) map[int64]diD
 		partes := lote[inicio:fin]
 
 		q := `SELECT invoice_id, COALESCE(status,''), COALESCE(strong_id,''), COALESCE(nro_control,0),
-			COALESCE(pdf_url,''), COALESCE(xml_url,''), COALESCE(error_message,'')` + colPDFPath + `
+			COALESCE(pdf_url,''), COALESCE(xml_url,''), COALESCE(error_message,'')` + colPDFPath + colControl + `
 			FROM digital_invoice_log
 			WHERE company_id = ? AND invoice_id IN (?` + strings.Repeat(",?", len(partes)-1) + `)`
 		args := make([]interface{}, 0, len(partes)+1)
@@ -144,6 +150,9 @@ func diDocsDeFacturas(ctl *sql.DB, tenant string, numeros []int64) map[int64]diD
 			if colPDFPath != "" {
 				destinos = append(destinos, &d.PDFPath)
 			}
+			if colControl != "" {
+				destinos = append(destinos, &d.ControlTexto)
+			}
 			if err := rows.Scan(destinos...); err != nil {
 				continue
 			}
@@ -152,6 +161,26 @@ func diDocsDeFacturas(ctl *sql.DB, tenant string, numeros []int64) map[int64]diD
 		rows.Close()
 	}
 	return salida
+}
+
+// diColumnaControlTexto comprueba que la columna del número de control textual
+// exista en ESTA base de control.
+//
+// POR QUÉ HACE FALTA. Unidigital devuelve el control como entero y CG lo
+// devuelve como texto con serie ("00-00000056"). La columna nro_control es INT
+// y no puede guardar la serie; la textual nació después. Una base sin la
+// migración tiene que seguir funcionando (mostrando el número entero) en vez de
+// reventar cada consulta del listado de facturas.
+func diColumnaControlTexto(ctl *sql.DB) bool {
+	if ctl == nil {
+		return false
+	}
+	rows, err := ctl.Query(`SELECT nro_control_texto FROM digital_invoice_log LIMIT 1`)
+	if err != nil {
+		return false
+	}
+	rows.Close()
+	return true
 }
 
 // diDocDeFactura devuelve el documento digital de UNA factura.
@@ -194,11 +223,15 @@ func (s *Server) diEnlaceXML(d diDocFila) string {
 }
 
 // diJSONDoc empaqueta el documento para el navegador de una lista.
+//
+// El número de control que se muestra es el COMPLETO cuando la imprenta lo da
+// así (CG: "00-00000056"). Mostrar solo la parte numérica de un documento que
+// el cliente tiene impreso con su serie no sirve para conciliar nada.
 func (s *Server) diJSONDoc(invoicePK int64, d diDocFila) map[string]interface{} {
 	pdf := s.diEnlaceInterno(invoicePK, d)
 	xml := s.diEnlaceXML(d)
-	control := ""
-	if d.NroControl > 0 {
+	control := strings.TrimSpace(d.ControlTexto)
+	if control == "" && d.NroControl > 0 {
 		control = strconv.FormatInt(d.NroControl, 10)
 	}
 	return map[string]interface{}{
@@ -217,7 +250,7 @@ func (s *Server) diJSONDoc(invoicePK int64, d diDocFila) map[string]interface{} 
 // usan los ajustes fiscales, porque esto se decide por empresa y vive en la
 // base de la empresa.
 const (
-	diClaveEntrega = "invoice_delivery"        // "1" = entrega activada
+	diClaveEntrega = "invoice_delivery"         // "1" = entrega activada
 	diClaveCanal   = "invoice_delivery_channel" // id del canal de correo
 )
 
@@ -229,7 +262,7 @@ func (s *Server) diEntregaConfig(db *sql.DB) (activa bool, canalID int64) {
 	if db == nil {
 		return false, 0
 	}
-	rows, err := db.Query("SELECT " + "`key`" + ", value FROM fiscal_setting WHERE " + "`key`" + " IN (?, ?)",
+	rows, err := db.Query("SELECT `key`, value FROM fiscal_setting WHERE `key` IN (?, ?)",
 		diClaveEntrega, diClaveCanal)
 	if err != nil {
 		return false, 0

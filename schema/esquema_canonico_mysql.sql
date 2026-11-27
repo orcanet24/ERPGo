@@ -1316,6 +1316,7 @@ CREATE TABLE `digital_invoice_log` (
   `addon_code` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
   `strong_id` varchar(191) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `nro_control` int DEFAULT NULL,
+  `nro_control_texto` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Número de control completo con su serie (CG: 00-00000056)',
   `nro_documento` int NOT NULL,
   `tipo_documento` varchar(8) COLLATE utf8mb4_unicode_ci NOT NULL,
   `serie` varchar(8) COLLATE utf8mb4_unicode_ci DEFAULT '0',
