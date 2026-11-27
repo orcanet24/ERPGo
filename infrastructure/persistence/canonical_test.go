@@ -3,6 +3,7 @@ package persistence
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -21,8 +22,15 @@ func TestParsearCanonica(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsearCanonica: %v", err)
 	}
-	if len(tablas) != 219 {
-		t.Errorf("tablas parseadas: %d, esperadas 219", len(tablas))
+	// El número de tablas se cuenta en el mismo archivo en vez de fijarlo a mano:
+	// cada fase que agrega tablas (2026-11: costos) obligaba a editar el test, y
+	// el valor que importa es que el parser vea TODAS las que el archivo declara.
+	esperadas := strings.Count(contenido, "CREATE TABLE")
+	if len(tablas) != esperadas {
+		t.Errorf("tablas parseadas: %d, el archivo declara %d CREATE TABLE", len(tablas), esperadas)
+	}
+	if esperadas < 200 {
+		t.Fatalf("el canónico solo declara %d tablas: se truncó el archivo", esperadas)
 	}
 
 	porNombre := map[string]TablaCanonica{}
@@ -34,8 +42,10 @@ func TestParsearCanonica(t *testing.T) {
 	if !ok {
 		t.Fatal("la tabla tenants no aparece en el canónico")
 	}
-	if len(tenants.Columnas) != 12 {
-		t.Errorf("tenants: %d columnas, esperadas 12", len(tenants.Columnas))
+	// Se exige el mínimo que ya tenía la tabla; el número exacto lo mueve cada
+	// migración aditiva y no es lo que esta prueba vigila (vigila el parser).
+	if len(tenants.Columnas) < 12 {
+		t.Errorf("tenants: %d columnas; el parser perdió columnas", len(tenants.Columnas))
 	}
 	columnas := map[string]bool{}
 	for _, c := range tenants.Columnas {
