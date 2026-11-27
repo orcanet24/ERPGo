@@ -54,7 +54,7 @@ CREATE TABLE `acc_coa` (
   KEY `IsDepreciation` (`IsDepreciation`),
   KEY `isCashNature` (`isCashNature`),
   KEY `isBankNature` (`isBankNature`)
-) ENGINE=InnoDB AUTO_INCREMENT=247 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=907 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `acc_monthly_balance` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -130,11 +130,11 @@ CREATE TABLE `acc_predefine_account` (
   `prov_state_tax` int NOT NULL,
   `state_tax` int NOT NULL,
   `prov_npfcode` int DEFAULT NULL,
+  `igtf_code` int NOT NULL DEFAULT '0',
   `supplies_inventory_code` int NOT NULL DEFAULT '0',
   `supplies_expense_code` int NOT NULL DEFAULT '0',
   `service_expense_code` int NOT NULL DEFAULT '0',
   `purchase_vat_code` int NOT NULL DEFAULT '0',
-  `igtf_code` int NOT NULL DEFAULT '0',
   PRIMARY KEY (`id`),
   KEY `COAID` (`cashCode`),
   KEY `cashCode` (`cashCode`)
@@ -527,6 +527,28 @@ CREATE TABLE `ai_tool_execution` (
   KEY `idx_ai_tool_ref` (`tool`,`external_ref`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE `ai_tool_proposal` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `idem_key` varchar(160) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `tool` varchar(80) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `args_json` mediumtext COLLATE utf8mb4_unicode_ci,
+  `run_id` int NOT NULL DEFAULT '0',
+  `task_id` int NOT NULL DEFAULT '0',
+  `agent_id` int NOT NULL DEFAULT '0',
+  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
+  `reason` text COLLATE utf8mb4_unicode_ci,
+  `result_json` mediumtext COLLATE utf8mb4_unicode_ci,
+  `requested_by` varchar(60) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `applied_by` varchar(60) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `applied_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL,
+  `updated_at` datetime NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_ai_proposal_idem` (`idem_key`),
+  KEY `idx_ai_proposal_run` (`run_id`,`status`),
+  KEY `idx_ai_proposal_agent` (`agent_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE `ai_usage` (
   `id` int NOT NULL AUTO_INCREMENT,
   `company_id` int NOT NULL DEFAULT '0',
@@ -594,8 +616,8 @@ CREATE TABLE `attendance` (
 CREATE TABLE `audit_chain_blocks` (
   `period` varchar(7) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'YYYY-MM',
   `prev_block_hash` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '' COMMENT 'block_hash del bloque anterior',
-  `start_hash` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '' COMMENT 'prev_hash del primer registro del bloque',
-  `end_hash` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '' COMMENT 'record_hash del último registro del bloque',
+  `start_hash` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `end_hash` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
   `first_id` int DEFAULT NULL COMMENT 'primer id de audit_log del bloque',
   `last_id` int DEFAULT NULL COMMENT 'último id de audit_log del bloque',
   `record_count` int NOT NULL DEFAULT '0',
@@ -818,7 +840,7 @@ CREATE TABLE `company_information` (
   `ai_plan` tinyint NOT NULL DEFAULT '1',
   `ai_plan_ops_monthly` int NOT NULL DEFAULT '50',
   `ai_plan_ops_daily` int NOT NULL DEFAULT '20',
-  `country_code` char(2) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'VE' COMMENT 'País fiscal de la empresa (ISO 3166-1 alfa-2)'
+  `country_code` char(2) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'VE'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `cost_center` (
@@ -1317,7 +1339,6 @@ CREATE TABLE `digital_invoice_log` (
   `addon_code` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
   `strong_id` varchar(191) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `nro_control` int DEFAULT NULL,
-  `nro_control_texto` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Número de control completo con su serie (CG: 00-00000056)',
   `nro_documento` int NOT NULL,
   `tipo_documento` varchar(8) COLLATE utf8mb4_unicode_ci NOT NULL,
   `serie` varchar(8) COLLATE utf8mb4_unicode_ci DEFAULT '0',
@@ -1331,12 +1352,14 @@ CREATE TABLE `digital_invoice_log` (
   `ultimo_intento` timestamp NULL DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `nro_control_texto` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Número de control completo con su serie (CG: 00-00000056)',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_strong_id` (`strong_id`),
   UNIQUE KEY `uk_nro_control` (`nro_control`),
   KEY `idx_invoice` (`invoice_id`),
   KEY `idx_status` (`status`),
-  KEY `idx_addon` (`addon_code`)
+  KEY `idx_addon` (`addon_code`),
+  KEY `idx_digital_control_texto` (`nro_control_texto`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `email_config` (
@@ -1580,6 +1603,57 @@ CREATE TABLE `fiscal_setting` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_fs_key` (`key`)
 ) ENGINE=InnoDB AUTO_INCREMENT=12 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `fixed_asset` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `code` varchar(40) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `name` varchar(150) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `type` varchar(40) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'equipo',
+  `is_global` tinyint NOT NULL DEFAULT '0',
+  `product_id` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `cost_center_id` int DEFAULT NULL,
+  `purchase_price` decimal(18,4) NOT NULL DEFAULT '0.0000',
+  `residual_value` decimal(18,4) NOT NULL DEFAULT '0.0000',
+  `purchase_date` date NOT NULL,
+  `useful_life_months` int NOT NULL DEFAULT '0',
+  `active` tinyint NOT NULL DEFAULT '1',
+  `created_by` varchar(60) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `created_at` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_fixed_asset_code` (`code`),
+  KEY `idx_fixed_asset_producto` (`product_id`),
+  KEY `idx_fixed_asset_centro` (`cost_center_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `fixed_asset_depreciation` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `asset_id` int NOT NULL,
+  `period` varchar(7) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `month_amount` decimal(18,4) NOT NULL DEFAULT '0.0000',
+  `accumulated` decimal(18,4) NOT NULL DEFAULT '0.0000',
+  `book_value` decimal(18,4) NOT NULL DEFAULT '0.0000',
+  `status` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'calculado',
+  `created_at` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_fixed_asset_dep` (`asset_id`,`period`),
+  KEY `idx_fixed_asset_dep_asset` (`asset_id`),
+  KEY `idx_fixed_asset_dep_period` (`period`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `fixed_asset_depreciation_movement` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `asset_id` int NOT NULL,
+  `period` varchar(7) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `month_amount` decimal(18,4) NOT NULL DEFAULT '0.0000',
+  `accumulated` decimal(18,4) NOT NULL DEFAULT '0.0000',
+  `book_value` decimal(18,4) NOT NULL DEFAULT '0.0000',
+  `status` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'calculado',
+  `created_at` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_fixed_asset_mov` (`asset_id`,`period`),
+  KEY `idx_fixed_asset_mov_asset` (`asset_id`),
+  KEY `idx_fixed_asset_mov_period` (`period`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `gmb_salary_advance` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -2054,6 +2128,20 @@ CREATE TABLE `language` (
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=1099 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE `mcp_tokens` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `company_code` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `agent_id` int NOT NULL DEFAULT '0',
+  `name` varchar(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `token_hash` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `created_at` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `last_used_at` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `revoked` int NOT NULL DEFAULT '0',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_mcp_token_hash` (`token_hash`),
+  KEY `idx_mcp_token_agent` (`company_code`,`agent_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE `menu` (
   `id` int NOT NULL AUTO_INCREMENT,
   `parent_id` int DEFAULT NULL,
@@ -2068,7 +2156,7 @@ CREATE TABLE `menu` (
   `is_core` tinyint(1) NOT NULL DEFAULT '0',
   PRIMARY KEY (`id`),
   KEY `idx_menu_parent` (`parent_id`,`sort_order`)
-) ENGINE=InnoDB AUTO_INCREMENT=5103 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=9102 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `menu_backup` (
   `id` bigint NOT NULL AUTO_INCREMENT,
@@ -2742,6 +2830,8 @@ CREATE TABLE `product_recipe` (
   `component_id` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   `quantity` decimal(14,4) NOT NULL DEFAULT '0.0000',
   `unit` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `uom` varchar(10) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `version` int NOT NULL DEFAULT '1',
   `loss_factor` decimal(6,4) NOT NULL DEFAULT '0.0000',
   `step_order` int NOT NULL DEFAULT '0',
   `is_substitute` tinyint NOT NULL DEFAULT '0',
@@ -2791,6 +2881,17 @@ CREATE TABLE `product_service` (
   PRIMARY KEY (`service_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE `product_uom_conversion` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `product_id` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `from_uom` varchar(10) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `to_uom` varchar(10) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `factor` decimal(18,6) NOT NULL DEFAULT '0.000000',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_uom_conversion` (`product_id`,`from_uom`,`to_uom`),
+  KEY `idx_uom_producto` (`product_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE `product_yield` (
   `id` int NOT NULL AUTO_INCREMENT,
   `input_product_id` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -2802,6 +2903,38 @@ CREATE TABLE `product_yield` (
   UNIQUE KEY `uq_yield` (`input_product_id`,`output_product_id`),
   KEY `idx_yield_entrada` (`input_product_id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=13 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `production_order` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `code` varchar(40) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `product_id` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `quantity` decimal(14,4) NOT NULL DEFAULT '0.0000',
+  `period` varchar(7) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `route_id` int DEFAULT NULL,
+  `status` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'abierta',
+  `started_at` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `closed_at` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `created_by` varchar(60) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `created_at` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_production_order_code` (`code`),
+  KEY `idx_production_order_producto` (`product_id`),
+  KEY `idx_production_order_periodo` (`period`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `production_order_line` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `order_id` int NOT NULL,
+  `component_id` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `planned_qty` decimal(14,4) NOT NULL DEFAULT '0.0000',
+  `actual_qty` decimal(14,4) NOT NULL DEFAULT '0.0000',
+  `unit_cost` decimal(18,4) NOT NULL DEFAULT '0.0000',
+  `labor_grade` varchar(30) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `hours` decimal(12,2) NOT NULL DEFAULT '0.00',
+  PRIMARY KEY (`id`),
+  KEY `idx_production_line_orden` (`order_id`),
+  KEY `idx_production_line_componente` (`component_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `purchase_inbox` (
   `id` bigint NOT NULL AUTO_INCREMENT,
@@ -2964,6 +3097,22 @@ CREATE TABLE `reorder_suggestion` (
   KEY `idx_suggestion_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE `report_run` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `report_id` int NOT NULL DEFAULT '0',
+  `definition_hash` text COLLATE utf8mb4_unicode_ci,
+  `sql` mediumtext COLLATE utf8mb4_unicode_ci,
+  `params` text COLLATE utf8mb4_unicode_ci,
+  `rows_count` int NOT NULL DEFAULT '0',
+  `run_by` varchar(60) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `agent_id` int DEFAULT NULL,
+  `tenant_code` varchar(60) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `created_at` datetime NOT NULL,
+  `exported_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_report_run_report` (`report_id`,`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE `report_template` (
   `id` int NOT NULL AUTO_INCREMENT,
   `name` varchar(120) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -3045,7 +3194,7 @@ CREATE TABLE `sec_role` (
   `is_system` tinyint(1) DEFAULT '0',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `sec_userrole` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -3211,7 +3360,7 @@ CREATE TABLE `sub_module` (
   `directory` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `status` tinyint(1) NOT NULL,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=204 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=215 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `supplier_information` (
   `supplier_id` bigint NOT NULL AUTO_INCREMENT,
@@ -3327,9 +3476,17 @@ CREATE TABLE `tenants` (
   `db_size_mb` int NOT NULL DEFAULT '0',
   `db_name` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
   `is_demo` tinyint(1) NOT NULL DEFAULT '0',
+  `country_code` varchar(2) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'VE',
   PRIMARY KEY (`code`),
   KEY `idx_tenants_status` (`status`),
   KEY `idx_tenants_created_by` (`created_by`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `unit_of_measure` (
+  `code` varchar(10) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `name` varchar(60) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `allows_decimal` tinyint NOT NULL DEFAULT '1',
+  PRIMARY KEY (`code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `units` (
@@ -3522,13 +3679,8 @@ BEGIN
 	END IF;
 END;
 -- Siembras: catálogos y semillas que las migraciones INSERTan.
--- acc_coa (86 filas)
+-- acc_coa (89 filas)
 INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (8, 50202, 'Accounts Payable', 'Current Liabilities', '502', 3, 1, 0, 1, 0, 0, 'L', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2022-05-17 12:52:17', '0', '1970-01-01 00:00:00', 0, 1, 0, 0, NULL, NULL, NULL);
--- Rama fiscal viva (migración schema_z_iva_credito_fiscal.sql; ids 900/901
--- fijos, no se reutilizan): el IVA de las ventas es PASIVO, no gasto.
-INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (900, 50207, 'Impuestos por Pagar', 'Current Liabilities', '502', 3, 1, 0, 0, 0, 0, 'L', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', NOW(), '0', NOW(), 0, 1, 0, 0, NULL, NULL, NULL);
-INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (901, 5020701, 'IVA Débito Fiscal por Pagar', 'Impuestos por Pagar', '50207', 4, 1, 0, 1, 0, 0, 'L', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', NOW(), '0', NOW(), 0, 1, 0, 0, NULL, NULL, NULL);
-INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (902, 5020702, 'IGTF por Pagar', 'Impuestos por Pagar', '50207', 4, 1, 0, 1, 0, 0, 'L', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', NOW(), '0', NOW(), 0, 1, 0, 0, NULL, NULL, NULL);
 INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (10, 1, 'Assets', 'COA', '0', 1, 1, 0, 0, 0, 0, 'A', 0, 0, NULL, NULL, NULL, NULL, '0.00', '0', '1970-01-01 00:00:00', '0', '1970-01-01 00:00:00', 0, 1, 0, 0, '', '', '');
 INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (13, 10201, 'Cash', 'Current Asset', '102', 3, 1, 0, 0, 0, 0, 'A', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2022-04-10 12:07:11', '0', '2015-10-15 15:57:55', 0, 1, 0, 0, NULL, NULL, NULL);
 INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (15, 1020101, 'Cash In Hand', 'Cash', '10201', 4, 1, 1, 1, 1, 0, 'A', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2022-04-12 08:16:03', '0', '2016-05-23 12:05:43', 0, 1, 0, 0, NULL, NULL, NULL);
@@ -3610,12 +3762,15 @@ INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `
 INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (235, 3010401, 'Service Account', 'Service Accounts', '30104', 4, 1, 0, 0, 0, 0, 'I', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2022-06-15 16:24:11', '', '1970-01-01 00:00:00', 0, 1, 0, 0, NULL, NULL, NULL);
 INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (241, 1020501, 'fdsfsd', 'Cash at Bank', '10205', 4, 1, 0, 0, 0, 1, 'A', 0, 0, '0', '0', '0', '0', '0.00', '1', '2025-05-12 11:07:36', '0', '1970-01-01 00:00:00', 0, 1, 0, 0, '0', '0', '0');
 INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (242, 1020502, 'test', 'Cash at Bank', '10205', 4, 1, 0, 0, 0, 1, 'A', 0, 0, '0', '0', '0', '0', '0.00', '1', '2025-05-12 11:34:42', '0', '1970-01-01 00:00:00', 0, 1, 0, 0, '0', '0', '0');
-INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (243, 1020403, 'Inventario de suministros y consumibles', 'Inventory', '10204', 4, 1, 1, 0, 0, 0, 'A', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2026-11-11 17:44:34', '', '2026-11-11 17:44:34', 0, 1, 1, 0, NULL, NULL, NULL);
-INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (244, 1020901, 'IVA crédito fiscal (compras)', 'Current Asset', '102', 4, 1, 1, 0, 0, 0, 'A', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2026-11-11 17:44:34', '', '2026-11-11 17:44:34', 0, 1, 0, 0, NULL, NULL, NULL);
-INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (245, 4021401, 'Gastos de servicios (luz, agua, internet)', 'Over Head Cost', '402', 4, 1, 1, 0, 0, 0, 'E', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2026-11-11 17:44:34', '', '2026-11-11 17:44:34', 0, 1, 0, 0, NULL, NULL, NULL);
-INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (246, 4021402, 'Gastos de suministros y limpieza', 'Over Head Cost', '402', 4, 1, 1, 0, 0, 0, 'E', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2026-11-11 17:44:34', '', '2026-11-11 17:44:34', 0, 1, 0, 0, NULL, NULL, NULL);
+INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (900, 50207, 'Impuestos por Pagar', 'Current Liabilities', '502', 3, 1, 0, 0, 0, 0, 'L', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2026-11-27 22:14:15', '0', '2026-11-27 22:14:15', 0, 1, 0, 0, NULL, NULL, NULL);
+INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (901, 5020701, 'IVA Débito Fiscal por Pagar', 'Impuestos por Pagar', '50207', 4, 1, 0, 1, 0, 0, 'L', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2026-11-27 22:14:15', '0', '2026-11-27 22:14:15', 0, 1, 0, 0, NULL, NULL, NULL);
+INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (902, 5020702, 'IGTF por Pagar', 'Impuestos por Pagar', '50207', 4, 1, 0, 1, 0, 0, 'L', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2026-11-27 22:14:15', '0', '2026-11-27 22:14:15', 0, 1, 0, 0, NULL, NULL, NULL);
+INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (903, 1020403, 'Inventario de suministros y consumibles', 'Inventory', '10204', 4, 1, 1, 0, 0, 0, 'A', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2026-11-27 22:14:17', '', '2026-11-27 22:14:17', 0, 1, 1, 0, NULL, NULL, NULL);
+INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (904, 1020901, 'IVA crédito fiscal (compras)', 'Current Asset', '102', 4, 1, 1, 0, 0, 0, 'A', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2026-11-27 22:14:17', '', '2026-11-27 22:14:17', 0, 1, 0, 0, NULL, NULL, NULL);
+INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (905, 4021401, 'Gastos de servicios (luz, agua, internet)', 'Over Head Cost', '402', 4, 1, 1, 0, 0, 0, 'E', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2026-11-27 22:14:17', '', '2026-11-27 22:14:17', 0, 1, 0, 0, NULL, NULL, NULL);
+INSERT INTO `acc_coa` (`id`, `HeadCode`, `HeadName`, `PHeadName`, `PHeadCode`, `HeadLevel`, `IsActive`, `IsTransaction`, `IsGL`, `isCashNature`, `isBankNature`, `HeadType`, `IsBudget`, `IsDepreciation`, `customer_id`, `supplier_id`, `bank_id`, `service_id`, `DepreciationRate`, `CreateBy`, `CreateDate`, `UpdateBy`, `UpdateDate`, `isSubType`, `subType`, `isStock`, `isFixedAssetSch`, `noteNo`, `assetCode`, `depCode`) VALUES (906, 4021402, 'Gastos de suministros y limpieza', 'Over Head Cost', '402', 4, 1, 1, 0, 0, 0, 'E', 0, 0, NULL, NULL, NULL, NULL, '0.00', '1', '2026-11-27 22:14:17', '', '2026-11-27 22:14:17', 0, 1, 0, 0, NULL, NULL, NULL);
 -- acc_predefine_account (1 filas)
-INSERT INTO `acc_predefine_account` (`id`, `cashCode`, `bankCode`, `advance`, `fixedAsset`, `purchaseCode`, `salesCode`, `serviceCode`, `customerCode`, `supplierCode`, `costs_of_good_solds`, `vat`, `tax`, `inventoryCode`, `CPLCode`, `LPLCode`, `salary_code`, `emp_npf_contribution`, `empr_npf_contribution`, `emp_icf_contribution`, `empr_icf_contribution`, `prov_state_tax`, `state_tax`, `prov_npfcode`, `supplies_inventory_code`, `supplies_expense_code`, `service_expense_code`, `purchase_vat_code`) VALUES (2, 10201, 10205, 10206, 101, 1020401, 3010301, 3010401, 1020801, 5020201, 4010101, 5020701, 4021101, 1020401, 2010201, 2010202, 4020501, 4020502, 4020503, 4021201, 0, 5020101, 4021101, 5020102, 1020403, 4021402, 4021401, 1020901);
+INSERT INTO `acc_predefine_account` (`id`, `cashCode`, `bankCode`, `advance`, `fixedAsset`, `purchaseCode`, `salesCode`, `serviceCode`, `customerCode`, `supplierCode`, `costs_of_good_solds`, `vat`, `tax`, `inventoryCode`, `CPLCode`, `LPLCode`, `salary_code`, `emp_npf_contribution`, `empr_npf_contribution`, `emp_icf_contribution`, `empr_icf_contribution`, `prov_state_tax`, `state_tax`, `prov_npfcode`, `igtf_code`, `supplies_inventory_code`, `supplies_expense_code`, `service_expense_code`, `purchase_vat_code`) VALUES (2, 10201, 10205, 10206, 101, 1020401, 3010301, 3010401, 1020801, 5020201, 4010101, 5020701, 4021101, 1020401, 2010201, 2010202, 4020501, 4020502, 4020503, 4021201, 0, 5020101, 4021101, 5020102, 5020702, 1020403, 4021402, 4021401, 1020901);
 -- acc_subtype (5 filas)
 INSERT INTO `acc_subtype` (`id`, `subtypeName`, `staus`, `created_by`, `created_date`) VALUES (1, 'None', 1, 1, '2022-04-05 10:19:27');
 INSERT INTO `acc_subtype` (`id`, `subtypeName`, `staus`, `created_by`, `created_date`) VALUES (2, 'Employee', 1, 1, '2022-04-06 08:14:48');
@@ -3631,16 +3786,16 @@ INSERT INTO `ai_department_prompt` (`department`, `prompt`, `label`, `updated_by
 INSERT INTO `ai_department_prompt` (`department`, `prompt`, `label`, `updated_by`, `updated_at`) VALUES ('it', 'Eres de soporte y desarrollo: ves la base entera porque diseñas informes y diagnosticas. Cuando propongas un SQL, explica qué tabla va a consultar y por qué, para que quien lo lea pueda revisarlo antes de aprobarlo.', 'Soporte y Desarrollo', '', '');
 INSERT INTO `ai_department_prompt` (`department`, `prompt`, `label`, `updated_by`, `updated_at`) VALUES ('rrhh', 'Tu trabajo es el personal. Son datos reales de personas: muéstralos solo dentro de la empresa y no los reproduzcas en informes que se puedan compartir fuera. Todos los montos a dos decimales.', 'Recursos Humanos', '', '');
 -- ai_providers (10 filas)
-INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (21, 'OpenAI', 'https://api.openai.com/v1', NULL, 'gpt-4o-mini', '0.7', 400, NULL, 1, '2026-11-11 17:44:32', '2026-11-11 17:44:32', 'openai', 0);
-INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (22, 'OpenRouter', 'https://openrouter.ai/api/v1', NULL, 'openai/gpt-4o-mini', '0.7', 400, NULL, 0, '2026-11-11 17:44:32', '2026-11-11 17:44:32', 'openai', 0);
-INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (23, 'Groq', 'https://api.groq.com/openai/v1', NULL, 'llama-3.3-70b-versatile', '0.7', 400, NULL, 0, '2026-11-11 17:44:32', '2026-11-11 17:44:32', 'openai', 0);
-INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (24, 'DeepSeek', 'https://api.deepseek.com/v1', NULL, 'deepseek-chat', '0.7', 400, NULL, 0, '2026-11-11 17:44:32', '2026-11-11 17:44:32', 'openai', 0);
-INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (25, 'Mistral', 'https://api.mistral.ai/v1', NULL, 'mistral-small-latest', '0.7', 400, NULL, 0, '2026-11-11 17:44:32', '2026-11-11 17:44:32', 'openai', 0);
-INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (26, 'xAI', 'https://api.x.ai/v1', NULL, 'grok-2-latest', '0.7', 400, NULL, 0, '2026-11-11 17:44:32', '2026-11-11 17:44:32', 'openai', 0);
-INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (27, 'Together AI', 'https://api.together.xyz/v1', NULL, 'meta-llama/Llama-3.3-70B-Instruct-Turbo', '0.7', 400, NULL, 0, '2026-11-11 17:44:32', '2026-11-11 17:44:32', 'openai', 0);
-INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (28, 'Ollama', 'http://localhost:11434/v1', NULL, 'llama3.2', '0.7', 400, NULL, 0, '2026-11-11 17:44:32', '2026-11-11 17:44:32', 'openai', 0);
-INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (29, 'LM Studio', 'http://localhost:1234/v1', NULL, 'local-model', '0.7', 400, NULL, 0, '2026-11-11 17:44:32', '2026-11-11 17:44:32', 'openai', 0);
-INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (30, 'Personalizado', 'https://api.ejemplo.com/v1', NULL, 'gpt-4o-mini', '0.7', 400, NULL, 0, '2026-11-11 17:44:32', '2026-11-11 17:44:32', 'personalizado', 0);
+INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (21, 'OpenAI', 'https://api.openai.com/v1', NULL, 'gpt-4o-mini', '0.7', 400, NULL, 1, '2026-11-27 22:14:14', '2026-11-27 22:14:14', 'openai', 0);
+INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (22, 'OpenRouter', 'https://openrouter.ai/api/v1', NULL, 'openai/gpt-4o-mini', '0.7', 400, NULL, 0, '2026-11-27 22:14:14', '2026-11-27 22:14:14', 'openai', 0);
+INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (23, 'Groq', 'https://api.groq.com/openai/v1', NULL, 'llama-3.3-70b-versatile', '0.7', 400, NULL, 0, '2026-11-27 22:14:14', '2026-11-27 22:14:14', 'openai', 0);
+INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (24, 'DeepSeek', 'https://api.deepseek.com/v1', NULL, 'deepseek-chat', '0.7', 400, NULL, 0, '2026-11-27 22:14:14', '2026-11-27 22:14:14', 'openai', 0);
+INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (25, 'Mistral', 'https://api.mistral.ai/v1', NULL, 'mistral-small-latest', '0.7', 400, NULL, 0, '2026-11-27 22:14:14', '2026-11-27 22:14:14', 'openai', 0);
+INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (26, 'xAI', 'https://api.x.ai/v1', NULL, 'grok-2-latest', '0.7', 400, NULL, 0, '2026-11-27 22:14:14', '2026-11-27 22:14:14', 'openai', 0);
+INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (27, 'Together AI', 'https://api.together.xyz/v1', NULL, 'meta-llama/Llama-3.3-70B-Instruct-Turbo', '0.7', 400, NULL, 0, '2026-11-27 22:14:14', '2026-11-27 22:14:14', 'openai', 0);
+INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (28, 'Ollama', 'http://localhost:11434/v1', NULL, 'llama3.2', '0.7', 400, NULL, 0, '2026-11-27 22:14:14', '2026-11-27 22:14:14', 'openai', 0);
+INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (29, 'LM Studio', 'http://localhost:1234/v1', NULL, 'local-model', '0.7', 400, NULL, 0, '2026-11-27 22:14:14', '2026-11-27 22:14:14', 'openai', 0);
+INSERT INTO `ai_providers` (`id`, `name`, `base_url`, `api_key`, `model`, `temperature`, `max_tokens`, `prompt_template`, `is_active`, `created_at`, `updated_at`, `vendor`, `op_cache`) VALUES (30, 'Personalizado', 'https://api.ejemplo.com/v1', NULL, 'gpt-4o-mini', '0.7', 400, NULL, 0, '2026-11-27 22:14:14', '2026-11-27 22:14:14', 'personalizado', 0);
 -- ai_report_types (7 filas)
 INSERT INTO `ai_report_types` (`id`, `name`) VALUES (9, 'sales');
 INSERT INTO `ai_report_types` (`id`, `name`) VALUES (10, 'purchase');
@@ -3662,7 +3817,7 @@ INSERT INTO `fiscal_setting` (`id`, `key`, `value`) VALUES (9, 'fiscal_footnote'
 INSERT INTO `fiscal_setting` (`id`, `key`, `value`) VALUES (10, 'cashhea_enabled', '0');
 INSERT INTO `fiscal_setting` (`id`, `key`, `value`) VALUES (11, 'inventory_deduction_mode', 'invoice');
 -- inventory_flow_config (1 filas)
-INSERT INTO `inventory_flow_config` (`tenant_id`, `deduction_mode`, `enable_reservation`, `updated_at`) VALUES ('default', 'invoice', 0, '2026-11-11 17:44:35');
+INSERT INTO `inventory_flow_config` (`tenant_id`, `deduction_mode`, `enable_reservation`, `updated_at`) VALUES ('default', 'invoice', 0, '2026-11-27 22:14:17');
 -- islr_concept (15 filas)
 INSERT INTO `islr_concept` (`id`, `code`, `description`, `default_percent`, `status`) VALUES (1, '001', 'Honorarios Profesionales', '5.00', 1);
 INSERT INTO `islr_concept` (`id`, `code`, `description`, `default_percent`, `status`) VALUES (2, '002', 'Comisiones', '5.00', 1);
@@ -3683,72 +3838,72 @@ INSERT INTO `islr_concept` (`id`, `code`, `description`, `default_percent`, `sta
 INSERT INTO `labor_grade` (`code`, `name`, `base_salary_annual`, `overhead_pct`, `hours_per_year`, `productivity_factor`, `active`) VALUES ('ayudante', 'Ayudante / junior', '0.00', '34.00', 2080, '1.0000', 1);
 INSERT INTO `labor_grade` (`code`, `name`, `base_salary_annual`, `overhead_pct`, `hours_per_year`, `productivity_factor`, `active`) VALUES ('maestro', 'Maestro / especialista', '0.00', '34.00', 2080, '1.0000', 1);
 INSERT INTO `labor_grade` (`code`, `name`, `base_salary_annual`, `overhead_pct`, `hours_per_year`, `productivity_factor`, `active`) VALUES ('supervisor', 'Supervisor', '0.00', '34.00', 2080, '1.0000', 1);
--- menu (117 filas)
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (1, NULL, 'Dashboard', '/home', 'ti-dashboard', NULL, NULL, 10, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (2, NULL, 'Facturación', NULL, 'fa fa-balance-scale', NULL, NULL, 20, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (3, NULL, 'Clientes', NULL, 'metismenu-icon pe-7s-user', NULL, NULL, 30, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (4, NULL, 'Proveedores', NULL, 'metismenu-icon fa fa-user-secret', NULL, NULL, 40, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5, NULL, 'Productos', NULL, 'metismenu-icon fa fa-cubes', NULL, NULL, 50, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (6, NULL, 'Compras', NULL, 'metismenu-icon fa fa-shopping-cart', NULL, NULL, 60, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (7, NULL, 'Inventario', '/reports/stock', 'metismenu-icon fa fa-bar-chart', 'stock_report', '/reports/stock', 70, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (8, NULL, 'Servicios', NULL, 'metismenu-icon fa fa-wrench', 'create_service|manage_service', NULL, 80, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (9, NULL, 'Devoluciones', '/return/list', 'metismenu-icon fa fa-undo', 'manage_return', NULL, 90, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (10, NULL, 'Notas de Crédito', '/creditnote/list', 'metismenu-icon fa fa-file-text', 'manage_invoice|new_invoice', NULL, 100, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (12, NULL, 'Cotizaciones', NULL, 'metismenu-icon fa fa-file-text-o', NULL, NULL, 120, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (13, NULL, 'Bancos', NULL, 'metismenu-icon fa fa-university', 'bank|bank_ledger', NULL, 130, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (14, NULL, 'Ajuste Inventario', NULL, 'metismenu-icon fa fa-sliders', 'adjustment', NULL, 140, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (15, NULL, 'Contabilidad', NULL, 'metismenu-icon fa fa-money', 'coa|vouchers|ledger', NULL, 150, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (16, NULL, 'Reportes', NULL, 'metismenu-icon fa fa-files-o', 'sales_report|purchase_report|stock_report', NULL, 160, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (17, NULL, 'Libros Legales VE', NULL, 'metismenu-icon fa fa-balance-scale', 'legal_books|kardex', NULL, 170, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (18, NULL, 'CRM', NULL, 'metismenu-icon fa fa-briefcase', 'crm', NULL, 180, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (19, NULL, 'Costos', NULL, 'metismenu-icon fa fa-calculator', 'cost|cost_timesheet|cost_close', NULL, 190, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (20, NULL, 'Recursos Humanos', NULL, 'metismenu-icon fa fa-users', 'hr_employee|hr_payroll|hr_tax_rates', NULL, 200, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (21, NULL, 'Configuración', NULL, 'metismenu-icon fa fa-cog', 'setting|users|roles|backup', NULL, 210, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (22, NULL, 'IA - Analista', NULL, 'metismenu-icon fa fa-book', 'ai_settings|ai_business_analyst_report', NULL, 220, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (23, NULL, 'Informes Personalizados', '/reports/custom', 'metismenu-icon fa fa-bar-chart', 'custom_reports', '/reports/custom', 230, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (24, NULL, 'Pista de Auditoría', '/reports/audit-log', 'metismenu-icon fa fa-shield', 'audit_log', '/reports/audit-log', 240, 1, 'core', 0);
+-- menu (119 filas)
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (1, NULL, 'Inicio', '/home', 'ti-dashboard', NULL, NULL, 10, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (2, NULL, 'Ventas', NULL, 'fa fa-shopping-bag', NULL, NULL, 20, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (3, NULL, 'Clientes y cobros', NULL, 'fa fa-users', NULL, NULL, 30, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (4, NULL, 'Proveedores', NULL, 'metismenu-icon fa fa-user-secret', NULL, NULL, 40, 0, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5, NULL, 'Productos', NULL, 'fa fa-cubes', NULL, NULL, 50, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (6, NULL, 'Compras y proveedores', NULL, 'fa fa-shopping-cart', NULL, NULL, 40, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (7, 5000, 'Inventario', '/reports/stock', 'metismenu-icon fa fa-bar-chart', 'stock_report', '/reports/stock', 10, 0, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (8, NULL, 'Servicios', NULL, 'metismenu-icon fa fa-wrench', 'create_service|manage_service', NULL, 80, 0, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (9, 2, 'Devoluciones', '/return/list', 'metismenu-icon fa fa-undo', 'manage_return', NULL, 60, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (10, 2, 'Notas de Crédito', '/creditnote/list', 'metismenu-icon fa fa-file-text', 'manage_invoice|new_invoice', NULL, 50, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (12, NULL, 'Cotizaciones', NULL, 'metismenu-icon fa fa-file-text-o', NULL, NULL, 120, 0, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (13, NULL, 'Bancos', NULL, 'metismenu-icon fa fa-university', 'bank|bank_ledger', NULL, 130, 0, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (14, NULL, 'Ajuste Inventario', NULL, 'metismenu-icon fa fa-sliders', 'adjustment', NULL, 140, 0, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (15, NULL, 'Contabilidad', NULL, 'fa fa-calculator', 'coa|vouchers|ledger', NULL, 70, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (16, NULL, 'Reportes', NULL, 'fa fa-files-o', 'sales_report|purchase_report|stock_report', NULL, 90, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (17, NULL, 'Impuestos y libros', NULL, 'fa fa-balance-scale', 'legal_books|kardex', NULL, 80, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (18, NULL, 'CRM', NULL, 'fa fa-briefcase', 'crm', NULL, 100, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (19, NULL, 'Costos', NULL, 'fa fa-percent', 'cost|cost_timesheet|cost_close', NULL, 110, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (20, NULL, 'Recursos Humanos', NULL, 'fa fa-users', 'hr_employee|hr_payroll|hr_tax_rates', NULL, 120, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (21, NULL, 'Configuración', NULL, 'fa fa-cog', 'setting|users|roles|backup', NULL, 140, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (22, NULL, 'Asistentes IA', NULL, 'fa fa-magic', 'ai_settings|ai_business_analyst_report', NULL, 130, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (23, 16, 'Informes Personalizados', '/reports/custom', 'metismenu-icon fa fa-bar-chart', 'custom_reports', '/reports/custom', 50, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (24, 16, 'Pista de Auditoría', '/reports/audit-log', 'metismenu-icon fa fa-shield', 'audit_log', '/reports/audit-log', 60, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (101, 2, 'Nueva Factura', '/invoice/new', NULL, 'new_invoice', NULL, 10, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (102, 2, 'Gestionar Facturas', '/invoice/list', NULL, 'manage_invoice', NULL, 20, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (110, 3, 'Añadir Cliente', '/customer/add', NULL, 'add_customer', NULL, 10, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (111, 3, 'Listado de Clientes', '/customer/list', NULL, 'manage_customer', NULL, 20, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (112, 3, 'Clientes Crédito', '/customer/credit', NULL, 'credit_customer', NULL, 30, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (113, 3, 'Clientes Pagados', '/customer/paid', NULL, 'paid_customer', NULL, 40, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (114, 3, 'Libro Mayor', '/customer/ledger', NULL, 'customer_ledger', '/customer/ledger', 50, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (115, NULL, 'Cuentas por Cobrar', '/cartera/list', 'metismenu-icon fa fa-credit-card', 'customer_ledger', '/cartera', 35, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (120, 4, 'Añadir Proveedor', '/supplier/add', NULL, 'add_supplier', NULL, 10, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (121, 4, 'Listado de Proveedores', '/supplier/list', NULL, 'manage_supplier', NULL, 20, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (122, 4, 'Libro Mayor', '/supplier/ledger', NULL, 'supplier_ledger', '/supplier/ledger', 30, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (123, NULL, 'Cuentas por Pagar', '/pagar/list', 'metismenu-icon fa fa-money', 'supplier_payment', '/pagar', 45, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (114, 3, 'Libro de clientes', '/customer/ledger', NULL, 'customer_ledger', '/customer/ledger', 50, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (115, 3, 'Cuentas por Cobrar', '/cartera/list', 'metismenu-icon fa fa-credit-card', 'customer_ledger', '/cartera', 60, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (120, 6, 'Añadir Proveedor', '/supplier/add', NULL, 'add_supplier', NULL, 30, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (121, 6, 'Listado de Proveedores', '/supplier/list', NULL, 'manage_supplier', NULL, 40, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (122, 6, 'Libro de proveedores', '/supplier/ledger', NULL, 'supplier_ledger', '/supplier/ledger', 50, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (123, 6, 'Cuentas por Pagar', '/pagar/list', 'metismenu-icon fa fa-money', 'supplier_payment', '/pagar', 60, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (130, 5, 'Categorías', '/product/category', NULL, 'category', NULL, 10, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (131, 5, 'Unidades', '/product/unit', NULL, 'unit', NULL, 20, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (132, 5, 'Añadir Producto', '/product/add', NULL, 'create_product', NULL, 30, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (133, 5, 'Gestionar Productos', '/product/list', NULL, 'manage_product', NULL, 40, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (140, 6, 'Nueva Compra', '/purchase/add', NULL, 'add_purchase', NULL, 10, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (141, 6, 'Gestionar Compras', '/purchase/list', NULL, 'manage_purchase', NULL, 20, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (150, 8, 'Añadir Servicio', '/service/add', NULL, 'create_service', NULL, 10, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (151, 8, 'Gestionar Servicios', '/service/list', NULL, 'manage_service', NULL, 20, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (152, 8, 'Factura de Servicio', '/service/invoice/new', NULL, NULL, '/service/invoice', 30, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (170, 12, 'Nueva Cotización', '/quotation/new', NULL, 'create_quotation', NULL, 10, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (171, 12, 'Gestionar Cotizaciones', '/quotation/list', NULL, 'manage_quotation', NULL, 20, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (180, 13, 'Añadir Cuenta', '/bank/add', NULL, NULL, NULL, 10, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (181, 13, 'Cuentas Bancarias', '/bank/list', NULL, NULL, NULL, 20, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (182, 13, 'Libro Bancario', '/bank/ledger', NULL, NULL, '/bank/ledger', 30, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (183, 13, 'Transacción', '/bank/transaction', NULL, NULL, NULL, 40, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (190, 14, 'Nuevo Ajuste', '/adjustment/new', NULL, NULL, NULL, 10, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (191, 14, 'Historial', '/adjustment/list', NULL, NULL, NULL, 20, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (150, 2, 'Añadir Servicio', '/service/add', NULL, 'create_service', NULL, 70, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (151, 2, 'Gestionar Servicios', '/service/list', NULL, 'manage_service', NULL, 80, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (152, 2, 'Factura de Servicio', '/service/invoice/new', NULL, 'create_service|manage_service', '/service/invoice', 90, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (170, 2, 'Nueva Cotización', '/quotation/new', NULL, 'create_quotation', NULL, 30, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (171, 2, 'Gestionar Cotizaciones', '/quotation/list', NULL, 'manage_quotation', NULL, 40, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (180, 15, 'Añadir Cuenta', '/bank/add', NULL, 'bank|bank_ledger', NULL, 90, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (181, 15, 'Cuentas Bancarias', '/bank/list', NULL, 'bank|bank_ledger', NULL, 100, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (182, 15, 'Libro Bancario', '/bank/ledger', NULL, 'bank|bank_ledger', '/bank/ledger', 110, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (183, 15, 'Transacción', '/bank/transaction', NULL, 'bank|bank_ledger', NULL, 120, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (190, 5000, 'Nuevo Ajuste', '/adjustment/new', NULL, 'adjustment', NULL, 50, 0, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (191, 5000, 'Historial de ajustes', '/adjustment/list', NULL, 'adjustment', NULL, 60, 0, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (200, 15, 'Plan de Cuentas', '/account/coa', NULL, 'coa', '/account/coa', 10, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (201, 15, 'Catálogo del plan', '/account/coa/catalog', NULL, 'coa', NULL, 11, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (202, 15, 'Comprobantes', '/account/vouchers', NULL, 'vouchers', NULL, 20, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (203, 15, 'Nuevo Multi-Línea', '/account/voucher/new-multi', NULL, 'vouchers', '/account/voucher', 21, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (204, 15, 'Libro Mayor', '/account/ledger', NULL, 'ledger', NULL, 30, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (205, 15, 'Balance Comprobación', '/account/trial-balance', NULL, NULL, NULL, 40, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (206, 15, 'Estado Resultados', '/account/profit-loss', NULL, NULL, NULL, 50, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (207, 15, 'Balance General', '/account/balance-sheet', NULL, NULL, NULL, 60, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (210, 16, 'Ventas', '/reports/sales', NULL, NULL, NULL, 10, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (211, 16, 'Compras', '/reports/purchases', NULL, NULL, NULL, 20, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (212, 16, 'Inventario', '/reports/stock', NULL, NULL, NULL, 30, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (213, 16, 'Impuestos', '/reports/tax', NULL, NULL, NULL, 40, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (214, 16, 'Cierre Diario', '/reports/daily-closing', NULL, NULL, NULL, 50, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (201, 15, 'Catálogo del plan', '/account/coa/catalog', NULL, 'coa', NULL, 20, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (202, 15, 'Comprobantes', '/account/vouchers', NULL, 'vouchers', NULL, 30, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (203, 15, 'Nuevo Multi-Línea', '/account/voucher/new-multi', NULL, 'vouchers', '/account/voucher', 40, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (204, 15, 'Libro Mayor', '/account/ledger', NULL, 'ledger', NULL, 50, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (205, 15, 'Balance Comprobación', '/account/trial-balance', NULL, NULL, NULL, 60, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (206, 15, 'Estado Resultados', '/account/profit-loss', NULL, NULL, NULL, 70, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (207, 15, 'Balance General', '/account/balance-sheet', NULL, NULL, NULL, 80, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (210, 16, 'Reporte de ventas', '/reports/sales', NULL, NULL, NULL, 10, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (211, 16, 'Reporte de compras', '/reports/purchases', NULL, NULL, NULL, 20, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (212, 5000, 'Inventario', '/reports/stock', NULL, NULL, NULL, 10, 0, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (213, 16, 'Reporte de impuestos', '/reports/tax', NULL, NULL, NULL, 30, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (214, 16, 'Cierre Diario', '/reports/daily-closing', NULL, NULL, NULL, 40, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (220, 17, 'Libro de Compras (IVA)', '/reports/book-purchases', NULL, NULL, NULL, 10, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (221, 17, 'Libro de Ventas (IVA)', '/reports/book-sales', NULL, NULL, NULL, 20, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (222, 17, 'Control de Inventario', '/reports/inventory-control', NULL, NULL, NULL, 30, 1, 'core', 0);
@@ -3759,48 +3914,50 @@ INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_p
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (230, 18, 'Panel', '/crm', NULL, NULL, NULL, 10, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (231, 18, 'Contactos', '/crm/contact/list', NULL, NULL, '/crm/contact', 20, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (232, 18, 'Embudo', '/crm/pipeline', NULL, NULL, NULL, 30, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (233, 18, 'Remarketing', '/crm/remarketing', NULL, 'crm_remarketing', '/crm/remarketing', 40, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (234, 233, 'Campañas', '/crm/remarketing/campaigns', NULL, 'crm_remarketing', NULL, 10, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (235, 233, 'Segmentos', '/crm/remarketing/segments', NULL, 'crm_remarketing', NULL, 20, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (236, 233, 'Plantillas', '/crm/remarketing/templates', NULL, 'crm_remarketing', NULL, 30, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (240, 19, 'Configuración', '/cost', NULL, NULL, NULL, 10, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (233, 18, 'Remarketing', '/crm/remarketing', NULL, 'crm_remarketing', '/crm/remarketing', 40, 0, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (234, 18, 'Campañas', '/crm/remarketing/campaigns', NULL, 'crm_remarketing', NULL, 50, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (235, 18, 'Segmentos', '/crm/remarketing/segments', NULL, 'crm_remarketing', NULL, 60, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (236, 18, 'Plantillas', '/crm/remarketing/templates', NULL, 'crm_remarketing', NULL, 70, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (240, 19, 'Configuración de costos', '/cost', NULL, NULL, NULL, 10, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (241, 19, 'Hoja de horas', '/cost/timesheet', NULL, NULL, '/cost/timesheet', 20, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (242, 19, 'Horas facturables', '/cost/proyectos', NULL, NULL, '/cost/proyectos', 30, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (243, 19, 'Cierre de período', '/cost/period', NULL, NULL, '/cost/period', 40, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (250, 20, 'Panel de RRHH', '/hr', NULL, NULL, NULL, 10, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (251, 20, 'Empleados', '/hr/employee/list', NULL, 'hr_employee', '/hr/employee', 20, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (252, 20, 'Tasas Fiscales', '/hr/tax-rates', NULL, 'hr_tax_rates', '/hr/tax-rates', 30, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (253, 20, 'Nómina', '/hr/payroll', NULL, 'hr_payroll', '/hr/payroll', 40, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (254, 20, 'Vacaciones y ausencias', '/hr/leave', NULL, 'hr_employee|hr_payroll', '/hr/leave', 35, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (253, 20, 'Nómina', '/hr/payroll', NULL, 'hr_payroll', '/hr/payroll', 50, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (254, 20, 'Vacaciones y ausencias', '/hr/leave', NULL, 'hr_employee|hr_payroll', '/hr/leave', 40, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (260, 21, 'Software', '/settings', NULL, 'setting', '/settings', 10, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (261, 21, 'Fiscales (SENIAT)', '/settings/fiscal', NULL, 'setting', '/settings/fiscal', 20, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (262, 21, 'Empresa', '/settings/company', NULL, 'setting', '/settings/company', 30, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (263, 21, 'Moneda', '/settings/currency', NULL, 'setting', '/settings/currency', 40, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (264, 21, 'Tasa BCV', '/settings/exchange-rate', NULL, 'setting', '/settings/exchange-rate', 50, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (265, 21, 'Backup', '/settings/backup', NULL, 'backup', '/settings/backup', 60, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (266, 21, 'Base de Datos', '/settings/database', NULL, 'setting', '/settings/database', 70, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (268, 21, 'Usuarios', '/user/list', NULL, 'users', '/user', 90, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (269, 21, 'Roles y Permisos', '/role/list', NULL, 'roles', '/role', 100, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (262, 21, 'Empresa', '/settings/company', NULL, 'setting', '/settings/company', 40, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (263, 21, 'Moneda', '/settings/currency', NULL, 'setting', '/settings/currency', 50, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (264, 21, 'Tasa BCV', '/settings/exchange-rate', NULL, 'setting', '/settings/exchange-rate', 60, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (265, 21, 'Backup', '/settings/backup', NULL, 'backup', '/settings/backup', 70, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (266, 21, 'Base de Datos', '/settings/database', NULL, 'setting', '/settings/database', 100, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (268, 21, 'Usuarios', '/user/list', NULL, 'users', '/user', 110, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (269, 21, 'Roles y Permisos', '/role/list', NULL, 'roles', '/role', 120, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (270, 22, 'Configuración IA', '/ai/settings', NULL, 'ai_settings', NULL, 10, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (271, 22, 'AI Business Analyst', '/ai/chat', NULL, 'ai_business_analyst_report', NULL, 20, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (272, 22, 'Agentes IA', '/ai/agents', NULL, 'ai_agents', NULL, 30, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (273, 22, 'Tareas de Agentes', '/ai/tasks', NULL, 'ai_tasks', NULL, 40, 1, 'core', 0);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (274, 22, 'Mapa de Base de Datos', '/ai/catalog', NULL, 'ai_agents', NULL, 50, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (275, 21, 'Facturación Digital', '/settings/digital-invoice', NULL, 'setting', '/settings/digital-invoice', 25, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (276, 21, 'Mensajes enviados', '/finance/mensajes', NULL, 'customer_ledger|supplier_payment', '/finance/mensajes', 66, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (281, 21, 'Gestor de Menús', '/config/menu', 'fa fa-bars', 'setting', '/config/menu', 115, 1, 'core', 1);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (285, 21, 'Módulos', '/module/list', 'fa fa-cubes', '__master', '/module', 68, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5000, NULL, 'Gestion Inventario', NULL, 'metismenu-icon fa fa-cubes', NULL, NULL, 70, 1, 'core', 1);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (275, 21, 'Facturación Digital', '/settings/digital-invoice', NULL, 'setting', '/settings/digital-invoice', 30, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (276, 21, 'Mensajes enviados', '/finance/mensajes', NULL, 'customer_ledger|supplier_payment', '/finance/mensajes', 80, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (277, 21, 'Canales de aviso', '/settings/notify', NULL, 'setting', '/settings/notify', 35, 1, 'core', 1);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (281, 21, 'Gestor de Menús', '/config/menu', 'fa fa-bars', 'setting', '/config/menu', 130, 1, 'core', 1);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (285, 21, 'Módulos', '/module/list', 'fa fa-cubes', '__master', '/module', 90, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5000, NULL, 'Inventario y almacén', NULL, 'fa fa-archive', NULL, NULL, 60, 1, 'core', 1);
 INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5001, 5000, 'Stock', '/reports/stock', NULL, 'stock_report', '/reports/stock', 10, 1, 'core', 1);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5002, 5000, 'Ajuste de Inventario', NULL, NULL, 'adjustment', NULL, 20, 1, 'core', 1);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5003, 5002, 'Nuevo Ajuste', '/adjustment/new', NULL, NULL, NULL, 10, 1, 'core', 1);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5004, 5002, 'Historial', '/adjustment/list', NULL, NULL, NULL, 20, 1, 'core', 1);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5005, 5000, 'Almacenes', '/warehouse/list', NULL, NULL, '/warehouse', 15, 1, 'core', 1);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5006, 5000, 'Consumo Interno', '/consumption/list', NULL, NULL, '/consumption', 25, 1, 'core', 1);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5007, 5006, 'Nuevo consumo', '/consumption/new', NULL, NULL, '/consumption/new', 10, 1, 'core', 1);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5100, NULL, 'Almacén', '/delivery_order/list', 'metismenu-icon fa fa-truck', 'delivery_order|warehouse', NULL, 65, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5101, 5100, 'Nueva Orden', '/delivery_order/add', NULL, NULL, NULL, 10, 1, 'core', 0);
-INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5102, 5100, 'Gestionar Órdenes', '/delivery_order/list', NULL, NULL, '/delivery_order', 20, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5002, 5000, 'Ajuste de Inventario', NULL, NULL, 'adjustment', NULL, 20, 0, 'core', 1);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5003, 5000, 'Nuevo Ajuste', '/adjustment/new', NULL, 'adjustment', NULL, 50, 1, 'core', 1);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5004, 5000, 'Historial de ajustes', '/adjustment/list', NULL, 'adjustment', NULL, 60, 1, 'core', 1);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5005, 5000, 'Almacenes', '/warehouse/list', NULL, NULL, '/warehouse', 20, 1, 'core', 1);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5006, 5000, 'Consumo Interno', '/consumption/list', NULL, NULL, '/consumption', 25, 0, 'core', 1);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5007, 5000, 'Nuevo consumo', '/consumption/new', NULL, NULL, '/consumption/new', 70, 1, 'core', 1);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5100, 5000, 'Almacén', '/delivery_order/list', 'metismenu-icon fa fa-truck', 'delivery_order|warehouse', NULL, 40, 0, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5101, 5000, 'Nueva Orden', '/delivery_order/add', NULL, NULL, NULL, 30, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (5102, 5000, 'Gestionar Órdenes', '/delivery_order/list', NULL, NULL, '/delivery_order', 40, 1, 'core', 0);
+INSERT INTO `menu` (`id`, `parent_id`, `label`, `url`, `icon`, `perm`, `active_prefix`, `sort_order`, `status`, `module_id`, `is_core`) VALUES (9101, 5000, 'Consumos', '/consumption/list', NULL, NULL, NULL, 80, 1, 'core', 1);
 -- module (16 filas)
 INSERT INTO `module` (`id`, `name`, `description`, `image`, `directory`, `status`) VALUES (1, 'invoice', NULL, NULL, NULL, 1);
 INSERT INTO `module` (`id`, `name`, `description`, `image`, `directory`, `status`) VALUES (2, 'customer', NULL, NULL, NULL, 1);
@@ -3832,7 +3989,9 @@ INSERT INTO `pos_counters` (`name`, `value`, `updated_at`) VALUES ('invoice', 99
 -- price_list (2 filas)
 INSERT INTO `price_list` (`id`, `code`, `name`, `sort_order`, `is_default`, `active`) VALUES (3, 'detalle', 'Venta a detalle', 1, 1, 1);
 INSERT INTO `price_list` (`id`, `code`, `name`, `sort_order`, `is_default`, `active`) VALUES (4, 'mayor', 'Venta al mayor', 2, 0, 1);
--- sub_module (55 filas)
+-- sec_role (1 filas)
+INSERT INTO `sec_role` (`id`, `type`, `level`, `description`, `is_system`, `created_at`) VALUES (3, 'super', 'master', 'Super Administrador del sistema', 1, '2026-11-27 22:14:14');
+-- sub_module (60 filas)
 INSERT INTO `sub_module` (`id`, `mid`, `name`, `description`, `image`, `directory`, `status`) VALUES (1, 1, 'new_invoice', NULL, NULL, 'new_invoice', 1);
 INSERT INTO `sub_module` (`id`, `mid`, `name`, `description`, `image`, `directory`, `status`) VALUES (2, 1, 'manage_invoice', NULL, NULL, 'manage_invoice', 1);
 INSERT INTO `sub_module` (`id`, `mid`, `name`, `description`, `image`, `directory`, `status`) VALUES (4, 2, 'add_customer', NULL, NULL, 'add_customer', 1);
@@ -3888,7 +4047,18 @@ INSERT INTO `sub_module` (`id`, `mid`, `name`, `description`, `image`, `director
 INSERT INTO `sub_module` (`id`, `mid`, `name`, `description`, `image`, `directory`, `status`) VALUES (201, 1, 'cost_timesheet', NULL, NULL, 'cost_timesheet', 1);
 INSERT INTO `sub_module` (`id`, `mid`, `name`, `description`, `image`, `directory`, `status`) VALUES (202, 1, 'cost_close', NULL, NULL, 'cost_close', 1);
 INSERT INTO `sub_module` (`id`, `mid`, `name`, `description`, `image`, `directory`, `status`) VALUES (203, 4, 'supplier_payment', NULL, NULL, 'supplier_payment', 1);
+INSERT INTO `sub_module` (`id`, `mid`, `name`, `description`, `image`, `directory`, `status`) VALUES (210, 1, 'cost_assets', NULL, NULL, 'cost_assets', 1);
+INSERT INTO `sub_module` (`id`, `mid`, `name`, `description`, `image`, `directory`, `status`) VALUES (211, 1, 'cost_routes', NULL, NULL, 'cost_routes', 1);
+INSERT INTO `sub_module` (`id`, `mid`, `name`, `description`, `image`, `directory`, `status`) VALUES (212, 1, 'cost_uom', NULL, NULL, 'cost_uom', 1);
+INSERT INTO `sub_module` (`id`, `mid`, `name`, `description`, `image`, `directory`, `status`) VALUES (213, 1, 'cost_production', NULL, NULL, 'cost_production', 1);
+INSERT INTO `sub_module` (`id`, `mid`, `name`, `description`, `image`, `directory`, `status`) VALUES (214, 4, 'supplier_payment', NULL, NULL, 'supplier_payment', 1);
+-- unit_of_measure (5 filas)
+INSERT INTO `unit_of_measure` (`code`, `name`, `allows_decimal`) VALUES ('g', 'Gramo', 1);
+INSERT INTO `unit_of_measure` (`code`, `name`, `allows_decimal`) VALUES ('kg', 'Kilogramo', 1);
+INSERT INTO `unit_of_measure` (`code`, `name`, `allows_decimal`) VALUES ('lt', 'Litro', 1);
+INSERT INTO `unit_of_measure` (`code`, `name`, `allows_decimal`) VALUES ('ml', 'Mililitro', 1);
+INSERT INTO `unit_of_measure` (`code`, `name`, `allows_decimal`) VALUES ('un', 'Unidad', 0);
 -- warehouse (2 filas)
-INSERT INTO `warehouse` (`id`, `code`, `name`, `address`, `is_default`, `is_active`, `created_at`, `kind`) VALUES (2, 'WH-MAIN', 'Almacén Principal', NULL, 1, 1, '2026-11-11 17:44:32', 'venta');
-INSERT INTO `warehouse` (`id`, `code`, `name`, `address`, `is_default`, `is_active`, `created_at`, `kind`) VALUES (3, 'WH-CONSUMO', 'Consumo interno', '', 0, 1, '2026-11-11 17:44:34', 'consumo');
+INSERT INTO `warehouse` (`id`, `code`, `name`, `address`, `is_default`, `is_active`, `created_at`, `kind`) VALUES (2, 'WH-MAIN', 'Almacén Principal', NULL, 1, 1, '2026-11-27 22:14:13', 'venta');
+INSERT INTO `warehouse` (`id`, `code`, `name`, `address`, `is_default`, `is_active`, `created_at`, `kind`) VALUES (3, 'WH-CONSUMO', 'Consumo interno', '', 0, 1, '2026-11-27 22:14:17', 'consumo');
 SET FOREIGN_KEY_CHECKS=1;
