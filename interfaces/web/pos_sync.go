@@ -212,16 +212,10 @@ func (s *Server) handlePOSSyncSale(w http.ResponseWriter, r *http.Request) {
 				"total": req.Total, "advertencias": resp.Advertencias})
 	}
 
-	// La venta sincronizada se apunta a la cola de facturación digital: el
-	// runner la emisará al proveedor que la empresa tenga activo. Es asincrónico
-	// a propósito: si Unidigital está caído o sin conexión, el ERP igual
-	// confirma la sincronización a la caja y la cola reintenta sola.
-	if resp != nil && resp.Success && resp.RemoteID != "" {
-		tenant, _ := r.Context().Value(posSyncTenantKey{}).(string)
-		if tenant != "" {
-			go s.diEnqueueVenta(dbSync, tenant, resp.RemoteID)
-		}
-	}
+	// La facturación digital la encola el MOTOR (registrarVentaTerminal), no
+	// este handler: así la venta entra a la cola por HTTP-sync y también por
+	// gRPC. Antes se encolaba solo aquí y las ventas de las cajas que hablan
+	// gRPC se quedaban sin transmitir a la imprenta digital.
 
 	writeJSON(w, resp)
 }
@@ -373,4 +367,3 @@ func (s *Server) handlePOSCustomersSync(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, map[string]interface{}{"results": resp})
 }
-

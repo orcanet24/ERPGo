@@ -17,7 +17,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"erpgo/configs"
 
 	_ "github.com/glebarez/go-sqlite"
 )
@@ -238,24 +241,50 @@ func TestUnaFacturaSinRIFNoSeEmite(t *testing.T) {
 
 // ---------- La cola y el modo impresora fiscal ----------
 
+// crearTablasDeCola deja en `db` las dos tablas de la facturación digital que
+// viven en la base de CONTROL. En una instalación normal es otra base; en las
+// pruebas de este archivo, la de control y la de la empresa pueden ser la misma.
+func crearTablasDeCola(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, ddl := range []string{
+		`CREATE TABLE IF NOT EXISTS digital_invoice_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			invoice_id INTEGER NOT NULL,
+			company_id TEXT NOT NULL DEFAULT '1',
+			addon_code TEXT NOT NULL DEFAULT '',
+			strong_id TEXT, nro_control INTEGER, nro_control_texto TEXT,
+			nro_documento INTEGER NOT NULL DEFAULT 0,
+			tipo_documento TEXT NOT NULL DEFAULT 'FA', serie TEXT NOT NULL DEFAULT '0',
+			status TEXT NOT NULL DEFAULT 'pending',
+			pdf_url TEXT, xml_url TEXT, pdf_path TEXT, error_message TEXT,
+			intentos INTEGER NOT NULL DEFAULT 0, ultimo_intento TEXT,
+			created_at TEXT, updated_at TEXT)`,
+		`CREATE TABLE IF NOT EXISTS digital_invoice_config (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			company_id TEXT NOT NULL DEFAULT '1',
+			addon_code TEXT NOT NULL,
+			config_json TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT, updated_at TEXT,
+			UNIQUE (company_id, addon_code))`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatalf("no se pudo crear el esquema de la cola: %v\n%s", err, ddl)
+		}
+	}
+}
+
 // baseDeControlDigital crea la configuración y la cola, que viven en la base de
 // CONTROL.
 func baseDeControlDigital(t *testing.T) *sql.DB {
 	t.Helper()
-	db := nuevaBaseDeControlConCopia(t)
-	if _, err := db.Exec(`CREATE TABLE digital_invoice_config (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		company_id TEXT NOT NULL DEFAULT '1',
-		addon_code TEXT NOT NULL,
-		config_json TEXT NOT NULL,
-		enabled INTEGER NOT NULL DEFAULT 0,
-		created_at TEXT, updated_at TEXT,
-		UNIQUE (company_id, addon_code))`); err != nil {
-		t.Fatalf("no se pudo crear digital_invoice_config: %v", err)
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("no se pudo abrir la base de control: %v", err)
 	}
-	if _, err := db.Exec(`ALTER TABLE digital_invoice_log ADD COLUMN nro_control_texto TEXT`); err != nil {
-		t.Fatalf("no se pudo añadir nro_control_texto: %v", err)
-	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	crearTablasDeCola(t, db)
 	return db
 }
 
@@ -545,8 +574,218 @@ func TestEmitirPorTHKAGuardaElControlConSuSerie(t *testing.T) {
 	}
 }
 
-// servidorCGDePrueba es una imprenta CG falsa: pide token y emite la factura
-// que le manden con un control con serie. No valida nada: lo que se prueba aquí
+// TestCadaEmpresaEmiteConSuPropiaImprenta: el modo es POR EMPRESA. Dos empresas
+// con imprentas distintas, dos facturas con el mismo número, cada una sale por
+// la suya y con su propio número de control.
+//
+// Es la regla que el dueño del sistema pidió dejar así: una empresa puede tomar
+// Unidigital, otra otra distinta; no hay un proveedor único para la instalación.
+func TestCadaEmpresaEmiteConSuPropiaImprenta(t *testing.T) {
+	ctl := baseDeControlDigital(t)
+
+	db1 := baseDeFacturacionDigital(t)
+	facturaDePrueba(t, db1, "10")
+	db2 := baseDeFacturacionDigital(t)
+	facturaDePrueba(t, db2, "10")
+
+	var emisionesTHKA, emisionesCG int32
+	servidorTHKA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/Autenticacion":
+			_, _ = w.Write([]byte(`{"token":"jwt-thka"}`))
+		case "/api/Emision":
+			atomic.AddInt32(&emisionesTHKA, 1)
+			_, _ = w.Write([]byte(`{"codigo":"200","mensaje":"ok","resultado":{"serie":"A","numeroControl":"00-00000056"}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer servidorTHKA.Close()
+
+	servidorCG := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/Invoice/create_token_authenticator":
+			_, _ = w.Write([]byte(`{"success":true,"token":"jwt-cg"}`))
+		case "/api/Invoice/add_list_invoice":
+			atomic.AddInt32(&emisionesCG, 1)
+			// Sin enlace de PDF a propósito: así la prueba no intenta descargar
+			// un archivo de un host inventado (el archivado es best-effort).
+			_, _ = w.Write([]byte(`{"success":true,"invoice_list_success":[{"invoice_number":"900",` +
+				`"control_number":"00-00000101"}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer servidorCG.Close()
+
+	configTHKA := `{"code":"thka","base_url":"` + servidorTHKA.URL + `","user_name":"u","user_password":"c","numero_serie":"A","enabled":true}`
+	configCG := `{"code":"cgimprenta","base_url":"` + servidorCG.URL + `","user_name":"u","user_password":"c","numero_serie":"A","enabled":true}`
+	for _, fila := range []struct{ company, code, config string }{
+		{"empresa1", "thka", configTHKA},
+		{"empresa2", "cgimprenta", configCG},
+	} {
+		if _, err := ctl.Exec(`INSERT INTO digital_invoice_config
+			(company_id, addon_code, config_json, enabled) VALUES (?, ?, ?, 1)`,
+			fila.company, fila.code, fila.config); err != nil {
+			t.Fatalf("no se pudo configurar %s: %v", fila.company, err)
+		}
+	}
+	for _, fila := range []struct{ company, code string }{
+		{"empresa1", "thka"},
+		{"empresa2", "cgimprenta"},
+	} {
+		if _, err := ctl.Exec(`INSERT INTO digital_invoice_log
+			(invoice_id, company_id, addon_code, nro_documento, tipo_documento, status)
+			VALUES (900, ?, ?, 900, 'FA', 'pending')`, fila.company, fila.code); err != nil {
+			t.Fatalf("no se pudo encolar %s: %v", fila.company, err)
+		}
+	}
+
+	s := &Server{controlDB: ctl, controlListo: true}
+	s.tenantMu.Lock()
+	s.db = db1
+	s.activeTenant = "empresa1"
+	s.tenantDBs = map[string]*sql.DB{"empresa1": db1, "empresa2": db2}
+	s.tenantMu.Unlock()
+
+	for id := int64(1); id <= 2; id++ {
+		var tenant string
+		if err := ctl.QueryRow(`SELECT company_id FROM digital_invoice_log WHERE id=?`, id).Scan(&tenant); err != nil {
+			t.Fatalf("no se pudo leer la fila %d: %v", id, err)
+		}
+		fila := struct {
+			id, nroDoc, intentos int64
+			invoiceID, tenant    string
+		}{id: id, nroDoc: 900, intentos: 0, invoiceID: "900", tenant: tenant}
+		s.diEmitirFila(ctl, fila)
+	}
+
+	if emisionesTHKA != 1 || emisionesCG != 1 {
+		t.Fatalf("cada imprenta debía recibir UNA factura: THKA=%d, CG=%d", emisionesTHKA, emisionesCG)
+	}
+
+	controles := map[string]string{}
+	rows, err := ctl.Query(`SELECT company_id, status, COALESCE(nro_control_texto,'') FROM digital_invoice_log`)
+	if err != nil {
+		t.Fatalf("no se pudo leer la cola: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var company, estado, control string
+		if rows.Scan(&company, &estado, &control) != nil {
+			continue
+		}
+		if estado != "sent" {
+			t.Errorf("la factura de %s quedó %q", company, estado)
+		}
+		controles[company] = control
+	}
+	if controles["empresa1"] != "00-00000056" {
+		t.Errorf("empresa1 debía emitir por THKA (control 00-00000056), quedó %q", controles["empresa1"])
+	}
+	if controles["empresa2"] != "00-00000101" {
+		t.Errorf("empresa2 debía emitir por CG (control 00-00000101), quedó %q", controles["empresa2"])
+	}
+}
+
+// TestUnaVentaDelTerminalSeEncolaParaSuEmpresa: la venta que registra el motor
+// del terminal (HTTP-sync y gRPC pasan por aquí) entra a la cola de la empresa
+// de ESA base, con la imprenta que tenga activa.
+//
+// El defecto que esta prueba impide que vuelva: el gRPC registraba la factura
+// pero no la encolaba, así que las cajas que hablaban gRPC no emitían por
+// facturación digital y nadie se enteraba.
+func TestUnaVentaDelTerminalSeEncolaParaSuEmpresa(t *testing.T) {
+	s, db := baseTerminalPrueba(t)
+	// En una instalación real la cola vive en la base de CONTROL, no en la de la
+	// empresa: se monta así para probar el circuito de verdad (y porque la tabla
+	// que crean las migraciones de SQLite no admite el id automático).
+	ctl := baseDeControlDigital(t)
+
+	s.tenantMu.Lock()
+	s.activeTenant = "empresa1"
+	s.db = db
+	s.tenantMu.Unlock()
+	s.controlDB = ctl
+	s.controlListo = true
+
+	if _, err := ctl.Exec(`INSERT INTO digital_invoice_config (company_id, addon_code, config_json, enabled)
+		VALUES ('empresa1', 'cgimprenta', '{"code":"cgimprenta"}', 1)`); err != nil {
+		t.Fatalf("no se pudo configurar la imprenta: %v", err)
+	}
+
+	respuesta, err := s.registrarVentaTerminal(db, ventaTerminalBasica())
+	if err != nil {
+		t.Fatalf("la venta del terminal falló: %v", err)
+	}
+	if respuesta == nil || !respuesta.Success {
+		t.Fatalf("la venta no se registró: %+v", respuesta)
+	}
+
+	var filas int
+	var estado, addon, company string
+	var invoiceID int64
+	if err := ctl.QueryRow(`SELECT COUNT(*) FROM digital_invoice_log`).Scan(&filas); err != nil {
+		t.Fatalf("no se pudo contar la cola: %v", err)
+	}
+	if filas != 1 {
+		t.Fatalf("la venta del terminal debía encolar UNA factura, hay %d", filas)
+	}
+	if err := ctl.QueryRow(`SELECT company_id, addon_code, status, invoice_id FROM digital_invoice_log`).
+		Scan(&company, &addon, &estado, &invoiceID); err != nil {
+		t.Fatalf("no se pudo leer la fila encolada: %v", err)
+	}
+	if company != "empresa1" {
+		t.Errorf("la fila debe ser de la empresa de la base, quedó %q", company)
+	}
+	if addon != "cgimprenta" {
+		t.Errorf("la fila debe llevar la imprenta activa, quedó %q", addon)
+	}
+	if estado != "pending" {
+		t.Errorf("estado = %q", estado)
+	}
+	if invoiceID != enteroDeTexto(respuesta.RemoteID) {
+		t.Errorf("invoice_id = %d, se esperaba %s", invoiceID, respuesta.RemoteID)
+	}
+}
+
+// TestSeResuelveLaEmpresaDeLaBaseDelTerminal: el motor de venta recibe la base
+// pero no el código de empresa; esta es la pieza que lo traduce y de la que
+// depende que cada venta se encole en la empresa correcta.
+func TestSeResuelveLaEmpresaDeLaBaseDelTerminal(t *testing.T) {
+	dbActiva := baseDeFacturacionDigital(t)
+	dbOtra := baseDeFacturacionDigital(t)
+	dbMaestra := baseDeFacturacionDigital(t)
+	dbDesconocida := baseDeFacturacionDigital(t)
+
+	s := &Server{}
+	s.tenantMu.Lock()
+	s.db = dbActiva
+	s.activeTenant = "empresa1"
+	s.tenantDBs = map[string]*sql.DB{"empresa2": dbOtra}
+	s.tenantMu.Unlock()
+	s.controlDB = dbMaestra
+	s.config = &configs.Config{DBMasterTenantCode: "central"}
+
+	casos := []struct {
+		nombre string
+		db     *sql.DB
+		espera string
+	}{
+		{"la empresa activa", dbActiva, "empresa1"},
+		{"otra empresa abierta", dbOtra, "empresa2"},
+		{"la empresa maestra (base de control)", dbMaestra, "central"},
+		{"una base que no es de ninguna empresa", dbDesconocida, ""},
+		{"sin base", nil, ""},
+	}
+	for _, caso := range casos {
+		if obtenido := s.tenantCodeDeDB(caso.db); obtenido != caso.espera {
+			t.Errorf("%s: tenantCodeDeDB = %q, se esperaba %q", caso.nombre, obtenido, caso.espera)
+		}
+	}
+}
+
+// servidorCGDePrueba es una imprenta CG falsa: pide token y emite la factura// que le manden con un control con serie. No valida nada: lo que se prueba aquí
 // es el circuito del ERP (documento → proveedor → fila), no CG otra vez.
 func servidorCGDePrueba(t *testing.T) *httptest.Server {
 	t.Helper()

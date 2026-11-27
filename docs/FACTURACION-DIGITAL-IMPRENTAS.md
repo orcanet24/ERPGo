@@ -28,7 +28,13 @@ sus credenciales intactas.
 
 ### Cómo se cambia
 
-En `Configuración → Facturación Digital`, cada imprenta tiene su tarjeta:
+En `Configuración → Facturación Digital` las imprentas se presentan como un
+**selector de pestañas**: cada una con su nombre y su estado (`ACTIVA`,
+`CONFIGURADA` o `SIN CONFIGURAR`), y al elegirla se abre su panel. La que está
+emitiendo abre seleccionada; el panel se recuerda en la URL (`#di-thka`) para
+que al guardar no salte a otra.
+
+Dentro del panel de cada imprenta:
 
 - **Guardar**: guarda su configuración (URL, credenciales, serie). No activa.
 - **Probar conexión**: valida credenciales y conectividad con lo que hay en
@@ -76,9 +82,13 @@ vacío conserva el valor anterior; para cambiarlo se escribe el nuevo.
 
 ## 3. Qué pasa al emitir una factura
 
-1. La venta (panel, POS en línea o POS sincronizado) se guarda y se **encola**
-   en `digital_invoice_log` (base de control). Si la empresa no tiene ninguna
-   imprenta activa, **no se encola**: está en modo impresora fiscal.
+1. La venta se guarda y se **encola** en `digital_invoice_log` (base de control).
+   Da igual por dónde entre: factura del panel, checkout del POS en línea, cola
+   de sincronización del POS offline o venta que llega por **gRPC** desde la
+   caja. Las tres puertas del POS pasan por el mismo motor de registro
+   (`registrarVentaTerminal`), que encola antes de responder "sincronizada".
+   Si la empresa no tiene ninguna imprenta activa, **no se encola**: está en
+   modo impresora fiscal.
 2. El runner (cada 30 s) toma pendientes, monta el documento con los datos
    reales de la factura —cliente de su ficha, renglones con código y nombre del
    producto del catálogo, alícuota de IVA, descuento, si el producto es bien o
@@ -194,12 +204,15 @@ y empresa, con la configuración completa en `config_json`.
 - `interfaces/web/digitalinvoice_processor_test.go`: que el documento lleve los
   renglones con las **dos** llaves con las que el sistema los guarda, que la tasa
   salga del registro del día, que no se encole sin imprenta activa, que un
-  pendiente huérfano quede con su motivo y la emisión real por CG y por THKA.
+  pendiente huérfano quede con su motivo, la emisión real por CG y por THKA, la
+  venta del terminal encolada para SU empresa y **dos empresas con imprentas
+  distintas emitiendo cada una por la suya**.
 - `interfaces/web/digital_invoice_settings_test.go`: exclusividad entre
-  imprentas, que desactivar una no apague la otra, el modo impresora fiscal, que
-  guardar no cambie el modo, que los secretos guardados se conserven, las
-  credenciales que exige cada proveedor y la pantalla representada sin mostrar
-  la contraseña.
+  imprentas, que desactivar una no apague la otra, que el modo de una empresa no
+  toque a otra, el modo impresora fiscal, que guardar no cambie el modo, que los
+  secretos guardados se conserven, las credenciales que exige cada proveedor y la
+  pantalla representada (selector de imprentas, un panel visible y el resto
+  ocultos, sin pintar la contraseña).
 
 ## 8. Límites conocidos (dichos antes de que se descubran)
 

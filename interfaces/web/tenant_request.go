@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"strings"
 )
 
 // defaultTenantCode es la empresa implícita de una instalación de una sola
@@ -149,6 +150,47 @@ func (s *Server) requestForTenant(tenant string) *http.Request {
 		db:       s.dbForTenant(tenant),
 		settings: s.settingsOfTenant(tenant),
 	})
+}
+
+// tenantCodeDeDB devuelve el código de la empresa dueña de un handle de base,
+// o "" si el handle no pertenece a ninguna empresa conocida.
+//
+// ¿POR QUÉ HACE FALTA? El motor único de venta del terminal
+// (registrarVentaTerminal) recibe la base de la empresa pero no su código, y la
+// cola de facturación digital necesita el código para leer la configuración de
+// ESA empresa. Antes, cada puerta resolvía el código por su cuenta —HTTP-sync lo
+// tenía en el contexto y el gRPC se olvidó de encolar—: resolverlo aquí, en el
+// motor, hace que todas las puertas encolen igual.
+//
+// El orden importa: primero la empresa activa (una instalación de una sola
+// empresa comparte handle con la base de control), después el catálogo de
+// handles abiertos por el multiempresa y, por último, la empresa maestra —que
+// en el multiempresa usa la base de control como base propia—.
+func (s *Server) tenantCodeDeDB(db *sql.DB) string {
+	if db == nil {
+		return ""
+	}
+	if activa, code := s.snapshotActivo(); activa == db {
+		return code
+	}
+	s.tenantMu.RLock()
+	for code, handle := range s.tenantDBs {
+		if handle == db {
+			s.tenantMu.RUnlock()
+			return code
+		}
+	}
+	s.tenantMu.RUnlock()
+
+	s.controlMu.Lock()
+	control := s.controlDB
+	s.controlMu.Unlock()
+	if control != nil && control == db && s.config != nil {
+		if maestro := strings.TrimSpace(nombreTenantMaestro(s.config)); maestro != "" {
+			return maestro
+		}
+	}
+	return ""
 }
 
 // dbForSession devuelve la base de la empresa a la que pertenece una sesión.

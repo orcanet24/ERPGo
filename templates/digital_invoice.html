@@ -1,88 +1,135 @@
 {{define "content"}}
 <div class="di-setting-container">
+    <style>
+        /* La pantalla es un SELECTOR de imprentas: pestañas arriba y el panel de
+           la elegida debajo. El estilo va aquí y no en la hoja global porque solo
+           aplica a esta pantalla; reutiliza las clases de Bootstrap del layout
+           (nav-tabs, label, btn) para no introducir un segundo lenguaje visual. */
+        .di-tabs { margin-bottom: 0; border-bottom: 0; }
+        .di-tabs > li > a { color: #4b5563; font-weight: 600; }
+        .di-tabs > li.active > a,
+        .di-tabs > li.active > a:hover,
+        .di-tabs > li.active > a:focus { border-color: #ddd #ddd transparent; color: #111827; }
+        .di-tabs .di-estado { margin-left: 6px; font-size: 10px; vertical-align: middle; }
+        .di-panel {
+            border: 1px solid #ddd; border-top: 1px solid #ddd; border-radius: 0 0 6px 6px;
+            background: #fff; padding: 18px 18px 6px;
+        }
+        .di-panel-head { border-bottom: 1px solid #eef0f3; margin-bottom: 14px; padding-bottom: 10px; }
+        .di-panel-head h4 { margin: 0 0 4px; font-size: 16px; font-weight: 700; }
+        .di-panel-head .di-doc { font-size: 12px; }
+        .di-panel-head .erp-caption { margin: 0; }
+        .di-acciones { border-top: 1px solid #eef0f3; margin-top: 12px; padding: 14px 0 10px; }
+        .di-hero { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: 6px; margin-bottom: 18px; }
+        .di-hero.di-hero-digital { background: #ecfdf5; border: 1px solid #a7f3d0; }
+        .di-hero.di-hero-fiscal { background: #fff7ed; border: 1px solid #fed7aa; }
+        .di-hero .di-hero-icon { font-size: 26px; opacity: .8; }
+        .di-hero .di-hero-titulo { font-size: 15px; font-weight: 700; margin: 0; }
+        .di-hero .di-hero-texto { font-size: 12px; margin: 2px 0 0; color: #4b5563; }
+    </style>
+
     <div class="section_head">
         <p class="heading">Facturación Digital (SENIAT)</p>
         <p class="erp-caption">
             Providencia SNAT/2024/000102 (G.O. 43.032 del 19-dic-2024): la factura
             digital sustituye al comprobante en las operaciones autorizadas.
-            Esta empresa puede emitir por <strong>una</strong> imprenta digital autorizada
-            o, si no tiene ninguna activa, facturar con su impresora fiscal.
+            Elija abajo la imprenta digital de esta empresa, o quédese con la
+            impresora fiscal si no usa ninguna.
         </p>
     </div>
 
     {{if .ModoDigital}}
-    <div class="ai_provider_alert alert_ok">
-        Modo actual: <strong>{{.ProveedorActivo}}</strong>. Las facturas nuevas se
-        emiten por esta imprenta digital.
+    <div class="di-hero di-hero-digital">
+        <i class="fa fa-check-circle di-hero-icon" style="color:#059669"></i>
+        <div>
+            <p class="di-hero-titulo">Modo actual: {{.ProveedorActivo}}</p>
+            <p class="di-hero-texto">Las facturas nuevas de esta empresa se emiten por esta imprenta digital.</p>
+        </div>
     </div>
     {{else}}
-    <div class="ai_provider_alert alert_error">
-        Modo actual: <strong>Facturación por impresora fiscal</strong>. No hay ninguna
-        imprenta digital activa: las ventas nuevas no se envían a ninguna casa de
-        facturación digital.
+    <div class="di-hero di-hero-fiscal">
+        <i class="fa fa-print di-hero-icon" style="color:#c2410c"></i>
+        <div>
+            <p class="di-hero-titulo">Modo actual: Facturación por impresora fiscal</p>
+            <p class="di-hero-texto">No hay ninguna imprenta digital activa: las ventas nuevas no se envían a ninguna casa de facturación digital.</p>
+        </div>
     </div>
     {{end}}
 
     <div class="update_ai_setting_section">
         <p class="section_titles">Imprentas disponibles</p>
         <p class="erp-caption">
-            La ley permite UNA imprenta digital activa por empresa. Activar una
-            desactiva automáticamente la otra y verá la alerta. Desactivar no borra
-            la configuración: puede cambiar de imprenta y volver cuando quiera sin
-            teclear las credenciales otra vez.
+            Solo puede estar activa <strong>UNA</strong> imprenta digital por empresa.
+            Activar una desactiva la otra y verá la alerta. Desactivar no borra la
+            configuración: puede cambiar de imprenta y volver cuando quiera sin
+            teclear las credenciales otra vez. Cada empresa de la instalación elige
+            la suya: no hay un proveedor único para todas.
         </p>
 
-        {{range $imp := .Imprentas}}
-        <div class="update_ai_setting_section" style="margin-top:18px;padding:12px;border:1px solid #e3e6ea;border-radius:6px">
-            <p class="section_titles" style="margin:0 0 4px">
-                {{$imp.Nombre}}
-                {{if $imp.Activa}}
-                <span class="label label-success">ACTIVA</span>
-                {{else if $imp.Configurada}}
-                <span class="label label-default">CONFIGURADA</span>
-                {{else}}
-                <span class="label label-warning">SIN CONFIGURAR</span>
-                {{end}}
-            </p>
-            <p class="erp-caption" style="margin:0 0 10px">{{$imp.Descripcion}}</p>
-
-            <form class="diProviderForm form_container" data-code="{{$imp.Code}}">
-                <input type="hidden" name="provider_code" value="{{$imp.Code}}" />
-
-                {{range $campo := $imp.Campos}}
-                <div class="input_label">
-                    <label class="label_name" for="di_{{$imp.Code}}_{{$campo.Nombre}}">
-                        {{$campo.Etiqueta}}{{if $campo.Obligatorio}} <span style="color:#c0392b">*</span>{{end}}
-                    </label>
-                    {{if eq $campo.Tipo "password"}}
-                    <input type="password" name="{{$campo.Nombre}}" id="di_{{$imp.Code}}_{{$campo.Nombre}}"
-                        value="" class="input_section" style="width:100%" autocomplete="new-password"
-                        placeholder="{{if index $imp.Guardados $campo.Nombre}}Guardado — deje vacío para conservarlo{{else}}Sin configurar{{end}}" />
-                    {{else}}
-                    <input type="{{$campo.Tipo}}" name="{{$campo.Nombre}}" id="di_{{$imp.Code}}_{{$campo.Nombre}}"
-                        value="{{index $imp.Valores $campo.Nombre}}" class="input_section" style="width:100%" autocomplete="off" />
-                    {{end}}
-                    {{if $campo.Ayuda}}<small class="erp-caption">{{$campo.Ayuda}}</small>{{end}}
-                </div>
-                {{end}}
-
-                <div class="submit_button_section">
-                    <button type="submit" class="btn btn-primary">Guardar</button>
-                    <button type="button" class="btn btn-default diPing">Probar conexión</button>
+        <ul class="nav nav-tabs di-tabs">
+            {{range $imp := .Imprentas}}
+            <li class="{{if eq $imp.Code $.Inicial}}active{{end}}">
+                <a href="#di-panel-{{$imp.Code}}" data-code="{{$imp.Code}}" class="di-tab">
+                    <i class="fa {{if $imp.Activa}}fa-check-circle{{else}}fa-print{{end}}"></i>
+                    {{$imp.Nombre}}
                     {{if $imp.Activa}}
-                    <button type="button" class="btn btn-danger diDeactivate">Desactivar</button>
+                    <span class="label label-success di-estado">ACTIVA</span>
+                    {{else if $imp.Configurada}}
+                    <span class="label label-default di-estado">CONFIGURADA</span>
                     {{else}}
-                    <button type="button" class="btn btn-success diActivate">Activar</button>
+                    <span class="label label-warning di-estado">SIN CONFIGURAR</span>
                     {{end}}
-                </div>
-            </form>
+                </a>
+            </li>
+            {{end}}
+        </ul>
 
-            <p class="provider_hint" style="margin:8px 0 0">
-                <a href="{{$imp.Documentacion}}" target="_blank" rel="noopener">Documentación de {{$imp.Nombre}}</a>.
-                Las credenciales las entrega la imprenta al habilitar la integración.
-            </p>
+        <div class="tab-content">
+            {{range $imp := .Imprentas}}
+            <div class="tab-pane di-panel {{if eq $imp.Code $.Inicial}}active{{end}}"
+                 id="di-panel-{{$imp.Code}}" data-code="{{$imp.Code}}"
+                 {{if ne $imp.Code $.Inicial}}style="display:none"{{end}}>
+                <div class="di-panel-head">
+                    <h4>{{$imp.Nombre}}</h4>
+                    <p class="erp-caption">{{$imp.Descripcion}}</p>
+                    <a class="di-doc" href="{{$imp.Documentacion}}" target="_blank" rel="noopener">
+                        Documentación de {{$imp.Nombre}} <i class="fa fa-external-link"></i>
+                    </a>
+                </div>
+
+                <form class="diProviderForm form_container" data-code="{{$imp.Code}}">
+                    <input type="hidden" name="provider_code" value="{{$imp.Code}}" />
+
+                    {{range $campo := $imp.Campos}}
+                    <div class="input_label">
+                        <label class="label_name" for="di_{{$imp.Code}}_{{$campo.Nombre}}">
+                            {{$campo.Etiqueta}}{{if $campo.Obligatorio}} <span style="color:#c0392b">*</span>{{end}}
+                        </label>
+                        {{if eq $campo.Tipo "password"}}
+                        <input type="password" name="{{$campo.Nombre}}" id="di_{{$imp.Code}}_{{$campo.Nombre}}"
+                            value="" class="input_section" style="width:100%" autocomplete="new-password"
+                            placeholder="{{if index $imp.Guardados $campo.Nombre}}Guardado — deje vacío para conservarlo{{else}}Sin configurar{{end}}" />
+                        {{else}}
+                        <input type="{{$campo.Tipo}}" name="{{$campo.Nombre}}" id="di_{{$imp.Code}}_{{$campo.Nombre}}"
+                            value="{{index $imp.Valores $campo.Nombre}}" class="input_section" style="width:100%" autocomplete="off" />
+                        {{end}}
+                        {{if $campo.Ayuda}}<small class="erp-caption">{{$campo.Ayuda}}</small>{{end}}
+                    </div>
+                    {{end}}
+
+                    <div class="submit_button_section di-acciones">
+                        <button type="submit" class="btn btn-primary"><i class="fa fa-save"></i> Guardar</button>
+                        <button type="button" class="btn btn-default diPing"><i class="fa fa-plug"></i> Probar conexión</button>
+                        {{if $imp.Activa}}
+                        <button type="button" class="btn btn-danger diDeactivate"><i class="fa fa-power-off"></i> Desactivar</button>
+                        {{else}}
+                        <button type="button" class="btn btn-success diActivate"><i class="fa fa-play"></i> Activar</button>
+                        {{end}}
+                    </div>
+                </form>
+            </div>
+            {{end}}
         </div>
-        {{end}}
     </div>
 
     <!-- Modo impresora fiscal: la tercera forma de facturar -->
@@ -96,7 +143,7 @@
         </p>
         <div class="submit_button_section">
             <button type="button" class="btn btn-default" id="diFiscal" {{if not .ModoDigital}}disabled{{end}}>
-                Dejar la empresa solo con impresora fiscal
+                <i class="fa fa-print"></i> Dejar la empresa solo con impresora fiscal
             </button>
         </div>
     </div>
@@ -186,6 +233,29 @@
 {{define "pagejs"}}
 <script>
 $(function () {
+    // SELECTOR de imprentas. Se muestran todas las pestañas y solo el panel de la
+    // elegida; el panel se recuerda en el hash (#di-thka) para que al guardar
+    // —ERPGo.refrescar vuelve a pintar la página— no salte a otra imprenta.
+    function mostrarImprenta(code) {
+        $('.di-tabs > li').removeClass('active');
+        $('.di-tabs > li > a[data-code="' + code + '"]').parent().addClass('active');
+        $('.di-panel').hide();
+        $('#di-panel-' + code).show();
+        if (window.history && window.history.replaceState) {
+            window.history.replaceState(null, '', '#di-' + code);
+        }
+    }
+
+    $('.di-tabs').on('click', 'a.di-tab', function (e) {
+        e.preventDefault();
+        mostrarImprenta($(this).data('code'));
+    });
+
+    var enHash = (window.location.hash || '').replace('#di-', '');
+    if (enHash && $('#di-panel-' + enHash).length) {
+        mostrarImprenta(enHash);
+    }
+
     // Una sola pareja de manejadores para todas las imprentas: el formulario
     // que se envía dice cuál es (provider_code), y las respuestas se muestran
     // con el mensaje REAL del servidor (incluido el del proveedor cuando la
@@ -194,10 +264,10 @@ $(function () {
         return $(form).serialize();
     }
 
-    function avisar(r, exito) {
+    function avisar(r) {
         if (r && r.status === 1) {
             if (r.deactivated && r.deactivated.length > 0) {
-                toastr.warning(r.msg || 'Imprenta activada', 'Solo puede existir UNA imprenta digital activa', { timeOut: 10000 });
+                toastr.warning(r.msg || 'Imprenta activada', 'Solo puede existir UNA imprenta digital activa por empresa', { timeOut: 10000 });
             } else {
                 toastr.success(r.msg || 'Listo');
             }

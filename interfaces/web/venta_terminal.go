@@ -26,6 +26,7 @@ package web
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -370,13 +371,31 @@ func (s *Server) registrarVentaTerminal(db *sql.DB, req *pos.SyncSaleRequest) (*
 		return nil, fmt.Errorf("commit de la venta: %w", err)
 	}
 
-	return &pos.SyncSaleResponse{
+	respuesta := &pos.SyncSaleResponse{
 		Success:      true,
 		RemoteID:     strconv.FormatInt(invoiceNo, 10),
 		Status:       "synced",
 		FiscalNumber: controlNo,
 		Advertencias: avisos,
-	}, nil
+	}
+
+	// LA VENTA DEL TERMINAL ENTRA A LA COLA DE FACTURACIÓN DIGITAL, AQUÍ.
+	//
+	// En el motor y no en cada transporte: POSGo puede mandar la venta por
+	// HTTP-sync o por gRPC, y la de gRPC se quedaba fuera de la cola (la factura
+	// existía en el ERP pero nunca llegaba a la imprenta digital de la empresa).
+	// Es SÍNCRONO a propósito: cuando el terminal recibe "sincronizada", la fila
+	// ya está encolada aunque la caja se apague en ese instante.
+	//
+	// Si la empresa no tiene imprenta activa, diEnqueueVenta no inserta nada: la
+	// venta es de impresora fiscal y no hay documento digital que transmitir.
+	if tenant := s.tenantCodeDeDB(db); tenant != "" {
+		s.diEnqueueVenta(db, tenant, respuesta.RemoteID)
+	} else {
+		log.Printf("venta POS %s: no se pudo resolver la empresa de la base para encolar la facturación digital", respuesta.RemoteID)
+	}
+
+	return respuesta, nil
 }
 
 // RegistrarVentaTerminal es la puerta exportada del motor, para que

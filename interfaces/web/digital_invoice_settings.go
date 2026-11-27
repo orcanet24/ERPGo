@@ -189,6 +189,7 @@ func (s *Server) digitalInvoicePage(w http.ResponseWriter, r *http.Request) {
 		"Title":           "Facturación Digital",
 		"Tenant":          tenant,
 		"Imprentas":       imprentas,
+		"Inicial":         diInicialImprenta(activo),
 		"ProveedorActivo": diNombreImprenta(activo),
 		"ModoDigital":     activo != "",
 		"Contingencia":    contFilas,
@@ -198,6 +199,19 @@ func (s *Server) digitalInvoicePage(w http.ResponseWriter, r *http.Request) {
 		"EntregaCanal":    entregaCanal,
 		"CanalesCorreo":   correos,
 	})
+}
+
+// diInicialImprenta dice qué imprenta abre seleccionada la pantalla: la que
+// está emitiendo; si no hay ninguna, la primera del catálogo. Es lo que hace que
+// al entrar se vea de inmediato la imprenta con la que la empresa factura hoy.
+func diInicialImprenta(activo string) string {
+	if strings.TrimSpace(activo) != "" {
+		return activo
+	}
+	if len(diCatalogo) > 0 {
+		return diCatalogo[0].Code
+	}
+	return ""
 }
 
 func (s *Server) digitalInvoiceData(w http.ResponseWriter, r *http.Request) {

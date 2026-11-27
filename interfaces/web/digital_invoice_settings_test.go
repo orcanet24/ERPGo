@@ -332,6 +332,44 @@ func TestValidarConfigPideLasCredencialesDeCadaImprenta(t *testing.T) {
 	}
 }
 
+// TestElModoDeUnaEmpresaNoTocaAOtra: la exclusividad es POR EMPRESA. Activar o
+// desactivar en una empresa no puede cambiar la imprenta de otra: cada gerencia
+// decide la suya.
+func TestElModoDeUnaEmpresaNoTocaAOtra(t *testing.T) {
+	db := baseDeConfiguracionDigital(t)
+	configuracionDeCodigo(t, db, "empresa1", "unidigital", false)
+	configuracionDeCodigo(t, db, "empresa1", "thka", false)
+	configuracionDeCodigo(t, db, "empresa2", "cgimprenta", true)
+
+	if _, err := diActivarEnBase(db, "empresa1", "unidigital"); err != nil {
+		t.Fatalf("no se pudo activar en empresa1: %v", err)
+	}
+	if !estadoDe(t, db, "empresa2", "cgimprenta") {
+		t.Error("activar en empresa1 no puede apagar la imprenta de empresa2")
+	}
+
+	if _, err := diActivarEnBase(db, "empresa1", "thka"); err != nil {
+		t.Fatalf("no se pudo cambiar de imprenta en empresa1: %v", err)
+	}
+	if estadoDe(t, db, "empresa1", "unidigital") || !estadoDe(t, db, "empresa1", "thka") {
+		t.Error("en empresa1 debía quedar solo thka activa")
+	}
+	if !estadoDe(t, db, "empresa2", "cgimprenta") {
+		t.Error("el cambio de empresa1 no puede tocar empresa2")
+	}
+
+	// El modo impresora fiscal de una empresa tampoco arrastra a la otra.
+	if err := diDesactivarTodasEnBase(db, "empresa1"); err != nil {
+		t.Fatalf("no se pudo pasar empresa1 a impresora fiscal: %v", err)
+	}
+	if activo, _ := diProveedorActivoEnBase(db, "empresa1"); activo != "" {
+		t.Errorf("empresa1 debía quedar sin imprenta, quedó %q", activo)
+	}
+	if activo, _ := diProveedorActivoEnBase(db, "empresa2"); activo != "cgimprenta" {
+		t.Errorf("empresa2 debía conservar su imprenta, quedó %q", activo)
+	}
+}
+
 // TestLaPantallaDeFacturacionDigitalSeRenderiza comprueba que la vista se
 // representa con las dos imprentas, que los campos salen de su catálogo y que
 // las credenciales guardadas NO se pintan en el HTML.
@@ -386,6 +424,7 @@ func TestLaPantallaDeFacturacionDigitalSeRenderiza(t *testing.T) {
 
 	datos := map[string]interface{}{
 		"Imprentas":       vistas,
+		"Inicial":         "cgimprenta",
 		"ProveedorActivo": "CG Imprenta Digital",
 		"ModoDigital":     true,
 		"ContPend":        2,
@@ -397,13 +436,23 @@ func TestLaPantallaDeFacturacionDigitalSeRenderiza(t *testing.T) {
 	}
 	salida := representar(t, tpl, "content", datos)
 	for _, esperado := range []string{
-		"CG Imprenta Digital", "Unidigital", "Usuario de API", "Contraseña de API",
-		"Serie de numeración", "ACTIVA", "Guardado — deje vacío para conservarlo",
+		// El selector de imprentas y el panel de cada una.
+		`class="nav nav-tabs di-tabs"`, `data-code="unidigital"`, `data-code="cgimprenta"`,
+		`data-code="thka"`, `id="di-panel-unidigital"`, `id="di-panel-thka"`,
+		// Los datos de la configuración y su estado.
+		"CG Imprenta Digital", "Unidigital", "The Factory HKA", "Usuario de API",
+		"Contraseña de API", "Serie de numeración", "ACTIVA", "SIN CONFIGURAR",
+		"Guardado — deje vacío para conservarlo",
 		"Dejar la empresa solo con impresora fiscal", "00-00000056",
 	} {
 		if !strings.Contains(salida, esperado) {
 			t.Errorf("la pantalla no muestra %q", esperado)
 		}
+	}
+	// El panel de la imprenta activa se abre visible y los demás ocultos: una
+	// sola consulta al count evita depender del sangrado de la plantilla.
+	if ocultos := strings.Count(salida, "display:none"); ocultos != len(vistas)-1 {
+		t.Errorf("debían nacer ocultas %d imprentas y hay %d paneles ocultos", len(vistas)-1, ocultos)
 	}
 	if strings.Contains(salida, "clave-que-no-debe-verse") {
 		t.Fatal("la pantalla está pintando la contraseña de API guardada")
@@ -418,6 +467,9 @@ func TestLaPantallaDeFacturacionDigitalSeRenderiza(t *testing.T) {
 		if !strings.Contains(script, endpoint) {
 			t.Errorf("el script de la pantalla no llama a %q", endpoint)
 		}
+	}
+	if !strings.Contains(script, "mostrarImprenta") {
+		t.Error("el script no cambia de imprenta al elegir una pestaña")
 	}
 }
 
